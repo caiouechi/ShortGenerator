@@ -96,6 +96,9 @@ public sealed class ShortSuggestion
     /// <summary>Camera cuts for the vertical crop (times relative to the clip start). Empty = centered.</summary>
     [JsonPropertyName("camera")] public List<CameraKeyframe> Camera { get; set; } = new();
 
+    /// <summary>Sticker / image overlays shown on the clip (times relative to the clip start).</summary>
+    [JsonPropertyName("overlays")] public List<OverlayItem> Overlays { get; set; } = new();
+
     /// <summary>Moves the legacy single caption position into the keyframe list.</summary>
     public void MigrateLegacyCaptionPosition()
     {
@@ -134,6 +137,25 @@ public sealed class CameraKeyframe : IKeyframe
     [JsonPropertyName("zoom")] public double Zoom { get; set; } = 1.0;
     /// <summary>"auto" when produced by face detection, "manual" when dragged by the user.</summary>
     [JsonPropertyName("source")] public string Source { get; set; } = "manual";
+}
+
+/// <summary>A transparent PNG (sticker) placed on the frame for a while, with a small animation.</summary>
+public sealed class OverlayItem : IKeyframe
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    [JsonPropertyName("t")] public double Time { get; set; }
+    [JsonPropertyName("dur")] public double Duration { get; set; } = 2.5;
+    /// <summary>Sticker file name inside the sticker library, or an absolute path.</summary>
+    [JsonPropertyName("file")] public string File { get; set; } = "";
+    /// <summary>Center of the sticker as percent of the output frame.</summary>
+    [JsonPropertyName("x")] public double X { get; set; } = 78;
+    [JsonPropertyName("y")] public double Y { get; set; } = 22;
+    /// <summary>Width of the sticker as percent of the output frame width.</summary>
+    [JsonPropertyName("size")] public double Size { get; set; } = 26;
+    /// <summary>"pop" (bounce in), "float" (gentle bob), "shake", or "none" (fade only).</summary>
+    [JsonPropertyName("anim")] public string Animation { get; set; } = "pop";
+
+    [JsonIgnore] public double End => Time + Duration;
 }
 
 public static class Keyframes

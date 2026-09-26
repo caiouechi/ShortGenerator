@@ -56,25 +56,49 @@ public sealed class ShortRenderer
                     break;
             }
 
-            if (options.AddCaptions && transcript is not null)
+            bool hasCaptions = options.AddCaptions && transcript is not null;
+            if (hasCaptions)
             {
                 var style = CaptionStyle.Get(options.CaptionStyleId);
-                var slice = transcript.Slice(s.StartSeconds, s.EndSeconds);
+                var slice = transcript!.Slice(s.StartSeconds, s.EndSeconds);
                 s.MigrateLegacyCaptionPosition();
                 var ass = CaptionBuilder.BuildAss(slice, style, options.WordsPerCaption, options.FontSize, outW, outH,
                     options.BurnTitleHook ? s.Hook : null, options.IncludeReactions, s.CaptionPositions);
                 var assPath = Path.Combine(workDir, "captions.ass");
                 await File.WriteAllTextAsync(assPath, ass, new System.Text.UTF8Encoding(false), ct);
-                // Relative path avoids Windows drive-letter escaping problems inside the filter graph.
-                filters.Add("subtitles=captions.ass");
             }
 
-            // Filters chain with ','. The blurred-background entry contains its own labelled sub-graph
-            // and ends with an unlabelled overlay output, so it chains like any other filter.
-            // With camera cuts, the graph already starts at [0:v] (split/trim/concat) and the remaining filters follow it.
-            var vf = cameraGraph is not null
+            // Main video chain. Filters chain with ','. The blurred-background entry contains its own labelled
+            // sub-graph and ends with an unlabelled output, so it chains like any other filter. With camera cuts,
+            // the graph already starts at [0:v] (split/trim/concat) and the remaining filters follow it.
+            var main = cameraGraph is not null
                 ? cameraGraph + (filters.Count > 0 ? "," + string.Join(",", filters) : "")
-                : "[0:v]" + string.Join(",", filters);
+                : "[0:v]" + (filters.Count > 0 ? string.Join(",", filters) : "null");
+
+            // Sticker overlays: each one is an extra looped image input, faded in/out, shifted to its start time,
+            // and composited with a small position animation. Captions are burned last so they stay on top.
+            var inputs = new List<string>();
+            var graph = new System.Text.StringBuilder(main).Append("[b0]");
+            int layer = 0;
+            foreach (var ov in s.Overlays.OrderBy(o => o.Time))
+            {
+                var file = StickerLibrary.Resolve(ov.File);
+                if (file is null || ov.Time >= s.Duration) { log.Report($"Sticker '{ov.File}' not found, skipped."); continue; }
+                double dur = Math.Clamp(ov.Duration, 0.3, Math.Max(0.3, s.Duration - ov.Time));
+                inputs.AddRange(new[] { "-loop", "1", "-framerate", "30", "-t", F(dur), "-i", file });
+                int inIdx = layer + 1;
+                int w = Math.Max(16, (int)Math.Round(ov.Size / 100.0 * outW / 2) * 2);
+                double xc = ov.X / 100.0 * outW, yc = ov.Y / 100.0 * outH;
+                string t0 = F(ov.Time), t1 = F(ov.Time + dur);
+                double fadeOut = Math.Max(0, dur - 0.25);
+                var (xExpr, yExpr) = OverlayMotion(ov.Animation, xc, yc, w, outH, t0);
+                graph.Append(';')
+                     .Append($"[{inIdx}:v]format=rgba,scale={w}:-2,fade=t=in:st=0:d=0.15:alpha=1,fade=t=out:st={F(fadeOut)}:d=0.25:alpha=1,setpts=PTS+{t0}/TB[o{layer}];")
+                     .Append($"[b{layer}][o{layer}]overlay=x='{xExpr}':y='{yExpr}':eof_action=pass:enable='between(t,{t0},{t1})'[b{layer + 1}]");
+                layer++;
+            }
+            // Relative subtitle path avoids Windows drive-letter escaping problems inside the filter graph.
+            graph.Append(';').Append($"[b{layer}]").Append(hasCaptions ? "subtitles=captions.ass" : "null");
 
             var args = new List<string>
             {
@@ -82,15 +106,19 @@ public sealed class ShortRenderer
                 "-ss", s.StartSeconds.ToString("F3", CultureInfo.InvariantCulture),
                 "-to", s.EndSeconds.ToString("F3", CultureInfo.InvariantCulture),
                 "-i", video.FilePath,
-                "-filter_complex", vf + "[vout]",
+            };
+            args.AddRange(inputs);
+            args.AddRange(new[]
+            {
+                "-filter_complex", graph + "[vout]",
                 "-map", "[vout]", "-map", "0:a?",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", "30",
                 "-c:a", "aac", "-b:a", "160k",
                 "-movflags", "+faststart",
                 outPath
-            };
+            });
 
-            log.Report($"Rendering \"{s.Title}\" ({s.StartSeconds:F1}s - {s.EndSeconds:F1}s)...");
+            log.Report($"Rendering \"{s.Title}\" ({s.StartSeconds:F1}s - {s.EndSeconds:F1}s){(layer > 0 ? $" with {layer} sticker(s)" : "")}...");
             await _ffmpeg.RunAsync(args, workDir, progress, s.Duration, ct);
 
             result.OutputPath = outPath;
@@ -109,6 +137,28 @@ public sealed class ShortRenderer
         }
         return result;
     }
+
+    /// <summary>
+    /// Overlay position expressions (evaluated per frame by ffmpeg) for the sticker animations.
+    /// The sticker is centered at (xc, yc); the image height is unknown here so we center vertically on the width.
+    /// </summary>
+    private static (string X, string Y) OverlayMotion(string animation, double xc, double yc, int w, int outH, string t0)
+    {
+        string baseX = F(xc - w / 2.0), baseY = F(yc - w / 2.0);
+        double amp = outH * 0.02;
+        return animation switch
+        {
+            // drops into place over 0.3 s
+            "pop" => (baseX, $"{baseY}-{F(amp * 2)}*max(0\\,1-(t-{t0})/0.3)"),
+            // gentle bob
+            "float" => (baseX, $"{baseY}+{F(amp)}*sin(2*PI*(t-{t0})/1.4)"),
+            // quick horizontal shake that dies out in 0.6 s
+            "shake" => ($"{baseX}+{F(amp)}*sin(50*(t-{t0}))*max(0\\,1-(t-{t0})/0.6)", baseY),
+            _ => (baseX, baseY)
+        };
+    }
+
+    private static string F(double d) => d.ToString("F2", CultureInfo.InvariantCulture);
 
     public static (int W, int H) OutputSize(VideoInfo video, CropMode mode)
     {

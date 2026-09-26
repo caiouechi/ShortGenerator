@@ -56,6 +56,13 @@ public sealed class MainForm : Form
     private readonly Button _autoCamera = new() { Text = "Auto camera (faces)", Width = 150 };
     private readonly Label _keyframeHint = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 7, 0, 0) };
     private readonly ListView _keyframes = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
+    private readonly ListView _stickers = new() { Dock = DockStyle.Fill, View = View.LargeIcon, MultiSelect = false, HideSelection = false };
+    private readonly ImageList _stickerImages = new() { ImageSize = new Size(56, 56), ColorDepth = ColorDepth.Depth32Bit };
+    private readonly ComboBox _stickerAnim = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80 };
+    private readonly NumericUpDown _stickerDuration = new() { Minimum = 0.5M, Maximum = 30, DecimalPlaces = 1, Increment = 0.5M, Value = 2.5M, Width = 55 };
+    private readonly Button _stickerAdd = new() { Text = "Add at current time", Width = 140 };
+    private readonly Button _stickerAuto = new() { Text = "Auto from reactions", Width = 140 };
+    private readonly Button _stickerFolder = new() { Text = "Folder", Width = 60 };
     private readonly Button _keyframeDelete = new() { Text = "Delete", Width = 70 };
     private readonly Button _keyframeClear = new() { Text = "Clear all", Width = 80 };
     private double _playerTime;
@@ -188,7 +195,7 @@ public sealed class MainForm : Form
         BuildGenerateTab();
 
         // bottom
-        var bottom = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 170, ColumnCount = 3, RowCount = 2, Padding = new Padding(8, 0, 8, 6) };
+        var bottom = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 140, ColumnCount = 3, RowCount = 2, Padding = new Padding(8, 0, 8, 6) };
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260));
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -391,7 +398,7 @@ public sealed class MainForm : Form
         _keyframes.Columns.Add("At", 50);
         _keyframes.Columns.Add("What", 60);
         _keyframes.Columns.Add("Details", 160);
-        var leftSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 150 };
+        var leftSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 120 };
         var clipsHost = new Panel { Dock = DockStyle.Fill };
         clipsHost.Controls.Add(_editClips);
         clipsHost.Controls.Add(new Label { Text = "Selected shorts", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
@@ -407,7 +414,7 @@ public sealed class MainForm : Form
         left.Controls.Add(leftSplit);
 
         // right: transcript lines of the clip
-        var right = new Panel { Dock = DockStyle.Right, Width = 400, Padding = new Padding(6) };
+        var right = new Panel { Dock = DockStyle.Right, Width = 420, Padding = new Padding(6) };
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "Start", HeaderText = "Start", ReadOnly = true, FillWeight = 18 });
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "End", HeaderText = "End", ReadOnly = true, FillWeight = 18 });
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "Text", HeaderText = "Text (editable)", FillWeight = 64 });
@@ -416,9 +423,34 @@ public sealed class MainForm : Form
         var segBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 38, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
         segBar.Controls.Add(_segPlay);
         segBar.Controls.Add(_segDelete);
-        right.Controls.Add(_editSegments);
-        right.Controls.Add(segBar);
-        right.Controls.Add(new Label { Text = "Transcript of this short", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
+        var segHost = new Panel { Dock = DockStyle.Fill };
+        segHost.Controls.Add(_editSegments);
+        segHost.Controls.Add(segBar);
+        segHost.Controls.Add(new Label { Text = "Transcript of this short", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
+
+        // stickers gallery
+        _stickers.LargeImageList = _stickerImages;
+        _stickerAnim.Items.AddRange(new object[] { "pop", "float", "shake", "none" });
+        _stickerAnim.SelectedIndex = 0;
+        var stBar1 = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 34, WrapContents = false };
+        stBar1.Controls.Add(_stickerAdd);
+        stBar1.Controls.Add(_stickerAuto);
+        stBar1.Controls.Add(_stickerFolder);
+        var stBar2 = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 32, WrapContents = false };
+        stBar2.Controls.Add(new Label { Text = "Animation:", AutoSize = true, Margin = new Padding(0, 7, 4, 0) });
+        stBar2.Controls.Add(_stickerAnim);
+        stBar2.Controls.Add(new Label { Text = "Seconds:", AutoSize = true, Margin = new Padding(10, 7, 4, 0) });
+        stBar2.Controls.Add(_stickerDuration);
+        var stHost = new Panel { Dock = DockStyle.Fill };
+        stHost.Controls.Add(_stickers);
+        stHost.Controls.Add(stBar2);
+        stHost.Controls.Add(stBar1);
+        stHost.Controls.Add(new Label { Text = "Stickers (double-click to add, then drag it on the video; scroll to resize)", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
+
+        var rightSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 215 };
+        rightSplit.Panel1.Controls.Add(segHost);
+        rightSplit.Panel2.Controls.Add(stHost);
+        right.Controls.Add(rightSplit);
 
         // center: player + controls
         var center = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6) };
@@ -547,6 +579,11 @@ public sealed class MainForm : Form
         _player.Status += s => Log("Player: " + s);
         _player.CaptionMoved += (x, y) => BeginInvoke(() => OnCaptionMoved(x, y));
         _player.CameraMoved += (x, y, z) => BeginInvoke(() => OnCameraMoved(x, y, z));
+        _player.OverlayMoved += (id, x, y, size) => BeginInvoke(() => OnOverlayMoved(id, x, y, size));
+        _stickers.DoubleClick += async (_, _) => await AddStickerAsync();
+        _stickerAdd.Click += async (_, _) => await AddStickerAsync();
+        _stickerAuto.Click += async (_, _) => await AutoStickersAsync();
+        _stickerFolder.Click += (_, _) => { StickerLibrary.EnsureSeeded(); OpenPath(StickerLibrary.Folder); };
         _cameraMode.CheckedChanged += async (_, _) =>
         {
             _cameraMode.BackColor = _cameraMode.Checked ? Theme.Nebula : Theme.Elevated;
@@ -564,8 +601,8 @@ public sealed class MainForm : Form
         _keyframeClear.Click += async (_, _) =>
         {
             if (_editing is null) return;
-            if (MessageBox.Show(this, "Remove all camera cuts and caption positions of this short?", "Clear all", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            _editing.Camera.Clear(); _editing.CaptionPositions.Clear();
+            if (MessageBox.Show(this, "Remove all camera cuts, caption positions and stickers of this short?", "Clear all", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            _editing.Camera.Clear(); _editing.CaptionPositions.Clear(); _editing.Overlays.Clear();
             await PushKeyframesAsync();
         };
         _timeline.MouseDown += (_, _) => _timelineDragging = true;
@@ -1029,7 +1066,73 @@ public sealed class MainForm : Form
             _playerInitStarted = true;
             if (!await _player.InitAsync()) Log("In-app player unavailable (WebView2). Use 'Render preview clip' instead.");
         }
+        RefreshStickerGallery();
         RefreshEditorClipList();
+    }
+
+    private void RefreshStickerGallery()
+    {
+        _stickers.BeginUpdate();
+        _stickers.Items.Clear();
+        _stickerImages.Images.Clear();
+        foreach (var (name, path) in StickerLibrary.List())
+        {
+            try
+            {
+                using var img = Image.FromFile(path);
+                _stickerImages.Images.Add(name, new Bitmap(img, _stickerImages.ImageSize));
+                _stickers.Items.Add(new ListViewItem(name, name) { Tag = name });
+            }
+            catch { /* unreadable image: skip */ }
+        }
+        _stickers.EndUpdate();
+    }
+
+    private async Task AddStickerAsync()
+    {
+        if (_editing is null) { MessageBox.Show(this, "Pick a short first.", "Stickers"); return; }
+        if (_stickers.SelectedItems.Count == 0 || _stickers.SelectedItems[0].Tag is not string name)
+        {
+            MessageBox.Show(this, "Select a sticker in the gallery first.", "Stickers");
+            return;
+        }
+        var ov = new OverlayItem
+        {
+            Time = RelativeTime, Duration = (double)_stickerDuration.Value, File = name,
+            Animation = _stickerAnim.SelectedItem?.ToString() ?? "pop"
+        };
+        // stagger if another sticker is already showing at this time
+        if (_editing.Overlays.Any(o => o.Time <= ov.Time && ov.Time < o.End && Math.Abs(o.X - ov.X) < 10)) ov.X = 22;
+        _editing.Overlays.Add(ov);
+        await PushKeyframesAsync();
+        await _player.PauseAsync();
+    }
+
+    private async Task AutoStickersAsync()
+    {
+        if (_editing is null || _transcript is null) return;
+        var slice = _transcript.Slice(_editing.StartSeconds, _editing.EndSeconds);
+        var proposed = StickerLibrary.Suggest(_editing, slice);
+        if (proposed.Count == 0)
+        {
+            MessageBox.Show(this, "No laughs / reactions tagged inside this short, so nothing to place automatically. Transcribe with 'Detect laughs / reactions' on, or add stickers by hand.", "Auto stickers");
+            return;
+        }
+        if (_editing.Overlays.Count > 0 &&
+            MessageBox.Show(this, $"Add {proposed.Count} sticker(s) from the reaction tags? Existing stickers are kept.", "Auto stickers",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        _editing.Overlays.AddRange(proposed);
+        await PushKeyframesAsync();
+        Log($"Added {proposed.Count} sticker(s) from reaction tags.");
+    }
+
+    private void OnOverlayMoved(string id, double x, double y, double size)
+    {
+        var ov = _editing?.Overlays.FirstOrDefault(o => o.Id == id);
+        if (ov is null) return;
+        ov.X = x; ov.Y = y; ov.Size = size;
+        RefreshKeyframeList();
+        SaveProject();
     }
 
     private void RefreshEditorClipList()
@@ -1111,6 +1214,7 @@ public sealed class MainForm : Form
         {
             await _player.SetCameraAsync(_editing.Camera);
             await _player.SetCaptionPositionsAsync(_editing.CaptionPositions);
+            await _player.SetOverlaysAsync(_editing.Overlays);
         }
     }
 
@@ -1122,17 +1226,18 @@ public sealed class MainForm : Form
         {
             var rows = _editing.Camera.Select(k => (k.Time, "Camera", $"{k.X:F0}% / {k.Y:F0}%  zoom {k.Zoom:F2}x  ({k.Source})", (IKeyframe)k))
                 .Concat(_editing.CaptionPositions.Select(k => (k.Time, "Caption", $"{k.X:F0}% / {k.Y:F0}%", (IKeyframe)k)))
+                .Concat(_editing.Overlays.Select(o => (o.Time, "Sticker", $"{o.File}  {o.Duration:F1}s  {o.Animation}  at {o.X:F0}% / {o.Y:F0}%", (IKeyframe)o)))
                 .OrderBy(r => r.Item1).ThenBy(r => r.Item2);
             foreach (var r in rows)
             {
                 var item = new ListViewItem(new[] { Fmt(r.Item1), r.Item2, r.Item3 }) { Tag = r.Item4 };
-                item.ForeColor = r.Item2 == "Camera" ? Theme.PurpleDeep : Theme.TextSecondary;
+                item.ForeColor = r.Item2 switch { "Camera" => Theme.PurpleDeep, "Sticker" => Theme.Nebula, _ => Theme.TextSecondary };
                 _keyframes.Items.Add(item);
             }
         }
         _keyframes.EndUpdate();
-        int cams = _editing?.Camera.Count ?? 0, caps = _editing?.CaptionPositions.Count ?? 0;
-        _keyframeHint.Text = _editing is null ? "" : $"{cams} camera cut{(cams == 1 ? "" : "s")}, {caps} caption pos.";
+        int cams = _editing?.Camera.Count ?? 0, caps = _editing?.CaptionPositions.Count ?? 0, ovs = _editing?.Overlays.Count ?? 0;
+        _keyframeHint.Text = _editing is null ? "" : $"{cams} camera cut{(cams == 1 ? "" : "s")}, {caps} caption pos., {ovs} sticker{(ovs == 1 ? "" : "s")}";
     }
 
     private async Task DeleteKeyframeAsync()
@@ -1140,6 +1245,7 @@ public sealed class MainForm : Form
         if (_editing is null || _keyframes.SelectedItems.Count == 0 || _keyframes.SelectedItems[0].Tag is not IKeyframe k) return;
         if (k is CameraKeyframe ck) _editing.Camera.Remove(ck);
         else if (k is CaptionKeyframe pk) _editing.CaptionPositions.Remove(pk);
+        else if (k is OverlayItem ov) _editing.Overlays.Remove(ov);
         await PushKeyframesAsync();
     }
 
