@@ -351,7 +351,7 @@ public sealed class MainForm : Form
         SplitWhenSized(split, 200);
 
         var info = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10) };
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, FlowDirection = FlowDirection.LeftToRight };
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 52, Padding = new Padding(0, 12, 0, 0), FlowDirection = FlowDirection.LeftToRight };
         buttons.Controls.Add(_openFile);
         buttons.Controls.Add(_openFolder);
         _videoInfo.Text = "";
@@ -361,7 +361,7 @@ public sealed class MainForm : Form
         info.Controls.Add(buttons);
         split.Panel1.Controls.Add(info);
 
-        var libBar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(6, 5, 6, 0), WrapContents = false };
+        var libBar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 58, Padding = new Padding(0, 10, 0, 0), WrapContents = false };
         libBar.Controls.Add(new Label { Text = "Downloaded videos", AutoSize = true, Margin = new Padding(0, 7, 14, 0), Font = Theme.HeadingFont(9.5f) });
         libBar.Controls.Add(_libraryTranscribe);
         libBar.Controls.Add(_libraryLoad);
@@ -382,7 +382,7 @@ public sealed class MainForm : Form
 
     private void BuildTranscriptTab()
     {
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(6, 5, 6, 0), WrapContents = false };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 54, Padding = new Padding(0, 6, 0, 0), WrapContents = false };
         foreach (var m in Transcriber.ModelNames) _whisperModel.Items.Add(Transcriber.DescribeModel(m));
         _whisperModel.SelectedIndex = Math.Max(0, Array.IndexOf(Transcriber.ModelNames, _settings.WhisperModel));
         _language.Text = _settings.WhisperLanguage;
@@ -412,7 +412,7 @@ public sealed class MainForm : Form
 
     private void BuildChatGptTab()
     {
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(6, 5, 6, 0), WrapContents = false };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 54, Padding = new Padding(0, 6, 0, 0), WrapContents = false };
         bar.Controls.Add(_gptBuild);
         bar.Controls.Add(new Label { Text = "Shorts:", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         bar.Controls.Add(_gptCount);
@@ -445,16 +445,16 @@ public sealed class MainForm : Form
 
         var left = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6) };
         left.Controls.Add(_gptPrompt);
-        left.Controls.Add(new Label { Text = "Prompt for ChatGPT", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
+        left.Controls.Add(new Label { Text = "Prompt for ChatGPT", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
         split.Panel1.Controls.Add(left);
 
         var right = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6) };
-        var rightBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 38, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
+        var rightBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(0, 10, 0, 0), FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
         rightBar.Controls.Add(_gptImport);
         rightBar.Controls.Add(_gptPaste);
         right.Controls.Add(_gptAnswer);
         right.Controls.Add(rightBar);
-        right.Controls.Add(new Label { Text = "ChatGPT's answer", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
+        right.Controls.Add(new Label { Text = "ChatGPT's answer", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
         split.Panel2.Controls.Add(right);
 
         _tabChatGpt.Controls.Add(split);
@@ -464,7 +464,7 @@ public sealed class MainForm : Form
 
     private void BuildSuggestTab()
     {
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(6, 5, 6, 0), WrapContents = false };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 54, Padding = new Padding(0, 6, 0, 0), WrapContents = false };
         _count.Value = Math.Clamp(_settings.SuggestionCount, 1, 20);
         _minSec.Value = Math.Clamp(_settings.MinShortSeconds, 5, 180);
         _maxSec.Value = Math.Clamp(_settings.MaxShortSeconds, 10, 180);
@@ -519,10 +519,10 @@ public sealed class MainForm : Form
         SplitWhenSized(leftSplit, 150);
         var clipsHost = new Panel { Dock = DockStyle.Fill };
         clipsHost.Controls.Add(_editClips);
-        clipsHost.Controls.Add(new Label { Text = "Selected shorts", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
+        clipsHost.Controls.Add(new Label { Text = "Selected shorts", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
 
         // actions for the current short (wrap into two rows)
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 124, WrapContents = true, Padding = new Padding(0, 6, 0, 0) };
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 140, WrapContents = true, Padding = new Padding(0, 8, 0, 0) };
         _generateOne.Width = 276; _generateOne.Height = 36; _generateOne.Margin = new Padding(0, 0, 0, 6);
         _renderPreview.Width = 135; _renderPreview.Margin = new Padding(0, 0, 6, 6);
         _autoCamera.Width = 135; _autoCamera.Text = "Auto camera"; _autoCamera.Margin = new Padding(0, 0, 0, 6);
@@ -533,12 +533,12 @@ public sealed class MainForm : Form
         actions.Controls.Add(_cameraMode);
 
         var kfHost = new Panel { Dock = DockStyle.Fill };
-        var kfBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 34, WrapContents = false };
+        var kfBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(0, 10, 0, 0), WrapContents = false };
         kfBar.Controls.Add(_keyframeDelete);
         kfBar.Controls.Add(_keyframeClear);
         kfHost.Controls.Add(_keyframes);
         kfHost.Controls.Add(kfBar);
-        kfHost.Controls.Add(new Label { Text = "Camera cuts and caption positions (double-click to jump)", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray, UseMnemonic = false });
+        kfHost.Controls.Add(new Label { Text = "Camera cuts and caption positions (double-click to jump)", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, UseMnemonic = false });
         kfHost.Controls.Add(actions);
         leftSplit.Panel1.Controls.Add(clipsHost);
         leftSplit.Panel2.Controls.Add(kfHost);
@@ -551,12 +551,12 @@ public sealed class MainForm : Form
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "Text", HeaderText = "Text (editable)", FillWeight = 64 });
         _editSegments.Columns["Text"]!.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
         _editSegments.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells;
-        var segBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 38, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
+        var segBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(0, 10, 0, 0), FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
         segBar.Controls.Add(_segPlay);
         segBar.Controls.Add(_segDelete);
         right.Controls.Add(_editSegments);
         right.Controls.Add(segBar);
-        right.Controls.Add(new Label { Text = "Transcript of this short", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
+        right.Controls.Add(new Label { Text = "Transcript of this short", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
 
         // center: player + controls
         var center = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6) };
@@ -633,7 +633,7 @@ public sealed class MainForm : Form
         var right = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 330 };
         var previewHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6) };
         previewHost.Controls.Add(_preview);
-        previewHost.Controls.Add(new Label { Text = "Caption preview (approximate)", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
+        previewHost.Controls.Add(new Label { Text = "Caption preview (approximate)", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
         right.Panel1.Controls.Add(previewHost);
 
         _results.Columns.Add("Short", 300);
@@ -641,7 +641,7 @@ public sealed class MainForm : Form
         _results.Columns.Add("File", 500);
         var resultsHost = new Panel { Dock = DockStyle.Fill };
         resultsHost.Controls.Add(_results);
-        resultsHost.Controls.Add(new Label { Text = "Generated files (double-click to play)", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray, Padding = new Padding(4, 0, 0, 0) });
+        resultsHost.Controls.Add(new Label { Text = "Generated files (double-click to play)", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, Padding = new Padding(4, 0, 0, 0) });
         right.Panel2.Controls.Add(resultsHost);
 
         _tabGenerate.Controls.Add(right);

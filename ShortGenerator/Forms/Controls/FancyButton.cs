@@ -24,6 +24,7 @@ public class FancyButton : Button
         FlatAppearance.BorderSize = 0;
         BackColor = Color.Transparent;
         Height = 34;
+        Margin = new Padding(0, 0, 8, 0); // consistent 8 px gap between neighbouring buttons in toolbars
         Cursor = Cursors.Hand;
         Font = Theme.Body(9.5f, FontStyle.Bold);
         UseVisualStyleBackColor = false;
@@ -88,20 +89,19 @@ public class FancyButton : Button
                 break;
 
             case ButtonKind.Subtle:
-                using (var b = new SolidBrush(_down ? Theme.SurfaceStrong : (_hover ? Theme.Surface : Theme.Elevated))) g.FillPath(b, path);
-                using (var p = new Pen(_hover ? Theme.BorderStrong : Theme.Border)) g.DrawPath(p, path);
+                using (var b = new SolidBrush(_down ? Theme.SelectionBg : (_hover ? Theme.SurfaceSoft : Theme.Elevated))) g.FillPath(b, path);
+                using (var p = new Pen(_hover ? Theme.BorderHover : Theme.Border)) g.DrawPath(p, path);
                 break;
 
-            default: // Ghost
-                if (_hover || _down)
-                    using (var b = new SolidBrush(Color.FromArgb(_down ? 40 : 22, 255, 255, 255))) g.FillPath(b, path);
-                using (var p = new Pen(_hover ? Theme.BorderHover : Theme.BorderStrong)) g.DrawPath(p, path);
+            default: // Ghost: white surface, lavender tint on hover, text stays dark for contrast
+                using (var b = new SolidBrush(_down ? Theme.SelectionBg : (_hover ? Theme.SurfaceSoft : Theme.Elevated))) g.FillPath(b, path);
+                using (var p = new Pen(_hover ? Theme.Purple : Theme.BorderStrong, _hover ? 1.4f : 1f)) g.DrawPath(p, path);
                 break;
         }
 
         var fore = _kind is ButtonKind.Primary or ButtonKind.Danger
             ? (Enabled ? Color.White : Color.FromArgb(200, 255, 255, 255))
-            : (Enabled ? (_hover ? Color.White : Theme.TextSecondary) : Theme.TextMuted);
+            : (Enabled ? (_hover || _down ? Theme.PurpleDeep : Theme.Heading) : Theme.TextMuted);
 
         // layout: [glyph] text, centered
         var textSize = TextRenderer.MeasureText(g, Text, Font, Size.Empty, TextFormatFlags.NoPadding);

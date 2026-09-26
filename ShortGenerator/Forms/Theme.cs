@@ -113,17 +113,25 @@ public static class Theme
     // ------------------------------------------------------------ styling helpers
 
     /// <summary>Wraps a single-line TextBox in a rounded, bordered field so it matches the buttons.</summary>
-    public static Panel WrapInput(TextBox tb, int height = 34)
+    public static Panel WrapInput(TextBox tb, int height = 36)
     {
-        var host = new RoundedField { Height = height, Padding = new Padding(12, 0, 12, 0) };
+        var host = new RoundedField { Height = height };
         tb.BorderStyle = BorderStyle.None;
-        tb.BackColor = Elevated;
+        tb.BackColor = Color.White;
         tb.ForeColor = Text;
+        tb.Multiline = false;
         tb.Dock = DockStyle.None;
-        tb.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        tb.Anchor = AnchorStyles.None;
         host.Controls.Add(tb);
-        void Place() { tb.Left = host.Padding.Left; tb.Width = host.Width - host.Padding.Horizontal; tb.Top = (host.Height - tb.Height) / 2; }
+        // centre the text box vertically inside the field, leaving room for the rounded stroke
+        void Place()
+        {
+            int inset = 12;
+            tb.SetBounds(inset, Math.Max(2, (host.Height - tb.PreferredHeight) / 2), Math.Max(10, host.Width - inset * 2), tb.PreferredHeight);
+        }
+        host.Layout += (_, _) => Place();
         host.Resize += (_, _) => Place();
+        tb.FontChanged += (_, _) => Place();
         Place();
         return host;
     }
@@ -133,19 +141,20 @@ public static class Theme
         public RoundedField()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-            BackColor = Elevated;
+            BackColor = Color.White;
         }
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             using (var bg = new SolidBrush(Parent?.BackColor ?? Bg)) e.Graphics.FillRectangle(bg, ClientRectangle);
             using var path = FancyButton.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 10);
-            using var fill = new SolidBrush(Elevated);
+            using var fill = new SolidBrush(Color.White);
             e.Graphics.FillPath(fill, path);
             bool focused = Controls.Count > 0 && Controls[0].Focused;
             using var pen = new Pen(focused ? Purple : BorderStrong, focused ? 1.5f : 1f);
             e.Graphics.DrawPath(pen, path);
         }
+        protected override void OnPaint(PaintEventArgs e) { /* background only; the text box paints itself */ }
     }
 
     public static void Primary(Button b) { if (b is FancyButton f) f.Kind = ButtonKind.Primary; }
@@ -196,15 +205,18 @@ public static class Theme
                 cb.FlatStyle = FlatStyle.Flat;
                 cb.BackColor = Surface;
                 cb.ForeColor = Text;
+                if (cb.Parent is FlowLayoutPanel) cb.Margin = new Padding(0, 5, 12, 0);
                 break;
             case NumericUpDown nud:
                 nud.BorderStyle = BorderStyle.FixedSingle;
                 nud.BackColor = Surface;
                 nud.ForeColor = Text;
+                if (nud.Parent is FlowLayoutPanel) nud.Margin = new Padding(0, 5, 12, 0);
                 break;
             case CheckBox chk:
                 chk.ForeColor = TextSecondary;
                 chk.FlatStyle = FlatStyle.Flat;
+                if (chk.Parent is FlowLayoutPanel) chk.Margin = new Padding(0, 8, 12, 0);
                 break;
             case TrackBar tb:
                 tb.BackColor = Elevated;
