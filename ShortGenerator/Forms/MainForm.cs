@@ -52,8 +52,13 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _clipStart = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
     private readonly NumericUpDown _clipEnd = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
     private readonly Button _renderPreview = new() { Text = "Render preview", Width = 130 };
-    private readonly Button _resetCaptionPos = new() { Text = "Reset caption position", Width = 170, Enabled = false };
-    private readonly Label _captionPosLabel = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 7, 0, 0) };
+    private readonly CheckBox _cameraMode = new() { Text = "Camera mode", AutoSize = false, Appearance = Appearance.Button, TextAlign = ContentAlignment.MiddleCenter, Width = 110, Height = 28 };
+    private readonly Button _autoCamera = new() { Text = "Auto camera (faces)", Width = 150 };
+    private readonly Label _keyframeHint = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 7, 0, 0) };
+    private readonly ListView _keyframes = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
+    private readonly Button _keyframeDelete = new() { Text = "Delete", Width = 70 };
+    private readonly Button _keyframeClear = new() { Text = "Clear all", Width = 80 };
+    private double _playerTime;
     private readonly DataGridView _editSegments = new()
     {
         Dock = DockStyle.Fill, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false,
@@ -118,6 +123,7 @@ public sealed class MainForm : Form
     private readonly ComboBox _crop = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
     private readonly CheckBox _burnHook = new() { Text = "Show the hook as a title at the start", AutoSize = true };
     private readonly CheckBox _includeReactions = new() { Text = "Show laughs / reactions in captions, e.g. [laughs]", AutoSize = true };
+    private readonly CheckBox _autoCameraOpt = new() { Text = "Auto camera: follow faces (vertical crop)", Checked = true, AutoSize = true };
     private readonly TextBox _outputFolder = new() { Width = 230 };
     private readonly Button _generate = new() { Text = "Generate selected shorts", Width = 190, Height = 34, Enabled = false, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold) };
     private readonly CaptionPreview _preview = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(30, 30, 30) };
@@ -375,15 +381,30 @@ public sealed class MainForm : Form
 
     private void BuildEditorTab()
     {
-        _editorHint.Text = "Pick a short on the left to play it with live captions. Drag the caption on the video to place it where it does not hide anything; the position is saved for that short. " +
-                           "Fix wrong words in the Text column (F2 or start typing). Nudge Start / End to tighten the cut. Style, framing and words-per-caption come from '6. Generate shorts'.";
+        _editorHint.Text = "Pick a short on the left. Drag the caption on the video to place it from the current time on. 'Camera mode' shows the whole frame: drag the 9:16 box and scroll to zoom to add a camera cut at the current time. " +
+                           "'Auto camera' follows faces. Fix wrong words in the Text column (F2 or start typing). Style, framing and words-per-caption come from '6. Generate shorts'.";
 
-        // left: list of selected shorts
-        var left = new Panel { Dock = DockStyle.Left, Width = 260, Padding = new Padding(6) };
-        _editClips.Columns.Add("Short", 150);
-        _editClips.Columns.Add("Range", 90);
-        left.Controls.Add(_editClips);
-        left.Controls.Add(new Label { Text = "Selected shorts", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
+        // left: list of selected shorts + timeline of camera cuts and caption positions
+        var left = new Panel { Dock = DockStyle.Left, Width = 290, Padding = new Padding(6) };
+        _editClips.Columns.Add("Short", 170);
+        _editClips.Columns.Add("Range", 100);
+        _keyframes.Columns.Add("At", 50);
+        _keyframes.Columns.Add("What", 60);
+        _keyframes.Columns.Add("Details", 160);
+        var leftSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 150 };
+        var clipsHost = new Panel { Dock = DockStyle.Fill };
+        clipsHost.Controls.Add(_editClips);
+        clipsHost.Controls.Add(new Label { Text = "Selected shorts", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
+        var kfHost = new Panel { Dock = DockStyle.Fill };
+        var kfBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 34, WrapContents = false };
+        kfBar.Controls.Add(_keyframeDelete);
+        kfBar.Controls.Add(_keyframeClear);
+        kfHost.Controls.Add(_keyframes);
+        kfHost.Controls.Add(kfBar);
+        kfHost.Controls.Add(new Label { Text = "Camera cuts and caption positions (double-click to jump)", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray, UseMnemonic = false });
+        leftSplit.Panel1.Controls.Add(clipsHost);
+        leftSplit.Panel2.Controls.Add(kfHost);
+        left.Controls.Add(leftSplit);
 
         // right: transcript lines of the clip
         var right = new Panel { Dock = DockStyle.Right, Width = 400, Padding = new Padding(6) };
@@ -420,11 +441,12 @@ public sealed class MainForm : Form
         trim.Controls.Add(_renderPreview);
         controls.Controls.Add(trim, 0, 1);
         controls.SetColumnSpan(trim, 3);
-        var posRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 2, 0, 0) };
-        posRow.Controls.Add(_resetCaptionPos);
-        posRow.Controls.Add(_captionPosLabel);
-        controls.Controls.Add(posRow, 0, 2);
-        controls.SetColumnSpan(posRow, 3);
+        var camRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 2, 0, 0) };
+        camRow.Controls.Add(_cameraMode);
+        camRow.Controls.Add(_autoCamera);
+        camRow.Controls.Add(_keyframeHint);
+        controls.Controls.Add(camRow, 0, 2);
+        controls.SetColumnSpan(camRow, 3);
         center.Controls.Add(_player);
         center.Controls.Add(controls);
 
@@ -464,6 +486,7 @@ public sealed class MainForm : Form
         folderRow.Controls.Add(_outputFolder); folderRow.Controls.Add(browse);
 
         Add("Framing", _crop);
+        Add("", _autoCameraOpt);
         Add("", _addCaptions);
         Add("Caption style", _style);
         Add("", _styleDesc);
@@ -522,19 +545,28 @@ public sealed class MainForm : Form
         _player.PlayingChanged += playing => _playPause.Text = playing ? "Pause" : "Play";
         _player.TimeChanged += OnPlayerTime;
         _player.Status += s => Log("Player: " + s);
-        _player.CaptionMoved += (x, y) =>
+        _player.CaptionMoved += (x, y) => BeginInvoke(() => OnCaptionMoved(x, y));
+        _player.CameraMoved += (x, y, z) => BeginInvoke(() => OnCameraMoved(x, y, z));
+        _cameraMode.CheckedChanged += async (_, _) =>
         {
-            if (_editing is null) return;
-            if (InvokeRequired) { BeginInvoke(() => OnCaptionMoved(x, y)); return; }
-            OnCaptionMoved(x, y);
+            _cameraMode.BackColor = _cameraMode.Checked ? Theme.Nebula : Theme.Elevated;
+            _cameraMode.ForeColor = _cameraMode.Checked ? Color.White : Theme.Heading;
+            if (_cameraMode.Checked) await _player.PauseAsync();
+            await _player.SetCameraModeAsync(_cameraMode.Checked);
         };
-        _resetCaptionPos.Click += async (_, _) =>
+        _autoCamera.Click += async (_, _) => await AutoCameraAsync();
+        _keyframes.DoubleClick += async (_, _) =>
+        {
+            if (_editing is not null && _keyframes.SelectedItems.Count > 0 && _keyframes.SelectedItems[0].Tag is IKeyframe k)
+                await _player.SeekAsync(_editing.StartSeconds + k.Time);
+        };
+        _keyframeDelete.Click += async (_, _) => await DeleteKeyframeAsync();
+        _keyframeClear.Click += async (_, _) =>
         {
             if (_editing is null) return;
-            _editing.CaptionX = _editing.CaptionY = null;
-            UpdateCaptionPosUi();
-            SaveProject();
-            await _player.SetCaptionPositionAsync(null, null);
+            if (MessageBox.Show(this, "Remove all camera cuts and caption positions of this short?", "Clear all", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            _editing.Camera.Clear(); _editing.CaptionPositions.Clear();
+            await PushKeyframesAsync();
         };
         _timeline.MouseDown += (_, _) => _timelineDragging = true;
         _timeline.MouseUp += async (_, _) => { _timelineDragging = false; await SeekFromTimelineAsync(); };
@@ -803,7 +835,13 @@ public sealed class MainForm : Form
                 Log(removed > 0 ? $"Restored saved transcript and removed {removed} repeated segments." : "Restored saved transcript.");
                 if (removed > 0) SaveProject();
             }
-            if (project.Suggestions is { Shorts.Count: > 0 }) { _suggestions = project.Suggestions; ShowSuggestions(); Log("Restored saved suggestions."); }
+            if (project.Suggestions is { Shorts.Count: > 0 })
+            {
+                _suggestions = project.Suggestions;
+                foreach (var s in _suggestions.Shorts) s.MigrateLegacyCaptionPosition();
+                ShowSuggestions();
+                Log("Restored saved suggestions.");
+            }
         }
         UpdateGenerateEnabled();
         _tabs.SelectedTab = _transcript is null ? _tabVideo : (_suggestions is null ? _tabSuggest : _tabGenerate);
@@ -1034,30 +1072,97 @@ public sealed class MainForm : Form
         _syncingTimeline = false;
 
         FillSegmentGrid(s);
-        UpdateCaptionPosUi();
+        s.MigrateLegacyCaptionPosition();
+        _playerTime = s.StartSeconds;
+        if (_cameraMode.Checked) _cameraMode.Checked = false;
         if (_player.IsReady)
         {
             await _player.LoadAsync(_video.FilePath, s.StartSeconds, s.EndSeconds);
             await PushCaptionsAsync();
-            await _player.SetCaptionPositionAsync(s.CaptionX, s.CaptionY);
         }
+        await PushKeyframesAsync();
         UpdateTimeLabel(s.StartSeconds);
     }
+
+    /// <summary>Current position relative to the clip start, rounded to 0.1 s.</summary>
+    private double RelativeTime => _editing is null ? 0 : Math.Round(Math.Max(0, _playerTime - _editing.StartSeconds), 1);
 
     private void OnCaptionMoved(double x, double y)
     {
         if (_editing is null) return;
-        _editing.CaptionX = x;
-        _editing.CaptionY = y;
-        UpdateCaptionPosUi();
-        SaveProject();
+        Keyframes.Upsert(_editing.CaptionPositions, new CaptionKeyframe { Time = RelativeTime, X = x, Y = y });
+        _ = PushKeyframesAsync();
     }
 
-    private void UpdateCaptionPosUi()
+    private void OnCameraMoved(double x, double y, double zoom)
     {
-        bool custom = _editing?.CaptionX is not null;
-        _resetCaptionPos.Enabled = custom;
-        _captionPosLabel.Text = custom ? $"Caption at {_editing!.CaptionX:F0}% / {_editing.CaptionY:F0}% (drag to move)" : "Caption: style default (drag it on the video to move)";
+        if (_editing is null) return;
+        Keyframes.Upsert(_editing.Camera, new CameraKeyframe { Time = RelativeTime, X = x, Y = y, Zoom = zoom, Source = "manual" });
+        _ = PushKeyframesAsync();
+    }
+
+    /// <summary>Sends camera cuts and caption positions to the player, refreshes the list, saves.</summary>
+    private async Task PushKeyframesAsync()
+    {
+        if (_editing is null) return;
+        RefreshKeyframeList();
+        SaveProject();
+        if (_player.IsReady)
+        {
+            await _player.SetCameraAsync(_editing.Camera);
+            await _player.SetCaptionPositionsAsync(_editing.CaptionPositions);
+        }
+    }
+
+    private void RefreshKeyframeList()
+    {
+        _keyframes.BeginUpdate();
+        _keyframes.Items.Clear();
+        if (_editing is not null)
+        {
+            var rows = _editing.Camera.Select(k => (k.Time, "Camera", $"{k.X:F0}% / {k.Y:F0}%  zoom {k.Zoom:F2}x  ({k.Source})", (IKeyframe)k))
+                .Concat(_editing.CaptionPositions.Select(k => (k.Time, "Caption", $"{k.X:F0}% / {k.Y:F0}%", (IKeyframe)k)))
+                .OrderBy(r => r.Item1).ThenBy(r => r.Item2);
+            foreach (var r in rows)
+            {
+                var item = new ListViewItem(new[] { Fmt(r.Item1), r.Item2, r.Item3 }) { Tag = r.Item4 };
+                item.ForeColor = r.Item2 == "Camera" ? Theme.PurpleDeep : Theme.TextSecondary;
+                _keyframes.Items.Add(item);
+            }
+        }
+        _keyframes.EndUpdate();
+        int cams = _editing?.Camera.Count ?? 0, caps = _editing?.CaptionPositions.Count ?? 0;
+        _keyframeHint.Text = _editing is null ? "" : $"{cams} camera cut{(cams == 1 ? "" : "s")}, {caps} caption pos.";
+    }
+
+    private async Task DeleteKeyframeAsync()
+    {
+        if (_editing is null || _keyframes.SelectedItems.Count == 0 || _keyframes.SelectedItems[0].Tag is not IKeyframe k) return;
+        if (k is CameraKeyframe ck) _editing.Camera.Remove(ck);
+        else if (k is CaptionKeyframe pk) _editing.CaptionPositions.Remove(pk);
+        await PushKeyframesAsync();
+    }
+
+    /// <summary>Runs face detection on the current short and replaces its camera cuts.</summary>
+    private async Task AutoCameraAsync()
+    {
+        if (_video is null || _editing is null) return;
+        if (!FaceFramer.IsSupported)
+        {
+            MessageBox.Show(this, "Face detection is not available on this Windows build. Use Camera mode to place the camera manually.", "Auto camera");
+            return;
+        }
+        var s = _editing;
+        if (s.Camera.Any(k => k.Source == "manual") &&
+            MessageBox.Show(this, "This short has manual camera cuts. Replace them with automatic face framing?", "Auto camera",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+
+        await RunBusyAsync("Detecting faces", async ct =>
+        {
+            var cuts = await new FaceFramer(_ffmpeg).DetectAsync(_video, s, ProgressReporter(), new Progress<string>(Log), ct);
+            s.Camera = cuts;
+            if (ReferenceEquals(_editing, s)) await PushKeyframesAsync(); else SaveProject();
+        });
     }
 
     private void FillSegmentGrid(ShortSuggestion s)
@@ -1083,6 +1188,7 @@ public sealed class MainForm : Form
     {
         if (_editing is null) return;
         if (InvokeRequired) { BeginInvoke(() => OnPlayerTime(t)); return; }
+        _playerTime = t;
         UpdateTimeLabel(t);
         if (!_timelineDragging)
         {
@@ -1310,6 +1416,7 @@ public sealed class MainForm : Form
         CropMode = (CropMode)_crop.SelectedIndex,
         BurnTitleHook = _burnHook.Checked,
         IncludeReactions = _includeReactions.Checked,
+        AutoCamera = _autoCameraOpt.Checked,
         OutputFolder = string.IsNullOrWhiteSpace(_outputFolder.Text) ? _settings.OutputFolder : _outputFolder.Text.Trim()
     };
 
@@ -1352,6 +1459,20 @@ public sealed class MainForm : Form
                 ct.ThrowIfCancellationRequested();
                 _status.Text = $"Generating {i}/{selected.Count}: {s.Title}";
                 var item = _results.Items.Add(new ListViewItem(new[] { s.Title, "rendering...", "" }));
+                if (options.CropMode == CropMode.VerticalCrop && options.AutoCamera && s.Camera.Count == 0 && FaceFramer.IsSupported)
+                {
+                    item.SubItems[1].Text = "faces...";
+                    try
+                    {
+                        s.Camera = await new FaceFramer(_ffmpeg).DetectAsync(_video, s, ProgressReporter(), new Progress<string>(Log), ct);
+                        SaveProject();
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        Log($"Auto camera failed for \"{s.Title}\" ({ex.Message}); using a centered crop.");
+                    }
+                    item.SubItems[1].Text = "rendering...";
+                }
                 var r = await _renderer.RenderAsync(_video, _transcript, s, options, i, ProgressReporter(), new Progress<string>(Log), ct);
                 item.SubItems[1].Text = r.Success ? "done" : "failed";
                 item.SubItems[2].Text = r.Success ? r.OutputPath : r.Error ?? "";

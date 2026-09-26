@@ -86,12 +86,78 @@ public sealed class ShortSuggestion
     [JsonPropertyName("suggested_caption")] public string SuggestedCaption { get; set; } = "";
     [JsonPropertyName("hashtags")] public List<string> Hashtags { get; set; } = new();
 
-    /// <summary>Custom caption anchor as percent of the frame (0-100 from left / top). Null = style default.</summary>
+    /// <summary>Legacy single caption anchor (percent of frame). Migrated into <see cref="CaptionPositions"/> on load.</summary>
     [JsonPropertyName("caption_x")] public double? CaptionX { get; set; }
     [JsonPropertyName("caption_y")] public double? CaptionY { get; set; }
 
+    /// <summary>Caption anchors over time (times relative to the clip start). Each one holds until the next.</summary>
+    [JsonPropertyName("caption_positions")] public List<CaptionKeyframe> CaptionPositions { get; set; } = new();
+
+    /// <summary>Camera cuts for the vertical crop (times relative to the clip start). Empty = centered.</summary>
+    [JsonPropertyName("camera")] public List<CameraKeyframe> Camera { get; set; } = new();
+
+    /// <summary>Moves the legacy single caption position into the keyframe list.</summary>
+    public void MigrateLegacyCaptionPosition()
+    {
+        if (CaptionX is { } x && CaptionY is { } y && CaptionPositions.Count == 0)
+            CaptionPositions.Add(new CaptionKeyframe { Time = 0, X = x, Y = y });
+        CaptionX = CaptionY = null;
+    }
+
+    public CaptionKeyframe? CaptionAt(double relativeTime) => Keyframes.ActiveAt(CaptionPositions, relativeTime);
+    public CameraKeyframe? CameraAt(double relativeTime) => Keyframes.ActiveAt(Camera, relativeTime);
+
     [JsonIgnore] public double Duration => EndSeconds - StartSeconds;
     [JsonIgnore] public bool Selected { get; set; } = true;
+}
+
+public interface IKeyframe
+{
+    /// <summary>Seconds from the start of the clip.</summary>
+    double Time { get; set; }
+}
+
+/// <summary>Where the caption block is anchored, as percent of the output frame (x from left, y from top).</summary>
+public sealed class CaptionKeyframe : IKeyframe
+{
+    [JsonPropertyName("t")] public double Time { get; set; }
+    [JsonPropertyName("x")] public double X { get; set; } = 50;
+    [JsonPropertyName("y")] public double Y { get; set; } = 80;
+}
+
+/// <summary>A camera cut for the 9:16 crop: center of the crop as percent of the source frame, and zoom (1 = full height).</summary>
+public sealed class CameraKeyframe : IKeyframe
+{
+    [JsonPropertyName("t")] public double Time { get; set; }
+    [JsonPropertyName("x")] public double X { get; set; } = 50;
+    [JsonPropertyName("y")] public double Y { get; set; } = 50;
+    [JsonPropertyName("zoom")] public double Zoom { get; set; } = 1.0;
+    /// <summary>"auto" when produced by face detection, "manual" when dragged by the user.</summary>
+    [JsonPropertyName("source")] public string Source { get; set; } = "manual";
+}
+
+public static class Keyframes
+{
+    /// <summary>The keyframe in effect at <paramref name="time"/>: the latest one at or before it, else the first one.</summary>
+    public static T? ActiveAt<T>(List<T> list, double time) where T : class, IKeyframe
+    {
+        if (list.Count == 0) return null;
+        T? best = null;
+        foreach (var k in list.OrderBy(k => k.Time))
+        {
+            if (k.Time <= time + 0.001) best = k;
+            else break;
+        }
+        return best ?? list.OrderBy(k => k.Time).First();
+    }
+
+    /// <summary>Adds or replaces the keyframe at <paramref name="time"/> (within 0.25 s).</summary>
+    public static void Upsert<T>(List<T> list, T keyframe) where T : class, IKeyframe
+    {
+        list.RemoveAll(k => Math.Abs(k.Time - keyframe.Time) < 0.25);
+        list.Add(keyframe);
+        list.Sort((a, b) => a.Time.CompareTo(b.Time));
+    }
 }
 
 public sealed class SuggestionResponse
@@ -122,6 +188,8 @@ public sealed class GenerateOptions
     public bool BurnTitleHook { get; set; } = false;
     /// <summary>Show reaction tags like "[laughs]" in the burned captions.</summary>
     public bool IncludeReactions { get; set; } = false;
+    /// <summary>Run face detection to place the vertical crop when a short has no camera cuts yet.</summary>
+    public bool AutoCamera { get; set; } = true;
 }
 
 public sealed class ShortResult

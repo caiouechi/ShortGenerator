@@ -17,13 +17,16 @@ public static class CaptionBuilder
     /// </summary>
     public static string BuildAss(IReadOnlyList<TranscriptSegment> segments, CaptionStyle style, int wordsPerCaption,
         int fontSizeOverride, int playResX, int playResY, string? hookText = null, bool includeReactions = false,
-        (double XPercent, double YPercent)? captionPos = null)
+        List<CaptionKeyframe>? captionPositions = null)
     {
         segments = PrepareText(segments, includeReactions);
-        // A dragged caption position overrides the style's alignment: anchor the text centre at that point.
-        string posTag = captionPos is { } cp
-            ? $"{{\\an5\\pos({Math.Round(cp.XPercent / 100.0 * playResX)},{Math.Round(cp.YPercent / 100.0 * playResY)})}}"
-            : "";
+        // Dragged caption positions override the style's alignment: each caption is anchored at the
+        // position in effect at its start time (times are relative to the clip, like the segments).
+        string PosTagAt(double time)
+        {
+            var k = captionPositions is { Count: > 0 } ? Keyframes.ActiveAt(captionPositions, time) : null;
+            return k is null ? "" : $"{{\\an5\\pos({Math.Round(k.X / 100.0 * playResX)},{Math.Round(k.Y / 100.0 * playResY)})}}";
+        }
         double scale = ComputeScale(playResX, playResY);
         int fontSize = (int)Math.Round((fontSizeOverride > 0 ? fontSizeOverride : style.FontSize) * scale);
         int outline = (int)Math.Round(style.Outline * scale);
@@ -78,7 +81,7 @@ public static class CaptionBuilder
             if (end - start < 0.05) end = start + 0.05;
 
             var text = new StringBuilder();
-            text.Append(posTag);
+            text.Append(PosTagAt(start));
             if (style.Blur > 0) text.Append($"{{\\blur{style.Blur}}}");
             if (style.PopAnimation) text.Append("{\\fscx80\\fscy80\\t(0,110,\\fscx100\\fscy100)}");
 

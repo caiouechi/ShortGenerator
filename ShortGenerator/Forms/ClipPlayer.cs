@@ -7,8 +7,9 @@ using ShortGenerator.Services;
 namespace ShortGenerator.Forms;
 
 /// <summary>
-/// In-app video player (Edge WebView2 + HTML5 video) that plays one clip range of the source video
-/// with live caption overlay rendered in the selected caption style. Used by the Edit &amp; preview tab.
+/// In-app video player (Edge WebView2 + HTML5 video) that plays one clip range of the source video with
+/// live caption overlay, follows the clip's camera cuts, and offers a camera edit mode where the user
+/// drags a 9:16 box over the full frame. Used by the Edit &amp; preview tab.
 /// </summary>
 public sealed class ClipPlayer : UserControl
 {
@@ -22,8 +23,10 @@ public sealed class ClipPlayer : UserControl
     public event Action<bool>? PlayingChanged;
     /// <summary>Diagnostics from the page: "loaded WxH" or a decode error message.</summary>
     public event Action<string>? Status;
-    /// <summary>User dragged the caption: new anchor as percent of the frame (x from left, y from top).</summary>
+    /// <summary>User dragged the caption: new anchor as percent of the output frame (x from left, y from top).</summary>
     public event Action<double, double>? CaptionMoved;
+    /// <summary>User moved / zoomed the camera box: center as percent of the source frame, and zoom.</summary>
+    public event Action<double, double, double>? CameraMoved;
 
     public bool IsReady => _ready;
 
@@ -68,7 +71,7 @@ public sealed class ClipPlayer : UserControl
         {
             _web.Visible = false;
             _fallback.Text = "The in-app player needs the Microsoft Edge WebView2 runtime.\n\n" + ex.Message +
-                             "\n\nUse 'Render preview clip' to preview in your default video player instead.";
+                             "\n\nUse 'Render preview' to preview in your default video player instead.";
             _fallback.Visible = true;
             return false;
         }
@@ -84,6 +87,7 @@ public sealed class ClipPlayer : UserControl
             if (root.TryGetProperty("playing", out var p)) PlayingChanged?.Invoke(p.GetBoolean());
             if (root.TryGetProperty("status", out var s)) Status?.Invoke(s.GetString() ?? "");
             if (root.TryGetProperty("pos", out var pos)) CaptionMoved?.Invoke(pos.GetProperty("x").GetDouble(), pos.GetProperty("y").GetDouble());
+            if (root.TryGetProperty("camera", out var cam)) CameraMoved?.Invoke(cam.GetProperty("x").GetDouble(), cam.GetProperty("y").GetDouble(), cam.GetProperty("zoom").GetDouble());
         }
         catch { }
     }
@@ -103,13 +107,18 @@ public sealed class ClipPlayer : UserControl
     public Task PauseAsync() => Exec("pause()");
     public Task TogglePlayAsync() => Exec("toggle()");
 
-    /// <summary>Places the caption at a custom anchor (percent of frame) or back at the style default when null.</summary>
-    public Task SetCaptionPositionAsync(double? xPercent, double? yPercent) =>
-        Exec(xPercent is { } x && yPercent is { } y ? $"setPos({J(x)},{J(y)})" : "setPos(null,null)");
+    /// <summary>Camera cuts (times relative to the clip start) that the vertical-crop preview follows.</summary>
+    public Task SetCameraAsync(List<CameraKeyframe> camera) =>
+        Exec($"setCamera({JsonSerializer.Serialize(camera.OrderBy(k => k.Time).Select(k => new { t = k.Time, x = k.X, y = k.Y, zoom = k.Zoom }))})");
 
-    /// <summary>
-    /// Pushes caption chunks (absolute times) and the visual style to the page.
-    /// </summary>
+    /// <summary>Caption anchors over time (relative to the clip start). Empty = style default placement.</summary>
+    public Task SetCaptionPositionsAsync(List<CaptionKeyframe> positions) =>
+        Exec($"setCaptionPositions({JsonSerializer.Serialize(positions.OrderBy(k => k.Time).Select(k => new { t = k.Time, x = k.X, y = k.Y }))})");
+
+    /// <summary>Camera edit mode: shows the whole source frame with a draggable 9:16 box (scroll to zoom).</summary>
+    public Task SetCameraModeAsync(bool on) => Exec($"setCameraMode({(on ? "true" : "false")})");
+
+    /// <summary>Pushes caption chunks (absolute times) and the visual style to the page.</summary>
     public Task SetCaptionsAsync(IReadOnlyList<TranscriptSegment> clipSegments, double clipStart, CaptionStyle style, int fontSizeOverride, int wordsPerCaption, CropMode crop, bool enabled, bool includeReactions)
     {
         var chunks = enabled
@@ -153,51 +162,51 @@ public sealed class ClipPlayer : UserControl
   #cap.custom{left:auto;right:auto;width:92%;transform:translate(-50%,-50%)}
   #cap.dragging{cursor:grabbing;outline:2px dashed rgba(255,255,255,.6);outline-offset:6px}
   #cap:empty{pointer-events:none}
-  #cap span.box{display:inline-block;padding:.15em .4em;border-radius:.15em}
+  #cam{position:absolute;display:none;border:2px solid #A855F7;box-shadow:0 0 0 9999px rgba(0,0,0,.55);cursor:move;touch-action:none;box-sizing:border-box}
+  #cam .lbl{position:absolute;left:0;top:-22px;background:#6A38FF;color:#fff;font:12px Arial;padding:2px 6px;border-radius:4px;white-space:nowrap}
+  #camhint{position:absolute;left:8px;bottom:8px;color:#fff;font:12px Arial;background:rgba(0,0,0,.6);padding:4px 8px;border-radius:4px;display:none}
   @keyframes pop{from{transform:scale(.8)}to{transform:scale(1)}}
   .pop{animation:pop 110ms ease-out}
 </style></head>
 <body>
-<div id="wrap"><div id="frame"><video id="bg" muted></video><video id="v" playsinline></video><div id="cap"></div></div></div>
+<div id="wrap"><div id="frame"><video id="bg" muted></video><video id="v" playsinline></video><div id="cap"></div><div id="cam"><span class="lbl"></span></div><div id="camhint">Drag the box to move the camera, scroll to zoom. Each change creates a camera cut at the current time.</div></div></div>
 <script>
-const v=document.getElementById('v'),bg=document.getElementById('bg'),frame=document.getElementById('frame'),cap=document.getElementById('cap');
-let range={s:0,e:0},chunks=[],st=null,lastIdx=-1,lastPost=0,pos=null,drag=null;
-function setPos(x,y){pos=(x==null||y==null)?null:{x,y};layout();}
-function applyPos(){
-  if(pos){cap.classList.add('custom');cap.style.left=pos.x+'%';cap.style.top=pos.y+'%';cap.style.bottom='';cap.style.transform='translate(-50%,-50%)';}
-  else{cap.classList.remove('custom');}
-}
-cap.addEventListener('pointerdown',e=>{
-  const r=frame.getBoundingClientRect(),c=cap.getBoundingClientRect();
-  const cx=pos?pos.x:((c.left+c.width/2-r.left)/r.width*100),cy=pos?pos.y:((c.top+c.height/2-r.top)/r.height*100);
-  drag={x0:e.clientX,y0:e.clientY,cx,cy,w:r.width,h:r.height};cap.classList.add('dragging');cap.setPointerCapture(e.pointerId);e.preventDefault();});
-cap.addEventListener('pointermove',e=>{if(!drag)return;
-  const x=Math.min(95,Math.max(5,drag.cx+(e.clientX-drag.x0)/drag.w*100)),y=Math.min(97,Math.max(3,drag.cy+(e.clientY-drag.y0)/drag.h*100));
-  pos={x:+x.toFixed(1),y:+y.toFixed(1)};applyPos();});
-cap.addEventListener('pointerup',e=>{if(!drag)return;drag=null;cap.classList.remove('dragging');if(pos)post({pos});});
+const v=document.getElementById('v'),bg=document.getElementById('bg'),frame=document.getElementById('frame'),cap=document.getElementById('cap'),cam=document.getElementById('cam'),camHint=document.getElementById('camhint');
+let range={s:0,e:0},chunks=[],st=null,lastIdx=-1,lastPost=0,drag=null;
+let camera=[],capPos=[],cameraMode=false,camDrag=null,liveCam=null;   // liveCam: box being edited (percent center + zoom)
 function post(o){window.chrome&&window.chrome.webview&&window.chrome.webview.postMessage(o);}
-function load(src,s,e){range={s,e};v.src=src;bg.src=src;v.currentTime=s;bg.currentTime=s;layout();}
+function load(src,s,e){range={s,e};v.src=src;bg.src=src;v.currentTime=s;bg.currentTime=s;liveCam=null;layout();}
 function setRange(s,e){range={s,e};if(v.currentTime<s||v.currentTime>e){seek(s);}}
 function seek(t){v.currentTime=t;bg.currentTime=t;render(true);}
 function play(){if(v.currentTime>=range.e-0.05)v.currentTime=range.s;v.play();bg.play();}
 function pause(){v.pause();bg.pause();}
 function toggle(){v.paused?play():pause();}
 function setCaptions(c,s){chunks=c;st=s;lastIdx=-1;layout();render(true);}
+function setCamera(list){camera=list||[];liveCam=null;layout();render(true);}
+function setCaptionPositions(list){capPos=list||[];render(true);}
+function setCameraMode(on){cameraMode=!!on;liveCam=null;layout();render(true);}
+function activeAt(list,t){const rel=t-range.s;let best=null;for(const k of list){if(k.t<=rel+0.001)best=k;else break;}return best||(list.length?list[0]:null);}
 v.addEventListener('play',()=>post({playing:true}));
 v.addEventListener('pause',()=>post({playing:false}));
 v.addEventListener('loadedmetadata',()=>{layout();post({status:`loaded ${v.videoWidth}x${v.videoHeight}, ${v.duration.toFixed(1)}s`});});
 v.addEventListener('error',()=>{const e=v.error;const msg='error: '+(e?('code '+e.code+' '+(e.message||'')):'unknown');
-  fetch(v.currentSrc||v.src,{method:'HEAD'}).then(r=>post({status:msg+` | HEAD ${r.status} type=${r.headers.get('content-type')} ranges=${r.headers.get('accept-ranges')}`})).catch(x=>post({status:msg+' | fetch failed: '+x}));});
+  fetch(v.currentSrc||v.src,{method:'HEAD'}).then(r=>post({status:msg+` | HEAD ${r.status}`})).catch(x=>post({status:msg+' | fetch failed: '+x}));});
 window.addEventListener('resize',layout);
+
+function vertical(){return st&&st.crop!=='Original'&&!cameraMode;}
 function layout(){
   const W=window.innerWidth,H=window.innerHeight;let w,h;
-  const vertical=st&&st.crop!=='Original';
-  if(vertical){h=H;w=Math.round(H*9/16);if(w>W){w=W;h=Math.round(W*16/9);}}
-  else{const ar=(v.videoWidth&&v.videoHeight)?v.videoWidth/v.videoHeight:16/9;w=W;h=Math.round(W/ar);if(h>H){h=H;w=Math.round(H*ar);}}
+  const ar=(v.videoWidth&&v.videoHeight)?v.videoWidth/v.videoHeight:16/9;
+  if(vertical()){h=H;w=Math.round(H*9/16);if(w>W){w=W;h=Math.round(W*16/9);}}
+  else{w=W;h=Math.round(W/ar);if(h>H){h=H;w=Math.round(H*ar);}}
   frame.style.width=w+'px';frame.style.height=h+'px';
   const crop=st?st.crop:'VerticalCrop';
-  v.style.objectFit=crop==='VerticalCrop'?'cover':'contain';
-  bg.style.display=crop==='VerticalBlurredBackground'?'block':'none';
+  bg.style.display=(!cameraMode&&crop==='VerticalBlurredBackground')?'block':'none';
+  cam.style.display=cameraMode?'block':'none';camHint.style.display=cameraMode?'block':'none';
+  cap.style.display=cameraMode?'none':'block';
+  // default video fit; applyCamera() overrides for vertical crop with camera cuts
+  v.style.left='0';v.style.top='0';v.style.width='100%';v.style.height='100%';
+  v.style.objectFit=(!cameraMode&&crop==='VerticalCrop')?'cover':'contain';
   if(!st)return;
   const scale=h>=w?h/1920:(h/1080)*0.72;
   const px=st.size*scale;
@@ -212,18 +221,72 @@ function layout(){
   if(st.shadow>0)shadow.push(`${st.shadow*2*scale}px ${st.shadow*2*scale}px 0 rgba(0,0,0,.7)`);
   if(st.blur>0)shadow.push(`0 0 ${st.blur*2*scale}px ${st.outlineColor}`,`0 0 ${st.blur*4*scale}px ${st.outlineColor}`);
   cap.style.textShadow=shadow.join(',');
-  cap.style.filter='';
   const mv=st.marginV*scale;
   cap.style.top='';cap.style.bottom='';cap.style.transform='';
   if(st.align===8){cap.style.top=mv+'px';}
   else if(st.align===5){cap.style.top='50%';cap.style.transform='translateY(-50%)';}
   else{cap.style.bottom=mv+'px';}
-  applyPos();
 }
+
+// ---- camera follow (vertical crop preview) ----
+function applyCamera(t){
+  if(!vertical()||!(st&&st.crop==='VerticalCrop')||!camera.length||!v.videoWidth)return;
+  const k=activeAt(camera,t);if(!k)return;
+  const fw=frame.clientWidth,fh=frame.clientHeight,ar=v.videoWidth/v.videoHeight;
+  let zoom=Math.max(1,Math.min(4,k.zoom||1));
+  // crop height = srcH/zoom must map to frame height => displayed video height = fh*zoom
+  let dh=fh*zoom,dw=dh*ar;
+  if(dw<fw){dw=fw;dh=dw/ar;}                      // crop wider than source: fit width instead
+  const cx=k.x/100*dw,cy=k.y/100*dh;
+  let left=fw/2-cx,top=fh/2-cy;
+  left=Math.min(0,Math.max(fw-dw,left));top=Math.min(0,Math.max(fh-dh,top));
+  v.style.objectFit='fill';v.style.width=dw+'px';v.style.height=dh+'px';v.style.left=left+'px';v.style.top=top+'px';
+}
+
+// ---- camera edit mode: draggable 9:16 box over the full frame ----
+function camBox(){const k=liveCam||activeAt(camera,v.currentTime)||{x:50,y:50,zoom:1};return {x:k.x,y:k.y,zoom:Math.max(1,Math.min(4,k.zoom||1))};}
+function drawCam(){
+  if(!cameraMode)return;
+  const fw=frame.clientWidth,fh=frame.clientHeight,k=camBox();
+  let bh=fh/k.zoom,bw=bh*9/16;if(bw>fw){bw=fw;bh=bw*16/9;}
+  let cx=k.x/100*fw,cy=k.y/100*fh;
+  cx=Math.max(bw/2,Math.min(fw-bw/2,cx));cy=Math.max(bh/2,Math.min(fh-bh/2,cy));
+  cam.style.left=(cx-bw/2)+'px';cam.style.top=(cy-bh/2)+'px';cam.style.width=bw+'px';cam.style.height=bh+'px';
+  cam.querySelector('.lbl').textContent=`camera ${k.x.toFixed(0)}% / ${k.y.toFixed(0)}%  zoom ${k.zoom.toFixed(2)}x`;
+}
+function commitCam(){if(!liveCam)return;post({camera:{x:+liveCam.x.toFixed(1),y:+liveCam.y.toFixed(1),zoom:+liveCam.zoom.toFixed(2)}});}
+cam.addEventListener('pointerdown',e=>{if(!cameraMode)return;const k=camBox();camDrag={x0:e.clientX,y0:e.clientY,cx:k.x,cy:k.y};liveCam={...k};cam.setPointerCapture(e.pointerId);e.preventDefault();});
+cam.addEventListener('pointermove',e=>{if(!camDrag)return;const fw=frame.clientWidth,fh=frame.clientHeight;
+  liveCam.x=Math.max(0,Math.min(100,camDrag.cx+(e.clientX-camDrag.x0)/fw*100));liveCam.y=Math.max(0,Math.min(100,camDrag.cy+(e.clientY-camDrag.y0)/fh*100));drawCam();});
+cam.addEventListener('pointerup',e=>{if(!camDrag)return;camDrag=null;commitCam();});
+let wheelTimer=null;
+frame.addEventListener('wheel',e=>{if(!cameraMode)return;e.preventDefault();const k=camBox();liveCam={...k,zoom:Math.max(1,Math.min(4,k.zoom+(e.deltaY<0?0.1:-0.1)))};drawCam();
+  clearTimeout(wheelTimer);wheelTimer=setTimeout(commitCam,350);},{passive:false});
+
+// ---- caption drag: creates a caption position at the current time ----
+function applyCapPos(t){
+  const k=capPos.length?activeAt(capPos,t):null;
+  if(k){cap.classList.add('custom');cap.style.left=k.x+'%';cap.style.top=k.y+'%';cap.style.bottom='';cap.style.transform='translate(-50%,-50%)';}
+  else if(!drag){cap.classList.remove('custom');if(st){const fh=frame.clientHeight,fw=frame.clientWidth,scale=fh>=fw?fh/1920:(fh/1080)*0.72,mv=st.marginV*scale;
+    cap.style.left='4%';cap.style.top='';cap.style.bottom='';cap.style.transform='';
+    if(st.align===8){cap.style.top=mv+'px';}else if(st.align===5){cap.style.top='50%';cap.style.transform='translateY(-50%)';}else{cap.style.bottom=mv+'px';}}}
+}
+let dragPos=null;
+cap.addEventListener('pointerdown',e=>{
+  const r=frame.getBoundingClientRect(),c=cap.getBoundingClientRect();
+  const cx=(c.left+c.width/2-r.left)/r.width*100,cy=(c.top+c.height/2-r.top)/r.height*100;
+  drag={x0:e.clientX,y0:e.clientY,cx,cy,w:r.width,h:r.height};dragPos={x:cx,y:cy};cap.classList.add('dragging');cap.setPointerCapture(e.pointerId);e.preventDefault();});
+cap.addEventListener('pointermove',e=>{if(!drag)return;
+  dragPos={x:Math.min(95,Math.max(5,drag.cx+(e.clientX-drag.x0)/drag.w*100)),y:Math.min(97,Math.max(3,drag.cy+(e.clientY-drag.y0)/drag.h*100))};
+  cap.classList.add('custom');cap.style.left=dragPos.x+'%';cap.style.top=dragPos.y+'%';cap.style.bottom='';cap.style.transform='translate(-50%,-50%)';});
+cap.addEventListener('pointerup',e=>{if(!drag)return;drag=null;cap.classList.remove('dragging');if(dragPos)post({pos:{x:+dragPos.x.toFixed(1),y:+dragPos.y.toFixed(1)}});});
+
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;');}
 function render(force){
   const t=v.currentTime;
   if(v.paused===false&&t>=range.e){pause();v.currentTime=range.s;post({t:range.s});return;}
+  applyCamera(t);
+  if(cameraMode){drawCam();}
   let idx=-1;
   for(let i=0;i<chunks.length;i++){if(t>=chunks[i].s&&t<chunks[i].e){idx=i;break;}}
   if(idx!==lastIdx||force||(idx>=0&&st&&st.karaoke)){
@@ -238,6 +301,7 @@ function render(force){
     }
     lastIdx=idx;
   }
+  if(!drag)applyCapPos(t);
   const now=performance.now();
   if(now-lastPost>100||force){lastPost=now;post({t});}
 }

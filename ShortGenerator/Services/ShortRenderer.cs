@@ -28,13 +28,23 @@ public sealed class ShortRenderer
         {
             var (outW, outH) = OutputSize(video, options.CropMode);
             var filters = new List<string>();
+            string? cameraGraph = null;
 
             switch (options.CropMode)
             {
                 case CropMode.VerticalCrop:
-                    // Crop the center to 9:16 then scale to 1080x1920. Works for landscape and already-vertical sources.
-                    filters.Add("crop='min(iw,ih*9/16)':'min(ih,iw*16/9)'");
-                    filters.Add("scale=1080:1920:flags=lanczos");
+                    if (s.Camera.Count > 0 && video.Width > 0 && video.Height > 0)
+                    {
+                        // Camera cuts: the crop follows the detected / chosen subject, with per-cut zoom.
+                        // BuildCutsFilter already consumes [0:v]; we chain the rest after it.
+                        cameraGraph = CameraMath.BuildCutsFilter(video.Width, video.Height, s.Duration, s.Camera);
+                    }
+                    else
+                    {
+                        // Center crop to 9:16 then scale to 1080x1920. Works for landscape and already-vertical sources.
+                        filters.Add("crop='min(iw,ih*9/16)':'min(ih,iw*16/9)'");
+                        filters.Add("scale=1080:1920:flags=lanczos");
+                    }
                     break;
                 case CropMode.VerticalBlurredBackground:
                     filters.Add("split=2[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:8[bgb];" +
@@ -50,9 +60,9 @@ public sealed class ShortRenderer
             {
                 var style = CaptionStyle.Get(options.CaptionStyleId);
                 var slice = transcript.Slice(s.StartSeconds, s.EndSeconds);
+                s.MigrateLegacyCaptionPosition();
                 var ass = CaptionBuilder.BuildAss(slice, style, options.WordsPerCaption, options.FontSize, outW, outH,
-                    options.BurnTitleHook ? s.Hook : null, options.IncludeReactions,
-                    s.CaptionX is { } cx && s.CaptionY is { } cy ? (cx, cy) : null);
+                    options.BurnTitleHook ? s.Hook : null, options.IncludeReactions, s.CaptionPositions);
                 var assPath = Path.Combine(workDir, "captions.ass");
                 await File.WriteAllTextAsync(assPath, ass, new System.Text.UTF8Encoding(false), ct);
                 // Relative path avoids Windows drive-letter escaping problems inside the filter graph.
@@ -61,7 +71,10 @@ public sealed class ShortRenderer
 
             // Filters chain with ','. The blurred-background entry contains its own labelled sub-graph
             // and ends with an unlabelled overlay output, so it chains like any other filter.
-            var vf = string.Join(",", filters);
+            // With camera cuts, the graph already starts at [0:v] (split/trim/concat) and the remaining filters follow it.
+            var vf = cameraGraph is not null
+                ? cameraGraph + (filters.Count > 0 ? "," + string.Join(",", filters) : "")
+                : "[0:v]" + string.Join(",", filters);
 
             var args = new List<string>
             {
@@ -69,7 +82,7 @@ public sealed class ShortRenderer
                 "-ss", s.StartSeconds.ToString("F3", CultureInfo.InvariantCulture),
                 "-to", s.EndSeconds.ToString("F3", CultureInfo.InvariantCulture),
                 "-i", video.FilePath,
-                "-filter_complex", "[0:v]" + vf + "[vout]",
+                "-filter_complex", vf + "[vout]",
                 "-map", "[vout]", "-map", "0:a?",
                 "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", "30",
                 "-c:a", "aac", "-b:a", "160k",
