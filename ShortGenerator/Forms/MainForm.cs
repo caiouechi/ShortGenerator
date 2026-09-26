@@ -52,6 +52,7 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _clipStart = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
     private readonly NumericUpDown _clipEnd = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
     private readonly Button _renderPreview = new() { Text = "Render preview", Width = 130 };
+    private readonly Button _generateOne = new() { Text = "Generate this short", Width = 150 };
     private readonly CheckBox _cameraMode = new() { Text = "Camera mode", AutoSize = false, Appearance = Appearance.Button, TextAlign = ContentAlignment.MiddleCenter, Width = 110, Height = 28 };
     private readonly Button _autoCamera = new() { Text = "Auto camera (faces)", Width = 150 };
     private readonly Label _keyframeHint = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 7, 0, 0) };
@@ -218,7 +219,7 @@ public sealed class MainForm : Form
 
     private void ApplyTheme()
     {
-        foreach (var b in new[] { _download, _downloadTranscribe, _transcribe, _analyze, _generate, _libraryTranscribe, _gptBuild, _gptImport, _playPause }) Theme.Primary(b);
+        foreach (var b in new[] { _download, _downloadTranscribe, _transcribe, _analyze, _generate, _libraryTranscribe, _gptBuild, _gptImport, _playPause, _generateOne }) Theme.Primary(b);
         Theme.Apply(this);
         _videoInfo.Font = Theme.Mono(9.5f);
         _videoInfo.ForeColor = Theme.TextSecondary;
@@ -471,6 +472,7 @@ public sealed class MainForm : Form
         trim.Controls.Add(_clipEnd);
         trim.Controls.Add(new Label { Text = "", Width = 16 });
         trim.Controls.Add(_renderPreview);
+        trim.Controls.Add(_generateOne);
         controls.Controls.Add(trim, 0, 1);
         controls.SetColumnSpan(trim, 3);
         var camRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 2, 0, 0) };
@@ -654,6 +656,13 @@ public sealed class MainForm : Form
         _includeReactions.CheckedChanged += (_, _) => RefreshPreview();
         _crop.SelectedIndexChanged += (_, _) => RefreshPreview();
         _generate.Click += async (_, _) => await GenerateAsync();
+        _generateOne.Click += async (_, _) =>
+        {
+            if (_editing is null) { MessageBox.Show(this, "Pick a short first.", "Generate"); return; }
+            await _player.PauseAsync();
+            var s = _editing;
+            await GenerateAsync(new[] { s });
+        };
         _results.DoubleClick += (_, _) => { if (_results.SelectedItems.Count > 0 && _results.SelectedItems[0].Tag is string p && File.Exists(p)) OpenPath(p); };
     }
 
@@ -1541,10 +1550,11 @@ public sealed class MainForm : Form
         _generate.Enabled = _video is not null && _suggestions is not null && _suggestions.Shorts.Any(s => s.Selected) && _cts is null;
     }
 
-    private async Task GenerateAsync()
+    /// <param name="only">Render just these shorts (from the editor's "Generate this short"); null = all ticked shorts.</param>
+    private async Task GenerateAsync(IReadOnlyList<ShortSuggestion>? only = null)
     {
         if (_video is null || _suggestions is null) return;
-        var selected = _suggestions.Shorts.Where(s => s.Selected).ToList();
+        var selected = only?.ToList() ?? _suggestions.Shorts.Where(s => s.Selected).ToList();
         if (selected.Count == 0) return;
         var options = ReadOptions();
         if (options.AddCaptions && _transcript is null)
