@@ -1,3 +1,4 @@
+using ShortGenerator.Forms.Controls;
 using ShortGenerator.Models;
 
 namespace ShortGenerator.Forms;
@@ -37,8 +38,8 @@ public sealed class ClipTimesDialog : Form
         table.Controls.Add(_duration, 1, 3);
 
         var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Bottom, Height = 42, Padding = new Padding(8) };
-        var ok = new Button { Text = "OK", Width = 90, DialogResult = DialogResult.OK };
-        var cancel = new Button { Text = "Cancel", Width = 90, DialogResult = DialogResult.Cancel };
+        var ok = new FancyButton { Text = "OK", Width = 90, DialogResult = DialogResult.OK };
+        var cancel = new FancyButton { Text = "Cancel", Width = 90, DialogResult = DialogResult.Cancel };
         buttons.Controls.Add(ok); buttons.Controls.Add(cancel);
         AcceptButton = ok; CancelButton = cancel;
         Controls.Add(table); Controls.Add(buttons);

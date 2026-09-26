@@ -1,13 +1,13 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Reflection;
+using ShortGenerator.Forms.Controls;
 
 namespace ShortGenerator.Forms;
 
 /// <summary>
-/// Galiluna brand foundation (v1.1 guidelines) translated to WinForms:
+/// Galiluna brand foundation (v1.1 guidelines) in its dark theme, translated to WinForms:
 /// navy #0B1028, cosmic blue #295BFF, lunar purple #6A38FF, nebula #A855F7.
-/// Light theme surfaces for the work area, dark navy header with the light wordmark.
 /// </summary>
 public static class Theme
 {
@@ -15,41 +15,54 @@ public static class Theme
     public static readonly Color Navy = ColorTranslator.FromHtml("#0B1028");
     public static readonly Color CosmicBlue = ColorTranslator.FromHtml("#295BFF");
     public static readonly Color Purple = ColorTranslator.FromHtml("#6A38FF");
-    public static readonly Color PurpleHover = ColorTranslator.FromHtml("#5A2BE6");
+    public static readonly Color PurpleHover = ColorTranslator.FromHtml("#7B4DFF");
     public static readonly Color PurpleDeep = ColorTranslator.FromHtml("#4523C7");
     public static readonly Color Nebula = ColorTranslator.FromHtml("#A855F7");
+    public static readonly Color Lavender = ColorTranslator.FromHtml("#C4B5FD");
 
-    // dark surfaces (header)
+    // light surfaces (the app theme: this is a product for the public, so the work area is light)
+    public static readonly Color Bg = ColorTranslator.FromHtml("#F6F7FC");
+    public static readonly Color Elevated = Color.White;
+    public static readonly Color Surface = Color.White;
+    public static readonly Color SurfaceStrong = ColorTranslator.FromHtml("#EEF0F8");
+    public static readonly Color SurfaceSoft = ColorTranslator.FromHtml("#F4F1FF");
+    public static readonly Color Border = ColorTranslator.FromHtml("#E7EAF5");
+    public static readonly Color BorderStrong = ColorTranslator.FromHtml("#D8DDED");
+    public static readonly Color BorderHover = ColorTranslator.FromHtml("#C9BCFF");
+    public static readonly Color SelectionBg = ColorTranslator.FromHtml("#E9E3FF");
+    public static readonly Color SelectionFg = ColorTranslator.FromHtml("#0B1028");
+
+    // text
+    public static readonly Color Text = ColorTranslator.FromHtml("#0B1028");
+    public static readonly Color TextSecondary = ColorTranslator.FromHtml("#3E4668");
+    public static readonly Color TextMuted = ColorTranslator.FromHtml("#737B98");
+    public static readonly Color Heading = ColorTranslator.FromHtml("#2E3A6E");
+    public static readonly Color Link = ColorTranslator.FromHtml("#295BFF");
+
+    // status
+    public static readonly Color Success = ColorTranslator.FromHtml("#16794F");
+    public static readonly Color Warning = ColorTranslator.FromHtml("#A66A00");
+    public static readonly Color Danger = ColorTranslator.FromHtml("#C5283D");
+
+    // the dark side navigation keeps the brand's night palette
     public static readonly Color DarkBg = ColorTranslator.FromHtml("#131834");
     public static readonly Color DarkElevated = ColorTranslator.FromHtml("#191F40");
     public static readonly Color DarkSurfaceStrong = ColorTranslator.FromHtml("#272F60");
     public static readonly Color DarkTextSecondary = ColorTranslator.FromHtml("#C7CBE0");
     public static readonly Color DarkTextMuted = ColorTranslator.FromHtml("#9298B3");
 
-    // light surfaces (work area)
-    public static readonly Color Bg = ColorTranslator.FromHtml("#FAFBFF");
-    public static readonly Color Elevated = Color.White;
-    public static readonly Color SurfaceSoft = ColorTranslator.FromHtml("#F4F1FF");
-    public static readonly Color Text = Navy;
-    public static readonly Color TextSecondary = ColorTranslator.FromHtml("#3E4668");
-    public static readonly Color TextMuted = ColorTranslator.FromHtml("#737B98");
-    public static readonly Color Heading = ColorTranslator.FromHtml("#2E3A6E");
-    public static readonly Color Border = ColorTranslator.FromHtml("#E7EAF5");
-    public static readonly Color BorderStrong = ColorTranslator.FromHtml("#D8DDED");
-    public static readonly Color BorderHover = ColorTranslator.FromHtml("#C9BCFF");
-    public static readonly Color Success = ColorTranslator.FromHtml("#16794F");
-    public static readonly Color Danger = ColorTranslator.FromHtml("#C5283D");
-
-    private static string? _bodyFamily;
-    private static string? _headingFamily;
+    private static string? _bodyFamily, _headingFamily, _iconFamily, _monoFamily;
 
     /// <summary>Inter for body, Poppins for headings when installed; Segoe UI otherwise.</summary>
-    public static string BodyFamily => _bodyFamily ??= FirstInstalled("Inter", "Segoe UI");
-    public static string HeadingFamily => _headingFamily ??= FirstInstalled("Poppins", "Inter", "Segoe UI");
+    public static string BodyFamily => _bodyFamily ??= FirstInstalled("Inter", "Segoe UI Variable Text", "Segoe UI");
+    public static string HeadingFamily => _headingFamily ??= FirstInstalled("Poppins", "Inter", "Segoe UI Variable Display", "Segoe UI");
+    public static string IconFamily => _iconFamily ??= FirstInstalled("Segoe Fluent Icons", "Segoe MDL2 Assets", "Segoe UI Symbol");
+    public static string MonoFamily => _monoFamily ??= FirstInstalled("Cascadia Mono", "Consolas");
 
     public static Font Body(float size = 9.5f, FontStyle style = FontStyle.Regular) => new(BodyFamily, size, style);
     public static Font HeadingFont(float size = 12f, FontStyle style = FontStyle.Bold) => new(HeadingFamily, size, style);
-    public static Font Mono(float size = 8.5f) => new(FirstInstalled("Cascadia Mono", "Consolas"), size);
+    public static Font IconFont(float size = 11f) => new(IconFamily, size, FontStyle.Regular);
+    public static Font Mono(float size = 8.5f) => new(MonoFamily, size);
 
     private static string FirstInstalled(params string[] families)
     {
@@ -60,17 +73,25 @@ public static class Theme
 
     // ------------------------------------------------------------ assets
 
+    private static readonly Dictionary<string, Image?> ImageCache = new(StringComparer.OrdinalIgnoreCase);
+
     public static Image? LoadImage(string name)
     {
+        if (ImageCache.TryGetValue(name, out var cached)) return cached;
+        Image? img = null;
         try
         {
             var asm = Assembly.GetExecutingAssembly();
             var res = asm.GetManifestResourceNames().FirstOrDefault(r => r.EndsWith(name, StringComparison.OrdinalIgnoreCase));
-            if (res is null) return null;
-            using var s = asm.GetManifestResourceStream(res);
-            return s is null ? null : Image.FromStream(s);
+            if (res is not null)
+            {
+                using var s = asm.GetManifestResourceStream(res);
+                if (s is not null) img = Image.FromStream(s);
+            }
         }
-        catch { return null; }
+        catch { img = null; }
+        ImageCache[name] = img;
+        return img;
     }
 
     public static Icon? AppIcon
@@ -91,50 +112,47 @@ public static class Theme
 
     // ------------------------------------------------------------ styling helpers
 
-    public static void Primary(Button b)
+    /// <summary>Wraps a single-line TextBox in a rounded, bordered field so it matches the buttons.</summary>
+    public static Panel WrapInput(TextBox tb, int height = 34)
     {
-        b.FlatStyle = FlatStyle.Flat;
-        b.FlatAppearance.BorderSize = 0;
-        b.FlatAppearance.MouseOverBackColor = PurpleHover;
-        b.FlatAppearance.MouseDownBackColor = PurpleDeep;
-        b.BackColor = Purple;
-        b.ForeColor = Color.White;
-        b.Font = new Font(HeadingFamily, 9.5f, FontStyle.Bold);
-        b.Cursor = Cursors.Hand;
-        b.Tag = "styled"; // keep Apply() from also giving it the secondary look
-        b.EnabledChanged += (_, _) =>
-        {
-            b.BackColor = b.Enabled ? Purple : ColorTranslator.FromHtml("#C4B5FD");
-            b.ForeColor = Color.White; // always readable on the purple fill
-        };
-        if (!b.Enabled) b.BackColor = ColorTranslator.FromHtml("#C4B5FD");
-        // WinForms paints disabled button text gray regardless of ForeColor; overdraw it in white.
-        b.Paint += (_, e) =>
-        {
-            if (b.Enabled) return;
-            using var fill = new SolidBrush(ColorTranslator.FromHtml("#C4B5FD"));
-            e.Graphics.FillRectangle(fill, b.ClientRectangle);
-            TextRenderer.DrawText(e.Graphics, b.Text, b.Font, b.ClientRectangle, Color.White,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-        };
+        var host = new RoundedField { Height = height, Padding = new Padding(12, 0, 12, 0) };
+        tb.BorderStyle = BorderStyle.None;
+        tb.BackColor = Elevated;
+        tb.ForeColor = Text;
+        tb.Dock = DockStyle.None;
+        tb.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        host.Controls.Add(tb);
+        void Place() { tb.Left = host.Padding.Left; tb.Width = host.Width - host.Padding.Horizontal; tb.Top = (host.Height - tb.Height) / 2; }
+        host.Resize += (_, _) => Place();
+        Place();
+        return host;
     }
 
-    public static void Secondary(Button b)
+    private sealed class RoundedField : Panel
     {
-        b.FlatStyle = FlatStyle.Flat;
-        b.FlatAppearance.BorderSize = 1;
-        b.FlatAppearance.BorderColor = BorderStrong;
-        b.FlatAppearance.MouseOverBackColor = SurfaceSoft;
-        b.FlatAppearance.MouseDownBackColor = ColorTranslator.FromHtml("#E9E3FF");
-        b.BackColor = Elevated;
-        b.ForeColor = Heading;
-        b.Font = new Font(HeadingFamily, 9f, FontStyle.Bold);
-        b.Cursor = Cursors.Hand;
-        b.EnabledChanged += (_, _) => b.ForeColor = b.Enabled ? Heading : TextMuted;
-        if (!b.Enabled) b.ForeColor = TextMuted;
+        public RoundedField()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            BackColor = Elevated;
+        }
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var bg = new SolidBrush(Parent?.BackColor ?? Bg)) e.Graphics.FillRectangle(bg, ClientRectangle);
+            using var path = FancyButton.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 10);
+            using var fill = new SolidBrush(Elevated);
+            e.Graphics.FillPath(fill, path);
+            bool focused = Controls.Count > 0 && Controls[0].Focused;
+            using var pen = new Pen(focused ? Purple : BorderStrong, focused ? 1.5f : 1f);
+            e.Graphics.DrawPath(pen, path);
+        }
     }
 
-    /// <summary>Applies light-theme colors and fonts to every control in the tree.</summary>
+    public static void Primary(Button b) { if (b is FancyButton f) f.Kind = ButtonKind.Primary; }
+    public static void Secondary(Button b) { if (b is FancyButton f) f.Kind = ButtonKind.Ghost; }
+    public static void Subtle(Button b) { if (b is FancyButton f) f.Kind = ButtonKind.Subtle; }
+
+    /// <summary>Applies the dark theme to every control in the tree.</summary>
     public static void Apply(Control root)
     {
         if (root is Form f)
@@ -151,124 +169,182 @@ public static class Theme
     {
         switch (c)
         {
-            case BrandHeader:
-            case CaptionPreview:
-            case ClipPlayer:
-                return; // self-styled
-            case DataGridView grid:
-                grid.BackgroundColor = Elevated;
-                grid.GridColor = Border;
-                grid.EnableHeadersVisualStyles = false;
-                grid.ColumnHeadersDefaultCellStyle.BackColor = SurfaceSoft;
-                grid.ColumnHeadersDefaultCellStyle.ForeColor = Heading;
-                grid.ColumnHeadersDefaultCellStyle.Font = new Font(HeadingFamily, 9f, FontStyle.Bold);
-                grid.DefaultCellStyle.ForeColor = Text;
-                grid.DefaultCellStyle.SelectionBackColor = ColorTranslator.FromHtml("#E9E3FF");
-                grid.DefaultCellStyle.SelectionForeColor = Text;
-                return;
-            case Button b when b.Tag is not "styled":
-                Secondary(b);
-                b.Tag = "styled";
+            case BrandHeader or CaptionPreview or ClipPlayer or SideNav or BrandProgressBar or FancyButton or Card:
+                break;
+            case Button b:
+                // plain buttons that were not converted: give them the ghost look
+                b.FlatStyle = FlatStyle.Flat;
+                b.FlatAppearance.BorderColor = BorderStrong;
+                b.BackColor = Elevated;
+                b.ForeColor = TextSecondary;
                 break;
             case TextBox tb:
+                if (tb.Parent is RoundedField) { tb.ForeColor = Text; break; } // already framed by the field
                 tb.BorderStyle = BorderStyle.FixedSingle;
-                tb.BackColor = tb.ReadOnly ? SurfaceSoft : Elevated;
+                tb.BackColor = tb.ReadOnly ? SurfaceSoft : Surface;
                 tb.ForeColor = Text;
                 break;
             case RichTextBox rtb:
                 rtb.BackColor = Elevated;
                 rtb.ForeColor = TextSecondary;
+                rtb.BorderStyle = BorderStyle.None;
                 break;
             case ListView lv:
-                lv.BackColor = Elevated;
-                lv.ForeColor = Text;
-                lv.BorderStyle = BorderStyle.FixedSingle;
+                StyleListView(lv);
                 break;
             case ComboBox cb:
                 cb.FlatStyle = FlatStyle.Flat;
-                cb.BackColor = Elevated;
+                cb.BackColor = Surface;
                 cb.ForeColor = Text;
                 break;
             case NumericUpDown nud:
                 nud.BorderStyle = BorderStyle.FixedSingle;
-                nud.BackColor = Elevated;
+                nud.BackColor = Surface;
                 nud.ForeColor = Text;
                 break;
             case CheckBox chk:
                 chk.ForeColor = TextSecondary;
+                chk.FlatStyle = FlatStyle.Flat;
                 break;
+            case TrackBar tb:
+                tb.BackColor = Elevated;
+                break;
+            case DataGridView grid:
+                grid.BackgroundColor = Elevated;
+                grid.GridColor = Border;
+                grid.BorderStyle = BorderStyle.None;
+                grid.EnableHeadersVisualStyles = false;
+                grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
+                grid.ColumnHeadersDefaultCellStyle.BackColor = SurfaceStrong;
+                grid.ColumnHeadersDefaultCellStyle.ForeColor = TextSecondary;
+                grid.ColumnHeadersDefaultCellStyle.Font = new Font(HeadingFamily, 9f, FontStyle.Bold);
+                grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = SurfaceStrong;
+                grid.DefaultCellStyle.BackColor = Elevated;
+                grid.DefaultCellStyle.ForeColor = Text;
+                grid.DefaultCellStyle.SelectionBackColor = SelectionBg;
+                grid.DefaultCellStyle.SelectionForeColor = SelectionFg;
+                grid.RowsDefaultCellStyle.BackColor = Elevated;
+                grid.AlternatingRowsDefaultCellStyle.BackColor = SurfaceSoft;
+                return;
             case Label lbl:
                 if (lbl.ForeColor == SystemColors.ControlText || lbl.ForeColor == Color.Empty) lbl.ForeColor = TextSecondary;
                 else if (lbl.ForeColor == Color.DimGray) lbl.ForeColor = TextMuted;
                 break;
             case TabControl tc:
-                StyleTabs(tc);
+                HideTabStrip(tc);
                 break;
             case TabPage tp:
-                tp.BackColor = Elevated;
+                tp.BackColor = Bg;
                 tp.UseVisualStyleBackColor = false;
+                tp.Padding = Padding.Empty;
                 break;
             case SplitContainer sc:
-                sc.BackColor = Border;
-                sc.Panel1.BackColor = Elevated;
-                sc.Panel2.BackColor = Elevated;
+                sc.BackColor = Bg;
+                sc.Panel1.BackColor = Bg;
+                sc.Panel2.BackColor = Bg;
+                sc.SplitterWidth = 8;
                 break;
             case Panel or TableLayoutPanel or FlowLayoutPanel:
-                if (c.BackColor == SystemColors.Control || c.BackColor == Color.Transparent) c.BackColor = c.Parent is TabPage ? Elevated : Bg;
+                if (c.BackColor == SystemColors.Control || c.BackColor == Color.Transparent || c.BackColor == Color.White || c.BackColor == ColorTranslator.FromHtml("#FAFBFF"))
+                    c.BackColor = c.Parent is Card ? c.Parent.BackColor : Bg;
                 break;
         }
         foreach (Control child in c.Controls) ApplyRecursive(child);
     }
 
-    private static void StyleTabs(TabControl tc)
+    /// <summary>The tab control is only a page host: the SideNav drives it, so the strip is hidden.</summary>
+    private static void HideTabStrip(TabControl tc)
     {
-        tc.DrawMode = TabDrawMode.OwnerDrawFixed;
+        tc.Appearance = TabAppearance.FlatButtons;
+        tc.ItemSize = new Size(0, 1);
         tc.SizeMode = TabSizeMode.Fixed;
-        tc.ItemSize = new Size(190, 34);
-        tc.Padding = new Point(12, 4);
-        tc.Font = new Font(HeadingFamily, 9.5f, FontStyle.Bold);
-        tc.DrawItem += (s, e) =>
+        tc.Multiline = false;
+        tc.BackColor = Bg;
+    }
+
+    /// <summary>Dark list view with owner-drawn headers (system headers stay light otherwise).</summary>
+    public static void StyleListView(ListView lv)
+    {
+        lv.BackColor = Elevated;
+        lv.ForeColor = Text;
+        lv.BorderStyle = BorderStyle.None;
+        lv.OwnerDraw = true;
+        lv.GridLines = false;
+        lv.DrawColumnHeader -= LvHeader;
+        lv.DrawColumnHeader += LvHeader;
+        lv.DrawItem -= LvItem;
+        lv.DrawItem += LvItem;
+        lv.DrawSubItem -= LvSubItem;
+        lv.DrawSubItem += LvSubItem;
+        lv.Font = Body(9f);
+    }
+
+    private static void LvHeader(object? sender, DrawListViewColumnHeaderEventArgs e)
+    {
+        using var bg = new SolidBrush(SurfaceStrong);
+        e.Graphics.FillRectangle(bg, e.Bounds);
+        using var line = new Pen(Border);
+        e.Graphics.DrawLine(line, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
+        using var f = new Font(HeadingFamily, 8.5f, FontStyle.Bold);
+        var r = e.Bounds; r.Inflate(-6, 0);
+        TextRenderer.DrawText(e.Graphics, e.Header?.Text ?? "", f, r, TextSecondary, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+    }
+
+    private static void LvItem(object? sender, DrawListViewItemEventArgs e)
+    {
+        if (sender is ListView { View: View.Details }) { e.DrawDefault = false; return; } // handled per sub item
+        e.DrawDefault = true;
+    }
+
+    private static void LvSubItem(object? sender, DrawListViewSubItemEventArgs e)
+    {
+        if (sender is not ListView lv || e.Item is null || e.SubItem is null) return;
+        bool selected = e.Item.Selected;
+        var rowBg = selected ? SelectionBg : (e.ItemIndex % 2 == 1 ? ColorTranslator.FromHtml("#FAFAFD") : Elevated);
+        using (var bg = new SolidBrush(rowBg)) e.Graphics.FillRectangle(bg, e.Bounds);
+
+        int textX = e.Bounds.X + 6;
+        if (e.ColumnIndex == 0 && lv.CheckBoxes)
         {
-            var page = tc.TabPages[e.Index];
-            bool selected = tc.SelectedIndex == e.Index;
-            var rect = e.Bounds;
-            using var bg = new SolidBrush(selected ? Elevated : Bg);
-            e.Graphics.FillRectangle(bg, rect);
-            if (selected)
+            var box = new Rectangle(e.Bounds.X + 6, e.Bounds.Y + (e.Bounds.Height - 14) / 2, 14, 14);
+            using var path = FancyButton.Rounded(box, 3);
+            if (e.Item.Checked)
             {
-                using var accent = new LinearGradientBrush(new Rectangle(rect.X, rect.Y, rect.Width, 3), CosmicBlue, Nebula, 0f);
-                e.Graphics.FillRectangle(accent, rect.X, rect.Y, rect.Width, 3);
+                using var fill = new LinearGradientBrush(box, CosmicBlue, Nebula, 45f);
+                e.Graphics.FillPath(fill, path);
+                using var cf = IconFont(8f);
+                TextRenderer.DrawText(e.Graphics, "", cf, box, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             }
-            TextRenderer.DrawText(e.Graphics, page.Text, tc.Font, rect, selected ? Purple : TextMuted,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-        };
-        // Paint the strip background behind the tabs.
-        tc.Paint += (s, e) =>
-        {
-            using var b = new SolidBrush(Bg);
-            e.Graphics.FillRectangle(b, 0, 0, tc.Width, tc.ItemSize.Height + 2);
-        };
+            else
+            {
+                using var pen = new Pen(BorderHover);
+                e.Graphics.DrawPath(pen, path);
+            }
+            textX = box.Right + 6;
+        }
+        var fore = e.SubItem.ForeColor == SystemColors.WindowText || e.SubItem.ForeColor == Color.Empty || e.SubItem.ForeColor == Color.White ? Text : e.SubItem.ForeColor;
+        var font = e.SubItem.Font ?? lv.Font;
+        var tr = new Rectangle(textX, e.Bounds.Y, e.Bounds.Right - textX - 4, e.Bounds.Height);
+        TextRenderer.DrawText(e.Graphics, e.SubItem.Text, font, tr, fore, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
 }
 
-/// <summary>Dark navy header with the Galiluna light wordmark and the app name.</summary>
+/// <summary>Slim brand header: nebula artwork, page title and subtitle. Sits above the content area.</summary>
 public sealed class BrandHeader : Control
 {
-    private readonly Image? _logo = Theme.LoadImage("galiluna-logo.png");
-    private readonly Image? _mark = Theme.LoadImage("galiluna-icon.png");
-
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
-    public string Subtitle { get; set; } = "Short Generator";
+    public string Subtitle { get; set; } = "Video";
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
-    public string Tagline { get; set; } = "Download - transcribe - find the viral moments - cut captioned shorts";
+    public string Tagline { get; set; } = "";
 
     public BrandHeader()
     {
-        Height = 72;
+        Height = 74;
         Dock = DockStyle.Top;
-        DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
     }
+
+    public void Set(string title, string tagline) { Subtitle = title; Tagline = tagline; Invalidate(); }
 
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -277,40 +353,25 @@ public sealed class BrandHeader : Control
         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-        // Light header: the wordmark reads best on bright surfaces.
-        using (var bg = new LinearGradientBrush(ClientRectangle, Color.White, Theme.SurfaceSoft, 0f))
-            g.FillRectangle(bg, ClientRectangle);
-        // Brand gradient hairline at the bottom, like the web navbar.
-        using (var line = new LinearGradientBrush(new Rectangle(0, Height - 3, Width, 3), Theme.CosmicBlue, Theme.Nebula, 0f))
-            g.FillRectangle(line, 0, Height - 3, Width, 3);
-
-        int x = 16;
-        if (_mark is not null)
+        // light header with a faint aurora tint on the left, echoing the sidebar artwork
+        using (var bg = new SolidBrush(Theme.Elevated)) g.FillRectangle(bg, ClientRectangle);
+        using (var tint = new LinearGradientBrush(new Rectangle(0, 0, Math.Max(1, Width), Height), Color.FromArgb(60, Theme.Purple), Color.FromArgb(0, Theme.CosmicBlue), 0f))
         {
-            int size = Height - 20;
-            g.DrawImage(_mark, new Rectangle(x, 10, size, size));
-            x += size + 8;
+            var blend = new ColorBlend(3) { Colors = new[] { Color.FromArgb(60, Theme.Purple), Color.FromArgb(18, Theme.CosmicBlue), Color.FromArgb(0, Theme.CosmicBlue) }, Positions = new[] { 0f, 0.55f, 1f } };
+            tint.InterpolationColors = blend;
+            g.FillRectangle(tint, ClientRectangle);
         }
-        if (_logo is not null)
-        {
-            int h = 30;
-            int w = (int)(_logo.Width * (h / (double)_logo.Height));
-            g.DrawImage(_logo, new Rectangle(x, (Height - h) / 2 - 2, w, h));
-            x += w + 14;
-        }
+        using (var line = new LinearGradientBrush(new Rectangle(0, Height - 2, Math.Max(1, Width), 2), Color.FromArgb(200, Theme.CosmicBlue), Color.FromArgb(0, Theme.Nebula), 0f))
+            g.FillRectangle(line, 0, Height - 2, Width, 2);
 
-        using var sep = new Pen(Theme.BorderStrong, 1);
-        g.DrawLine(sep, x, 18, x, Height - 18);
-        x += 14;
-
-        using var titleFont = Theme.HeadingFont(13f);
-        using var tagFont = Theme.Body(8.5f);
-        TextRenderer.DrawText(g, Subtitle, titleFont, new Point(x, 14), Theme.Heading);
-        TextRenderer.DrawText(g, Tagline, tagFont, new Point(x, 40), Theme.TextMuted);
+        using var titleFont = Theme.HeadingFont(15f);
+        using var tagFont = Theme.Body(9f);
+        TextRenderer.DrawText(g, Subtitle, titleFont, new Point(24, 16), Theme.Heading, TextFormatFlags.NoPrefix);
+        TextRenderer.DrawText(g, Tagline, tagFont, new Rectangle(24, 44, Width - 48, 20), Theme.TextMuted, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
     }
 }
 
-/// <summary>Flat progress bar with the Galiluna gradient.</summary>
+/// <summary>Flat progress bar with the Galiluna gradient (and an indeterminate shimmer when Value is unknown).</summary>
 public sealed class BrandProgressBar : Control
 {
     private int _value;
@@ -325,7 +386,6 @@ public sealed class BrandProgressBar : Control
     public BrandProgressBar()
     {
         Height = 10;
-        DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
     }
 
@@ -333,30 +393,17 @@ public sealed class BrandProgressBar : Control
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var track = new Rectangle(0, (Height - 8) / 2, Width - 1, 8);
-        using var trackBrush = new SolidBrush(Theme.SurfaceSoft);
-        using var trackPen = new Pen(Theme.Border);
-        using var trackPath = Rounded(track, 4);
+        using (var bg = new SolidBrush(Parent?.BackColor ?? Theme.Bg)) g.FillRectangle(bg, ClientRectangle);
+        var track = new Rectangle(0, (Height - 6) / 2, Width - 1, 6);
+        using var trackBrush = new SolidBrush(Theme.SurfaceStrong);
+        using var trackPath = FancyButton.Rounded(track, 3);
         g.FillPath(trackBrush, trackPath);
-        g.DrawPath(trackPen, trackPath);
 
         int w = (int)(track.Width * _value / 100.0);
-        if (w < 8) return;
+        if (w < 6) return;
         var fill = new Rectangle(track.X, track.Y, w, track.Height);
         using var fillBrush = new LinearGradientBrush(new Rectangle(0, 0, Math.Max(1, Width), 1), Theme.CosmicBlue, Theme.Nebula, 0f);
-        using var fillPath = Rounded(fill, 4);
+        using var fillPath = FancyButton.Rounded(fill, 3);
         g.FillPath(fillBrush, fillPath);
-    }
-
-    private static GraphicsPath Rounded(Rectangle r, int radius)
-    {
-        var p = new GraphicsPath();
-        int d = radius * 2;
-        p.AddArc(r.X, r.Y, d, d, 180, 90);
-        p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
-        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
-        p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
-        p.CloseFigure();
-        return p;
     }
 }

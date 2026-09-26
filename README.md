@@ -17,7 +17,6 @@ Windows desktop app (.NET 9, WinForms) that turns a long video into captioned sh
 
 **Camera.** For the vertical crop the camera follows faces: frames are sampled and analysed with the face detector built into Windows (`Windows.Media.FaceAnalysis`, no model download) and turned into a few stable camera cuts (position + zoom) per short. Runs automatically on generation when a short has no camera cuts ("Auto camera" on the Generate tab), or on demand in the editor. "Camera mode" in the editor shows the full frame with a draggable 9:16 box (scroll to zoom) to add manual cuts at the current time. Rendering uses an ffmpeg trim/concat graph so each cut can have its own zoom.
 
-**Stickers.** Transparent PNG stickers live in `%AppData%\ShortGenerator\stickers` (a starter set generated with Higgsfield ships with the app: laugh, big-laugh, love, heart-eyes, inspiring, anger, fire, shock, applause, cry, money, thinking; drop your own PNGs in the folder). In the editor, double-click a sticker to place it at the current time, drag it on the video, scroll to resize, pick an animation (pop, float, shake, none) and duration. "Auto from reactions" places matching stickers on tagged lines (`[laughs]` -> laugh, `[big laugh]` -> big-laugh, `[shouting]` -> anger, `[applause]` -> applause...). Rendering composites them with fade in/out and the position animation.
 
 ## Requirements
 
@@ -51,8 +50,6 @@ dotnet run --project ShortGenerator/ShortGenerator.csproj
 | `Services/TranscriptImporter.cs` | Loads .srt / .vtt / JSON transcripts |
 | `Services/FaceFramer.cs` | Face detection -> camera cuts per short |
 | `Services/CameraMath.cs` | Crop geometry and the ffmpeg graph for camera cuts |
-| `Services/StickerLibrary.cs` | Sticker folder, reaction -> sticker mapping, auto placement |
-| `Assets/stickers/` | Starter sticker set (transparent PNGs) |
 | `Services/VideoDownloader.cs` | yt-dlp wrapper (YoutubeDLSharp), MP4 preferred |
 | `Services/Transcriber.cs` | Whisper.net transcription with segment timestamps |
 | `Services/ShortSuggester.cs` | Claude call with structured JSON output |
@@ -60,6 +57,10 @@ dotnet run --project ShortGenerator/ShortGenerator.csproj
 | `Services/CaptionBuilder.cs` | Transcript -> ASS subtitles per caption style |
 | `Services/ShortRenderer.cs` | ffmpeg cut, reframe and caption burn-in |
 | `Models/CaptionStyle.cs` | The caption style catalogue |
+
+## Design
+
+Light work area for a public product (Galiluna light palette: #F6F7FC background, white cards, navy text) with the brand's dark nebula side navigation showing the six steps and their state. Owner-drawn gradient buttons (`FancyButton`), rounded input fields, a tinted page title band, empty-state illustrations and the sidebar artwork were generated with Higgsfield. See `Forms/Theme.cs` and `Forms/Controls/`.
 
 ## Caption styles
 

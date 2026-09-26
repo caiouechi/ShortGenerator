@@ -1,3 +1,4 @@
+using ShortGenerator.Forms.Controls;
 using ShortGenerator.Services;
 
 namespace ShortGenerator.Forms;
@@ -16,8 +17,8 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _minSec = new() { Minimum = 5, Maximum = 180, Width = 80 };
     private readonly NumericUpDown _maxSec = new() { Minimum = 10, Maximum = 180, Width = 80 };
     private readonly Label _toolStatus = new() { AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(520, 0) };
-    private readonly Button _downloadTools = new() { Text = "Download missing tools", AutoSize = true };
-    private readonly Button _updateYtDlp = new() { Text = "Update yt-dlp", AutoSize = true };
+    private readonly FancyButton _downloadTools = new() { Text = "Download missing tools", AutoSize = true };
+    private readonly FancyButton _updateYtDlp = new() { Text = "Update yt-dlp", AutoSize = true };
 
     public SettingsForm(AppSettings settings)
     {
@@ -45,7 +46,7 @@ public sealed class SettingsForm : Form
         Control WithBrowse(TextBox tb)
         {
             var p = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-            var b = new Button { Text = "...", Width = 32 };
+            var b = new FancyButton { Text = "...", Width = 36 };
             b.Click += (_, _) =>
             {
                 using var d = new FolderBrowserDialog { SelectedPath = Directory.Exists(tb.Text) ? tb.Text : "" };
@@ -74,8 +75,8 @@ public sealed class SettingsForm : Form
         Add("", _toolStatus);
 
         var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Bottom, Height = 40 };
-        var ok = new Button { Text = "Save", Width = 90, DialogResult = DialogResult.OK };
-        var cancel = new Button { Text = "Cancel", Width = 90, DialogResult = DialogResult.Cancel };
+        var ok = new FancyButton { Text = "Save", Width = 90, DialogResult = DialogResult.OK };
+        var cancel = new FancyButton { Text = "Cancel", Width = 90, DialogResult = DialogResult.Cancel };
         buttons.Controls.Add(ok); buttons.Controls.Add(cancel);
         AcceptButton = ok; CancelButton = cancel;
 

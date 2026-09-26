@@ -19,12 +19,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Starter sticker set (generated with Higgsfield), copied next to the exe and seeded into %AppData% on first run. -->
-    <None Include="Assets/stickers/*.png" CopyToOutputDirectory="PreserveNewest" Link="stickers/%(Filename)%(Extension)" />
-  </ItemGroup>
-
-  <ItemGroup>
     <EmbeddedResource Include="Assets/galiluna-logo.png" />
+    <EmbeddedResource Include="Assets/galiluna-logo-light.png" />
+    <EmbeddedResource Include="Assets/art/*.png" />
     <EmbeddedResource Include="Assets/galiluna-icon.png" />
     <EmbeddedResource Include="Assets/app.ico" />
   </ItemGroup>

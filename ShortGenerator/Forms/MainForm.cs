@@ -1,3 +1,4 @@
+using ShortGenerator.Forms.Controls;
 using System.Diagnostics;
 using System.Text.Json;
 using ShortGenerator.Models;
@@ -22,17 +23,17 @@ public sealed class MainForm : Form
 
     // ---- top bar ----
     private readonly TextBox _url = new() { PlaceholderText = "Paste a YouTube / Instagram / TikTok link (video, short or reel)...", Anchor = AnchorStyles.Left | AnchorStyles.Right };
-    private readonly Button _download = new() { Text = "Download", Width = 100 };
-    private readonly Button _downloadTranscribe = new() { Text = "Download + Transcribe", Width = 170 };
-    private readonly Button _openLocal = new() { Text = "Open local file...", Width = 130 };
+    private readonly FancyButton _download = new() { Text = "Download", Width = 100 };
+    private readonly FancyButton _downloadTranscribe = new() { Text = "Download + Transcribe", Width = 170 };
+    private readonly FancyButton _openLocal = new() { Text = "Open local file...", Width = 130 };
 
     // library of downloaded videos (Video tab)
     private readonly ListView _library = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true, HideSelection = false, MultiSelect = false };
-    private readonly Button _libraryRefresh = new() { Text = "Refresh", Width = 90 };
-    private readonly Button _libraryLoad = new() { Text = "Load selected", Width = 120, Enabled = false };
-    private readonly Button _libraryTranscribe = new() { Text = "Transcribe selected", Width = 150, Enabled = false };
-    private readonly Button _libraryOpenFolder = new() { Text = "Open downloads folder", Width = 160 };
-    private readonly Button _settingsBtn = new() { Text = "Settings", Width = 90 };
+    private readonly FancyButton _libraryRefresh = new() { Text = "Refresh", Width = 90 };
+    private readonly FancyButton _libraryLoad = new() { Text = "Load selected", Width = 120, Enabled = false };
+    private readonly FancyButton _libraryTranscribe = new() { Text = "Transcribe selected", Width = 170, Enabled = false };
+    private readonly FancyButton _libraryOpenFolder = new() { Text = "Open downloads folder", Width = 160 };
+    private readonly FancyButton _settingsBtn = new() { Text = "Settings", Width = 90 };
 
     // ---- tabs ----
     private readonly TabControl _tabs = new() { Dock = DockStyle.Fill };
@@ -46,26 +47,19 @@ public sealed class MainForm : Form
     // editor tab
     private readonly ListView _editClips = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
     private readonly ClipPlayer _player = new() { Dock = DockStyle.Fill };
-    private readonly Button _playPause = new() { Text = "Play", Width = 80 };
+    private readonly FancyButton _playPause = new() { Text = "Play", Width = 80 };
     private readonly TrackBar _timeline = new() { Minimum = 0, Maximum = 1000, TickStyle = TickStyle.None, Dock = DockStyle.Fill, AutoSize = false, Height = 30 };
     private readonly Label _timeLabel = new() { AutoSize = false, Width = 130, TextAlign = ContentAlignment.MiddleLeft };
     private readonly NumericUpDown _clipStart = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
     private readonly NumericUpDown _clipEnd = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
-    private readonly Button _renderPreview = new() { Text = "Render preview", Width = 130 };
-    private readonly Button _generateOne = new() { Text = "Generate this short", Width = 150 };
+    private readonly FancyButton _renderPreview = new() { Text = "Render preview", Width = 160 };
+    private readonly FancyButton _generateOne = new() { Text = "Generate this short", Width = 190 };
     private readonly CheckBox _cameraMode = new() { Text = "Camera mode", AutoSize = false, Appearance = Appearance.Button, TextAlign = ContentAlignment.MiddleCenter, Width = 110, Height = 28 };
-    private readonly Button _autoCamera = new() { Text = "Auto camera (faces)", Width = 150 };
+    private readonly FancyButton _autoCamera = new() { Text = "Auto camera (faces)", Width = 185 };
     private readonly Label _keyframeHint = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 7, 0, 0) };
     private readonly ListView _keyframes = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
-    private readonly ListView _stickers = new() { Dock = DockStyle.Fill, View = View.LargeIcon, MultiSelect = false, HideSelection = false };
-    private readonly ImageList _stickerImages = new() { ImageSize = new Size(56, 56), ColorDepth = ColorDepth.Depth32Bit };
-    private readonly ComboBox _stickerAnim = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80 };
-    private readonly NumericUpDown _stickerDuration = new() { Minimum = 0.5M, Maximum = 30, DecimalPlaces = 1, Increment = 0.5M, Value = 2.5M, Width = 55 };
-    private readonly Button _stickerAdd = new() { Text = "Add at current time", Width = 140 };
-    private readonly Button _stickerAuto = new() { Text = "Auto from reactions", Width = 140 };
-    private readonly Button _stickerFolder = new() { Text = "Folder", Width = 60 };
-    private readonly Button _keyframeDelete = new() { Text = "Delete", Width = 70 };
-    private readonly Button _keyframeClear = new() { Text = "Clear all", Width = 80 };
+    private readonly FancyButton _keyframeDelete = new() { Text = "Delete", Width = 70 };
+    private readonly FancyButton _keyframeClear = new() { Text = "Clear all", Width = 80 };
     private double _playerTime;
     private readonly DataGridView _editSegments = new()
     {
@@ -73,8 +67,8 @@ public sealed class MainForm : Form
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, SelectionMode = DataGridViewSelectionMode.FullRowSelect,
         MultiSelect = false, BackgroundColor = Color.White, BorderStyle = BorderStyle.FixedSingle, EditMode = DataGridViewEditMode.EditOnKeystrokeOrF2
     };
-    private readonly Button _segDelete = new() { Text = "Delete line", Width = 100 };
-    private readonly Button _segPlay = new() { Text = "Play from line", Width = 110 };
+    private readonly FancyButton _segDelete = new() { Text = "Delete line", Width = 100 };
+    private readonly FancyButton _segPlay = new() { Text = "Play from line", Width = 110 };
     private readonly Label _editorHint = new() { Dock = DockStyle.Top, Height = 40, Padding = new Padding(8, 4, 8, 4), ForeColor = Color.DimGray };
     private ShortSuggestion? _editing;
     private bool _timelineDragging;
@@ -85,39 +79,47 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _gptCount = new() { Minimum = 1, Maximum = 20, Value = 6, Width = 55 };
     private readonly NumericUpDown _gptMin = new() { Minimum = 5, Maximum = 180, Value = 15, Width = 55 };
     private readonly NumericUpDown _gptMax = new() { Minimum = 10, Maximum = 180, Value = 60, Width = 55 };
-    private readonly Button _gptBuild = new() { Text = "Generate prompt", Width = 140 };
-    private readonly Button _gptCopy = new() { Text = "Copy prompt", Width = 110, Enabled = false };
-    private readonly Button _gptSave = new() { Text = "Save prompt .txt", Width = 130, Enabled = false };
-    private readonly Button _gptPaste = new() { Text = "Paste from clipboard", Width = 150 };
-    private readonly Button _gptImport = new() { Text = "Import suggestions", Width = 150 };
+    private readonly FancyButton _gptBuild = new() { Text = "Generate prompt", Width = 160 };
+    private readonly FancyButton _gptCopy = new() { Text = "Copy prompt", Width = 140, Enabled = false };
+    private readonly FancyButton _gptSave = new() { Text = "Save prompt .txt", Width = 150, Enabled = false };
+    private readonly FancyButton _gptPaste = new() { Text = "Paste from clipboard", Width = 150 };
+    private readonly FancyButton _gptImport = new() { Text = "Import suggestions", Width = 170 };
     private readonly TextBox _gptPrompt = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill };
     private readonly TextBox _gptAnswer = new() { Multiline = true, ScrollBars = ScrollBars.Both, AcceptsReturn = true, AcceptsTab = true, Dock = DockStyle.Fill,
         PlaceholderText = "Paste ChatGPT's JSON answer here, then click 'Import suggestions'." };
 
+    // empty states (Higgsfield illustrations)
+    private readonly EmptyState _emptyVideo = new("empty-video.png", "No video yet",
+        "Paste a YouTube, Instagram or TikTok link above and click Download, pick one of your downloaded videos below, or open a local file.");
+    private readonly EmptyState _emptyTranscript = new("empty-transcript.png", "No transcript yet",
+        "Click Transcribe to run Whisper locally, or load an existing .srt / .vtt file. Turn on reactions to capture laughs and loud moments.");
+    private readonly EmptyState _emptySuggest = new("empty-shorts.png", "No suggestions yet",
+        "Ask ChatGPT with the copy / paste prompt, or Analyze with Claude. Each suggestion comes with the reasoning and a score out of 10.");
+
     // video tab
     private readonly Label _videoInfo = new() { AutoSize = true, Padding = new Padding(10), UseMnemonic = false };
-    private readonly Button _openFile = new() { Text = "Play video", Width = 110, Enabled = false };
-    private readonly Button _openFolder = new() { Text = "Open folder", Width = 110, Enabled = false };
+    private readonly FancyButton _openFile = new() { Text = "Play video", Width = 110, Enabled = false };
+    private readonly FancyButton _openFolder = new() { Text = "Open folder", Width = 110, Enabled = false };
 
     // transcript tab
-    private readonly Button _transcribe = new() { Text = "Transcribe", Width = 110 };
+    private readonly FancyButton _transcribe = new() { Text = "Transcribe", Width = 130 };
     private readonly ComboBox _whisperModel = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
     private readonly TextBox _language = new() { Width = 60 };
     private readonly CheckBox _detectReactions = new() { Text = "Detect laughs / reactions", AutoSize = true };
-    private readonly Button _loadTranscript = new() { Text = "Load transcript file...", Width = 150, Enabled = false };
-    private readonly Button _saveSrt = new() { Text = "Save .srt", Width = 90, Enabled = false };
-    private readonly Button _saveTxt = new() { Text = "Save .txt", Width = 90, Enabled = false };
+    private readonly FancyButton _loadTranscript = new() { Text = "Load transcript file...", Width = 150, Enabled = false };
+    private readonly FancyButton _saveSrt = new() { Text = "Save .srt", Width = 90, Enabled = false };
+    private readonly FancyButton _saveTxt = new() { Text = "Save .txt", Width = 90, Enabled = false };
     private readonly ListView _segments = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true };
 
     // suggestions tab
-    private readonly Button _analyze = new() { Text = "Analyze with Claude", Width = 150, Enabled = false };
+    private readonly FancyButton _analyze = new() { Text = "Analyze with Claude", Width = 185, Enabled = false };
     private readonly NumericUpDown _count = new() { Minimum = 1, Maximum = 20, Width = 55 };
     private readonly NumericUpDown _minSec = new() { Minimum = 5, Maximum = 180, Width = 55 };
     private readonly NumericUpDown _maxSec = new() { Minimum = 10, Maximum = 180, Width = 55 };
-    private readonly Button _addClip = new() { Text = "Add custom clip", Width = 120, Enabled = false };
-    private readonly Button _editClip = new() { Text = "Adjust times", Width = 100, Enabled = false };
-    private readonly Button _removeClip = new() { Text = "Remove", Width = 80, Enabled = false };
-    private readonly Button _previewClip = new() { Text = "Preview clip", Width = 100, Enabled = false };
+    private readonly FancyButton _addClip = new() { Text = "Add custom clip", Width = 120, Enabled = false };
+    private readonly FancyButton _editClip = new() { Text = "Adjust times", Width = 100, Enabled = false };
+    private readonly FancyButton _removeClip = new() { Text = "Remove", Width = 80, Enabled = false };
+    private readonly FancyButton _previewClip = new() { Text = "Preview clip", Width = 100, Enabled = false };
     private readonly ListView _suggestList = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, CheckBoxes = true, GridLines = true, HideSelection = false };
     private readonly RichTextBox _suggestDetail = new() { Dock = DockStyle.Fill, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = SystemColors.Window };
     private readonly Label _summary = new() { Dock = DockStyle.Top, AutoSize = false, Height = 44, Padding = new Padding(6), ForeColor = Color.DimGray };
@@ -130,10 +132,10 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _fontSize = new() { Minimum = 0, Maximum = 200, Value = 0, Width = 60 };
     private readonly ComboBox _crop = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
     private readonly CheckBox _burnHook = new() { Text = "Show the hook as a title at the start", AutoSize = true };
-    private readonly CheckBox _includeReactions = new() { Text = "Show laughs / reactions in captions, e.g. [laughs]", AutoSize = true };
-    private readonly CheckBox _autoCameraOpt = new() { Text = "Auto camera: follow faces (vertical crop)", Checked = true, AutoSize = true };
+    private readonly CheckBox _includeReactions = new() { Text = "Show [laughs] tags in captions", AutoSize = true };
+    private readonly CheckBox _autoCameraOpt = new() { Text = "Auto camera (follow faces)", Checked = true, AutoSize = true };
     private readonly TextBox _outputFolder = new() { Width = 230 };
-    private readonly Button _generate = new() { Text = "Generate selected shorts", Width = 190, Height = 34, Enabled = false, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold) };
+    private readonly FancyButton _generate = new() { Text = "Generate selected shorts", Width = 190, Height = 34, Enabled = false, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold) };
     private readonly CaptionPreview _preview = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(30, 30, 30) };
     private readonly ListView _results = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true };
 
@@ -141,14 +143,15 @@ public sealed class MainForm : Form
     private readonly BrandProgressBar _progress = new() { Dock = DockStyle.Fill, Height = 18 };
     private readonly BrandHeader _header = new();
     private readonly Label _status = new() { AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
-    private readonly Button _cancel = new() { Text = "Cancel", Width = 80, Enabled = false };
+    private readonly FancyButton _cancel = new() { Text = "Cancel", Width = 80, Enabled = false };
     private readonly TextBox _log = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Font = new Font("Consolas", 8.5f), BackColor = Color.FromArgb(250, 250, 250) };
 
     public MainForm()
     {
         Text = "Galiluna Short Generator";
-        MinimumSize = new Size(1000, 720);
-        ClientSize = new Size(1180, 820);
+        MinimumSize = new Size(1100, 720);
+        ClientSize = new Size(1320, 840);
+        BackColor = Theme.Bg;
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         Font = Theme.Body();
@@ -172,22 +175,56 @@ public sealed class MainForm : Form
 
     // ------------------------------------------------------------------ layout
 
+    // ---- shell: side navigation + header + command bar + activity drawer ----
+    private readonly SideNav _nav = new();
+    private readonly FancyButton _activityToggle = new() { Text = "Activity", Width = 96, Glyph = "" };
+    private Panel _drawer = null!;
+    private bool _drawerOpen;
+
+    private static readonly (string Title, string Tagline, string Hint, string Glyph)[] Pages =
+    {
+        ("Video", "Bring in the source: paste a link, pick a downloaded video, or open a file.", "Source video", ""),
+        ("Transcript", "Whisper runs locally. Turn on reactions to capture laughs and intensity.", "Whisper, reactions", ""),
+        ("Ask ChatGPT", "Copy the prompt, paste the answer. No API key needed.", "Copy / paste flow", ""),
+        ("Suggestions", "The moments most likely to travel, with the reasoning and a score.", "Pick your moments", ""),
+        ("Generate shorts", "Framing, captions and camera. Render the shorts you ticked.", "Render the clips", ""),
+        ("Edit & preview", "Play a short, fix words, place the caption, direct the camera.", "Fine-tune each short", ""),
+    };
+
     private void BuildLayout()
     {
-        // top bar
-        var top = new TableLayoutPanel { Dock = DockStyle.Top, Height = 44, ColumnCount = 6, Padding = new Padding(8, 8, 8, 4) };
-        top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (int i = 0; i < 4; i++) top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        top.Controls.Add(new Label { Text = "Video link:", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 6, 0) }, 0, 0);
-        top.Controls.Add(_url, 1, 0);
-        top.Controls.Add(_download, 2, 0);
-        top.Controls.Add(_downloadTranscribe, 3, 0);
-        top.Controls.Add(_openLocal, 4, 0);
-        top.Controls.Add(_settingsBtn, 5, 0);
+        // navigation
+        foreach (var p in Pages) _nav.Add(p.Title, p.Hint, p.Glyph);
+        _nav.SelectedIndexChanged += (_, _) => { if (_tabs.SelectedIndex != _nav.SelectedIndex) _tabs.SelectedIndex = _nav.SelectedIndex; };
 
-        // tabs
+        // command bar: the link box and the primary actions, always visible
+        var bar = new TableLayoutPanel { Dock = DockStyle.Top, Height = 58, ColumnCount = 5, Padding = new Padding(24, 12, 24, 10), BackColor = Theme.Bg };
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (int i = 0; i < 4; i++) bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _url.Font = Theme.Body(10f);
+        var urlField = Theme.WrapInput(_url);
+        urlField.Dock = DockStyle.Fill;
+        urlField.Margin = new Padding(0, 0, 12, 0);
+        _url.GotFocus += (_, _) => urlField.Invalidate();
+        _url.LostFocus += (_, _) => urlField.Invalidate();
+        bar.Controls.Add(urlField, 0, 0);
+        _download.Glyph = ""; _download.Width = 128; _download.Margin = new Padding(0, 1, 8, 0);
+        _downloadTranscribe.Glyph = ""; _downloadTranscribe.Width = 200; _downloadTranscribe.Margin = new Padding(0, 1, 8, 0);
+        _openLocal.Glyph = ""; _openLocal.Text = "Open file"; _openLocal.Width = 118; _openLocal.Margin = new Padding(0, 1, 8, 0);
+        _settingsBtn.Glyph = ""; _settingsBtn.Width = 110; _settingsBtn.Margin = new Padding(0, 1, 0, 0);
+        bar.Controls.Add(_download, 1, 0);
+        bar.Controls.Add(_downloadTranscribe, 2, 0);
+        bar.Controls.Add(_openLocal, 3, 0);
+        bar.Controls.Add(_settingsBtn, 4, 0);
+
+        // pages (the tab strip is hidden; the side navigation drives it)
         _tabs.TabPages.AddRange(new[] { _tabVideo, _tabTranscript, _tabChatGpt, _tabSuggest, _tabGenerate, _tabEditor });
+        _tabs.SelectedIndexChanged += (_, _) =>
+        {
+            _nav.SelectedIndex = _tabs.SelectedIndex;
+            var p = Pages[Math.Clamp(_tabs.SelectedIndex, 0, Pages.Length - 1)];
+            _header.Set(p.Title, p.Tagline);
+        };
         BuildVideoTab();
         BuildTranscriptTab();
         BuildChatGptTab();
@@ -195,58 +232,132 @@ public sealed class MainForm : Form
         BuildEditorTab();
         BuildGenerateTab();
 
-        // bottom
-        var bottom = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 140, ColumnCount = 3, RowCount = 2, Padding = new Padding(8, 0, 8, 6) };
-        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260));
-        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        bottom.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-        bottom.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        bottom.Controls.Add(_progress, 0, 0);
-        bottom.Controls.Add(_status, 1, 0);
-        bottom.Controls.Add(_cancel, 2, 0);
-        bottom.Controls.Add(_log, 0, 1);
-        bottom.SetColumnSpan(_log, 3);
+        // activity drawer: status line always visible, log expands on demand
+        _drawer = new Panel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(24, 6, 24, 6), BackColor = Theme.Elevated };
+        var statusRow = new TableLayoutPanel { Dock = DockStyle.Top, Height = 32, ColumnCount = 4, BackColor = Theme.Elevated };
+        statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
+        statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _progress.Margin = new Padding(0, 11, 16, 0);
+        _status.Font = Theme.Body(9f);
+        statusRow.Controls.Add(_progress, 0, 0);
+        statusRow.Controls.Add(_status, 1, 0);
+        _cancel.Kind = ButtonKind.Danger; _cancel.Width = 90; _cancel.Height = 30; _cancel.Margin = new Padding(0, 0, 8, 0);
+        _activityToggle.Height = 30;
+        statusRow.Controls.Add(_cancel, 2, 0);
+        statusRow.Controls.Add(_activityToggle, 3, 0);
+        _log.Margin = new Padding(0, 8, 0, 0);
+        _log.BorderStyle = BorderStyle.None;
+        _drawer.Controls.Add(_log);
+        _drawer.Controls.Add(statusRow);
+        _log.Visible = false;
+        _activityToggle.Click += (_, _) => ToggleDrawer();
 
-        var tabHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8, 4, 8, 4) };
-        tabHost.Controls.Add(_tabs);
+        // The tab control paints a light frame we cannot theme, so it is positioned slightly outside its
+        // host and the host clips the frame away.
+        var content = new Panel { Dock = DockStyle.Fill, Padding = new Padding(16, 8, 16, 12), BackColor = Theme.Bg };
+        var clip = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
+        _tabs.Dock = DockStyle.None;
+        clip.Controls.Add(_tabs);
+        clip.Resize += (_, _) => _tabs.SetBounds(-4, -4, clip.Width + 8, clip.Height + 8);
+        content.Controls.Add(clip);
 
-        Controls.Add(tabHost);
-        Controls.Add(bottom);
-        Controls.Add(top);
-        Controls.Add(_header);
+        var right = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
+        right.Controls.Add(content);
+        right.Controls.Add(_drawer);
+        right.Controls.Add(bar);
+        right.Controls.Add(_header);
+
+        Controls.Add(right);
+        Controls.Add(_nav);
+        _header.Set(Pages[0].Title, Pages[0].Tagline);
+    }
+
+    /// <summary>
+    /// SplitContainer clamps SplitterDistance to its (tiny) construction-time size, so the wanted distance
+    /// is applied once the control has been laid out at its real size.
+    /// </summary>
+    private static void SplitWhenSized(SplitContainer split, int distance)
+    {
+        bool done = false;
+        split.SizeChanged += (_, _) =>
+        {
+            int extent = split.Orientation == Orientation.Horizontal ? split.Height : split.Width;
+            if (done || extent < distance + 80) return;
+            done = true;
+            split.SplitterDistance = distance;
+        };
+    }
+
+    private void ToggleDrawer()
+    {
+        _drawerOpen = !_drawerOpen;
+        _log.Visible = _drawerOpen;
+        _drawer.Height = _drawerOpen ? 190 : 44;
+        _activityToggle.Text = _drawerOpen ? "Hide" : "Activity";
+    }
+
+    /// <summary>Reflects progress in the side navigation: done steps get a check, the next step a glowing dot.</summary>
+    private void UpdateNavStates()
+    {
+        bool video = _video is not null, transcript = _transcript is { Segments.Count: > 0 }, suggestions = _suggestions is { Shorts.Count: > 0 };
+        bool generated = _generated.Count > 0;
+        _nav.SetState(0, video ? StepState.Done : StepState.Ready);
+        _nav.SetState(1, transcript ? StepState.Done : (video ? StepState.Ready : StepState.Pending));
+        _nav.SetState(2, suggestions ? StepState.Done : (transcript ? StepState.Ready : StepState.Pending));
+        _nav.SetState(3, suggestions ? StepState.Done : (transcript ? StepState.Ready : StepState.Pending));
+        _nav.SetState(4, generated ? StepState.Done : (suggestions ? StepState.Ready : StepState.Pending));
+        _nav.SetState(5, suggestions ? StepState.Ready : StepState.Pending);
     }
 
     private void ApplyTheme()
     {
         foreach (var b in new[] { _download, _downloadTranscribe, _transcribe, _analyze, _generate, _libraryTranscribe, _gptBuild, _gptImport, _playPause, _generateOne }) Theme.Primary(b);
         Theme.Apply(this);
-        _videoInfo.Font = Theme.Mono(9.5f);
+        _videoInfo.Font = Theme.Body(10f);
         _videoInfo.ForeColor = Theme.TextSecondary;
         _log.Font = Theme.Mono();
-        _log.BackColor = Theme.SurfaceSoft;
+        _log.BackColor = Theme.Bg;
         _log.ForeColor = Theme.TextSecondary;
         _status.ForeColor = Theme.TextMuted;
         _suggestDetail.Font = Theme.Body(9.5f);
         _gptPrompt.Font = Theme.Mono(9f);
         _gptAnswer.Font = Theme.Mono(9f);
-        _gptAnswer.BackColor = Theme.Elevated;
         _summary.ForeColor = Theme.TextMuted;
-        _summary.BackColor = Theme.SurfaceSoft;
+        _summary.BackColor = Theme.Elevated;
         _preview.BackColor = Theme.DarkBg;
+        _cameraMode.BackColor = Theme.Elevated;
+        _cameraMode.ForeColor = Theme.TextSecondary;
+        _cameraMode.FlatStyle = FlatStyle.Flat;
+        _cameraMode.FlatAppearance.BorderColor = Theme.BorderStrong;
+        _cameraMode.FlatAppearance.CheckedBackColor = Theme.Nebula;
+        _generate.Font = Theme.Body(10f, FontStyle.Bold);
+        _generate.Height = 40; _generate.Width = 230; _generate.Glyph = "";
+        _generateOne.Glyph = "";
+        _renderPreview.Glyph = "";
+        _transcribe.Glyph = "";
+        _analyze.Glyph = "";
+        _gptCopy.Glyph = "";
+        _autoCamera.Glyph = "";
+        _playPause.Glyph = "";
+        UpdateNavStates();
     }
 
     private void BuildVideoTab()
     {
         // Top: current video details. Bottom: library of already downloaded videos.
-        var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 165 };
+        var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, FixedPanel = FixedPanel.Panel1 };
+        SplitWhenSized(split, 200);
 
         var info = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10) };
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, FlowDirection = FlowDirection.LeftToRight };
         buttons.Controls.Add(_openFile);
         buttons.Controls.Add(_openFolder);
-        _videoInfo.Text = "No video loaded yet.\n\nPaste a link above and click Download (or Download + Transcribe), pick a downloaded video from the library below, or open a local file.\nSupported: YouTube videos & Shorts, Instagram Reels / posts, TikTok, and any other site yt-dlp knows.";
+        _videoInfo.Text = "";
+        info.Controls.Add(_emptyVideo);
         info.Controls.Add(_videoInfo);
+        _emptyVideo.BringToFront();
         info.Controls.Add(buttons);
         split.Panel1.Controls.Add(info);
 
@@ -293,7 +404,9 @@ public sealed class MainForm : Form
         _segments.Columns.Add("Text", 820);
         _segments.Columns.Add("Peak dB", 70);
 
+        _tabTranscript.Controls.Add(_emptyTranscript);
         _tabTranscript.Controls.Add(_segments);
+        _emptyTranscript.BringToFront();
         _tabTranscript.Controls.Add(bar);
     }
 
@@ -368,7 +481,7 @@ public sealed class MainForm : Form
         bar.Controls.Add(_addClip);
         bar.Controls.Add(_removeClip);
 
-        _suggestList.Columns.Add("Use", 40);
+        _suggestList.Columns.Add("Use", 52);
         _suggestList.Columns.Add("#", 30);
         _suggestList.Columns.Add("Title", 360);
         _suggestList.Columns.Add("Start", 70);
@@ -377,8 +490,11 @@ public sealed class MainForm : Form
         _suggestList.Columns.Add("Viral score", 95);
         _suggestList.Columns.Add("Emotion", 110);
 
-        var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 260 };
+        var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
+        SplitWhenSized(split, 260);
+        split.Panel1.Controls.Add(_emptySuggest);
         split.Panel1.Controls.Add(_suggestList);
+        _emptySuggest.BringToFront();
         split.Panel2.Controls.Add(_suggestDetail);
         split.Panel2.Controls.Add(_summary);
         _suggestDetail.Text = "Get suggestions from '3. Ask ChatGPT' (copy/paste) or click 'Analyze with Claude' (API key). Select one to read why it could go viral.";
@@ -389,20 +505,33 @@ public sealed class MainForm : Form
 
     private void BuildEditorTab()
     {
-        _editorHint.Text = "Pick a short on the left. Drag the caption on the video to place it from the current time on. 'Camera mode' shows the whole frame: drag the 9:16 box and scroll to zoom to add a camera cut at the current time. " +
-                           "'Auto camera' follows faces. Fix wrong words in the Text column (F2 or start typing). Style, framing and words-per-caption come from '5. Generate shorts'.";
+        _editorHint.Text = "Drag the caption on the video to place it from the current time on. Camera mode: drag the 9:16 box, scroll to zoom, and a camera cut is added at the current time. " +
+                           "Edit the Text column to fix words. Style and framing come from Generate shorts.";
 
-        // left: list of selected shorts + timeline of camera cuts and caption positions
-        var left = new Panel { Dock = DockStyle.Left, Width = 290, Padding = new Padding(6) };
-        _editClips.Columns.Add("Short", 170);
+        // left: selected shorts, the actions for the current short, and the timeline of cuts / caption positions
+        var left = new Panel { Dock = DockStyle.Left, Width = 300, Padding = new Padding(6) };
+        _editClips.Columns.Add("Short", 180);
         _editClips.Columns.Add("Range", 100);
         _keyframes.Columns.Add("At", 50);
         _keyframes.Columns.Add("What", 60);
-        _keyframes.Columns.Add("Details", 160);
-        var leftSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 120 };
+        _keyframes.Columns.Add("Details", 170);
+        var leftSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, FixedPanel = FixedPanel.Panel1 };
+        SplitWhenSized(leftSplit, 150);
         var clipsHost = new Panel { Dock = DockStyle.Fill };
         clipsHost.Controls.Add(_editClips);
         clipsHost.Controls.Add(new Label { Text = "Selected shorts", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
+
+        // actions for the current short (wrap into two rows)
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 124, WrapContents = true, Padding = new Padding(0, 6, 0, 0) };
+        _generateOne.Width = 276; _generateOne.Height = 36; _generateOne.Margin = new Padding(0, 0, 0, 6);
+        _renderPreview.Width = 135; _renderPreview.Margin = new Padding(0, 0, 6, 6);
+        _autoCamera.Width = 135; _autoCamera.Text = "Auto camera"; _autoCamera.Margin = new Padding(0, 0, 0, 6);
+        _cameraMode.Width = 276; _cameraMode.Height = 32; _cameraMode.Margin = new Padding(0, 0, 0, 0);
+        actions.Controls.Add(_generateOne);
+        actions.Controls.Add(_renderPreview);
+        actions.Controls.Add(_autoCamera);
+        actions.Controls.Add(_cameraMode);
+
         var kfHost = new Panel { Dock = DockStyle.Fill };
         var kfBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 34, WrapContents = false };
         kfBar.Controls.Add(_keyframeDelete);
@@ -410,12 +539,13 @@ public sealed class MainForm : Form
         kfHost.Controls.Add(_keyframes);
         kfHost.Controls.Add(kfBar);
         kfHost.Controls.Add(new Label { Text = "Camera cuts and caption positions (double-click to jump)", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray, UseMnemonic = false });
+        kfHost.Controls.Add(actions);
         leftSplit.Panel1.Controls.Add(clipsHost);
         leftSplit.Panel2.Controls.Add(kfHost);
         left.Controls.Add(leftSplit);
 
         // right: transcript lines of the clip
-        var right = new Panel { Dock = DockStyle.Right, Width = 420, Padding = new Padding(6) };
+        var right = new Panel { Dock = DockStyle.Right, Width = 400, Padding = new Padding(6) };
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "Start", HeaderText = "Start", ReadOnly = true, FillWeight = 18 });
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "End", HeaderText = "End", ReadOnly = true, FillWeight = 18 });
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "Text", HeaderText = "Text (editable)", FillWeight = 64 });
@@ -424,44 +554,19 @@ public sealed class MainForm : Form
         var segBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 38, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
         segBar.Controls.Add(_segPlay);
         segBar.Controls.Add(_segDelete);
-        var segHost = new Panel { Dock = DockStyle.Fill };
-        segHost.Controls.Add(_editSegments);
-        segHost.Controls.Add(segBar);
-        segHost.Controls.Add(new Label { Text = "Transcript of this short", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
-
-        // stickers gallery
-        _stickers.LargeImageList = _stickerImages;
-        _stickerAnim.Items.AddRange(new object[] { "pop", "float", "shake", "none" });
-        _stickerAnim.SelectedIndex = 0;
-        var stBar1 = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 34, WrapContents = false };
-        stBar1.Controls.Add(_stickerAdd);
-        stBar1.Controls.Add(_stickerAuto);
-        stBar1.Controls.Add(_stickerFolder);
-        var stBar2 = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 32, WrapContents = false };
-        stBar2.Controls.Add(new Label { Text = "Animation:", AutoSize = true, Margin = new Padding(0, 7, 4, 0) });
-        stBar2.Controls.Add(_stickerAnim);
-        stBar2.Controls.Add(new Label { Text = "Seconds:", AutoSize = true, Margin = new Padding(10, 7, 4, 0) });
-        stBar2.Controls.Add(_stickerDuration);
-        var stHost = new Panel { Dock = DockStyle.Fill };
-        stHost.Controls.Add(_stickers);
-        stHost.Controls.Add(stBar2);
-        stHost.Controls.Add(stBar1);
-        stHost.Controls.Add(new Label { Text = "Stickers (double-click to add, then drag it on the video; scroll to resize)", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
-
-        var rightSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 215 };
-        rightSplit.Panel1.Controls.Add(segHost);
-        rightSplit.Panel2.Controls.Add(stHost);
-        right.Controls.Add(rightSplit);
+        right.Controls.Add(_editSegments);
+        right.Controls.Add(segBar);
+        right.Controls.Add(new Label { Text = "Transcript of this short", Dock = DockStyle.Top, Height = 20, ForeColor = Color.DimGray });
 
         // center: player + controls
         var center = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6) };
-        var controls = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 112, ColumnCount = 3, RowCount = 3 };
+        var controls = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 80, ColumnCount = 3, RowCount = 2 };
         controls.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         controls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         controls.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        controls.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        controls.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        controls.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        controls.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+        controls.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+        _playPause.Width = 96; _playPause.Margin = new Padding(0, 3, 8, 3);
         controls.Controls.Add(_playPause, 0, 0);
         controls.Controls.Add(_timeline, 1, 0);
         controls.Controls.Add(_timeLabel, 2, 0);
@@ -470,17 +575,10 @@ public sealed class MainForm : Form
         trim.Controls.Add(_clipStart);
         trim.Controls.Add(new Label { Text = "End (s):", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         trim.Controls.Add(_clipEnd);
-        trim.Controls.Add(new Label { Text = "", Width = 16 });
-        trim.Controls.Add(_renderPreview);
-        trim.Controls.Add(_generateOne);
+        _keyframeHint.Margin = new Padding(16, 7, 0, 0);
+        trim.Controls.Add(_keyframeHint);
         controls.Controls.Add(trim, 0, 1);
         controls.SetColumnSpan(trim, 3);
-        var camRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 2, 0, 0) };
-        camRow.Controls.Add(_cameraMode);
-        camRow.Controls.Add(_autoCamera);
-        camRow.Controls.Add(_keyframeHint);
-        controls.Controls.Add(camRow, 0, 2);
-        controls.SetColumnSpan(camRow, 3);
         center.Controls.Add(_player);
         center.Controls.Add(controls);
 
@@ -511,7 +609,7 @@ public sealed class MainForm : Form
         _outputFolder.Text = _settings.OutputFolder;
 
         var folderRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-        var browse = new Button { Text = "...", Width = 32 };
+        var browse = new FancyButton { Text = "...", Width = 36 };
         browse.Click += (_, _) =>
         {
             using var d = new FolderBrowserDialog { SelectedPath = Directory.Exists(_outputFolder.Text) ? _outputFolder.Text : "" };
@@ -581,11 +679,6 @@ public sealed class MainForm : Form
         _player.Status += s => Log("Player: " + s);
         _player.CaptionMoved += (x, y) => BeginInvoke(() => OnCaptionMoved(x, y));
         _player.CameraMoved += (x, y, z) => BeginInvoke(() => OnCameraMoved(x, y, z));
-        _player.OverlayMoved += (id, x, y, size) => BeginInvoke(() => OnOverlayMoved(id, x, y, size));
-        _stickers.DoubleClick += async (_, _) => await AddStickerAsync();
-        _stickerAdd.Click += async (_, _) => await AddStickerAsync();
-        _stickerAuto.Click += async (_, _) => await AutoStickersAsync();
-        _stickerFolder.Click += (_, _) => { StickerLibrary.EnsureSeeded(); OpenPath(StickerLibrary.Folder); };
         _cameraMode.CheckedChanged += async (_, _) =>
         {
             _cameraMode.BackColor = _cameraMode.Checked ? Theme.Nebula : Theme.Elevated;
@@ -603,8 +696,8 @@ public sealed class MainForm : Form
         _keyframeClear.Click += async (_, _) =>
         {
             if (_editing is null) return;
-            if (MessageBox.Show(this, "Remove all camera cuts, caption positions and stickers of this short?", "Clear all", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            _editing.Camera.Clear(); _editing.CaptionPositions.Clear(); _editing.Overlays.Clear();
+            if (MessageBox.Show(this, "Remove all camera cuts and caption positions of this short?", "Clear all", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            _editing.Camera.Clear(); _editing.CaptionPositions.Clear();
             await PushKeyframesAsync();
         };
         _timeline.MouseDown += (_, _) => _timelineDragging = true;
@@ -874,6 +967,9 @@ public sealed class MainForm : Form
             info.Title = pv.Title; info.Uploader = pv.Uploader; info.Url = pv.Url; info.Source = pv.Source;
         }
 
+        _emptyVideo.Visible = false;
+        _emptyTranscript.Visible = true;
+        _emptySuggest.Visible = true;
         var dur = TimeSpan.FromSeconds(info.DurationSeconds);
         _videoInfo.Text =
             $"Title:       {info.Title}\n" +
@@ -986,6 +1082,7 @@ public sealed class MainForm : Form
         }
         _segments.EndUpdate();
         _saveSrt.Enabled = _saveTxt.Enabled = _transcript is { Segments.Count: > 0 };
+        _emptyTranscript.Visible = _transcript is not { Segments.Count: > 0 };
         _analyze.Enabled = _transcript is { Segments.Count: > 0 };
     }
 
@@ -1115,73 +1212,7 @@ public sealed class MainForm : Form
             _playerInitStarted = true;
             if (!await _player.InitAsync()) Log("In-app player unavailable (WebView2). Use 'Render preview clip' instead.");
         }
-        RefreshStickerGallery();
         RefreshEditorClipList();
-    }
-
-    private void RefreshStickerGallery()
-    {
-        _stickers.BeginUpdate();
-        _stickers.Items.Clear();
-        _stickerImages.Images.Clear();
-        foreach (var (name, path) in StickerLibrary.List())
-        {
-            try
-            {
-                using var img = Image.FromFile(path);
-                _stickerImages.Images.Add(name, new Bitmap(img, _stickerImages.ImageSize));
-                _stickers.Items.Add(new ListViewItem(name, name) { Tag = name });
-            }
-            catch { /* unreadable image: skip */ }
-        }
-        _stickers.EndUpdate();
-    }
-
-    private async Task AddStickerAsync()
-    {
-        if (_editing is null) { MessageBox.Show(this, "Pick a short first.", "Stickers"); return; }
-        if (_stickers.SelectedItems.Count == 0 || _stickers.SelectedItems[0].Tag is not string name)
-        {
-            MessageBox.Show(this, "Select a sticker in the gallery first.", "Stickers");
-            return;
-        }
-        var ov = new OverlayItem
-        {
-            Time = RelativeTime, Duration = (double)_stickerDuration.Value, File = name,
-            Animation = _stickerAnim.SelectedItem?.ToString() ?? "pop"
-        };
-        // stagger if another sticker is already showing at this time
-        if (_editing.Overlays.Any(o => o.Time <= ov.Time && ov.Time < o.End && Math.Abs(o.X - ov.X) < 10)) ov.X = 22;
-        _editing.Overlays.Add(ov);
-        await PushKeyframesAsync();
-        await _player.PauseAsync();
-    }
-
-    private async Task AutoStickersAsync()
-    {
-        if (_editing is null || _transcript is null) return;
-        var slice = _transcript.Slice(_editing.StartSeconds, _editing.EndSeconds);
-        var proposed = StickerLibrary.Suggest(_editing, slice);
-        if (proposed.Count == 0)
-        {
-            MessageBox.Show(this, "No laughs / reactions tagged inside this short, so nothing to place automatically. Transcribe with 'Detect laughs / reactions' on, or add stickers by hand.", "Auto stickers");
-            return;
-        }
-        if (_editing.Overlays.Count > 0 &&
-            MessageBox.Show(this, $"Add {proposed.Count} sticker(s) from the reaction tags? Existing stickers are kept.", "Auto stickers",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-        _editing.Overlays.AddRange(proposed);
-        await PushKeyframesAsync();
-        Log($"Added {proposed.Count} sticker(s) from reaction tags.");
-    }
-
-    private void OnOverlayMoved(string id, double x, double y, double size)
-    {
-        var ov = _editing?.Overlays.FirstOrDefault(o => o.Id == id);
-        if (ov is null) return;
-        ov.X = x; ov.Y = y; ov.Size = size;
-        RefreshKeyframeList();
-        SaveProject();
     }
 
     private void RefreshEditorClipList()
@@ -1263,7 +1294,6 @@ public sealed class MainForm : Form
         {
             await _player.SetCameraAsync(_editing.Camera);
             await _player.SetCaptionPositionsAsync(_editing.CaptionPositions);
-            await _player.SetOverlaysAsync(_editing.Overlays);
         }
     }
 
@@ -1275,18 +1305,17 @@ public sealed class MainForm : Form
         {
             var rows = _editing.Camera.Select(k => (k.Time, "Camera", $"{k.X:F0}% / {k.Y:F0}%  zoom {k.Zoom:F2}x  ({k.Source})", (IKeyframe)k))
                 .Concat(_editing.CaptionPositions.Select(k => (k.Time, "Caption", $"{k.X:F0}% / {k.Y:F0}%", (IKeyframe)k)))
-                .Concat(_editing.Overlays.Select(o => (o.Time, "Sticker", $"{o.File}  {o.Duration:F1}s  {o.Animation}  at {o.X:F0}% / {o.Y:F0}%", (IKeyframe)o)))
                 .OrderBy(r => r.Item1).ThenBy(r => r.Item2);
             foreach (var r in rows)
             {
                 var item = new ListViewItem(new[] { Fmt(r.Item1), r.Item2, r.Item3 }) { Tag = r.Item4 };
-                item.ForeColor = r.Item2 switch { "Camera" => Theme.PurpleDeep, "Sticker" => Theme.Nebula, _ => Theme.TextSecondary };
+                item.ForeColor = r.Item2 == "Camera" ? Theme.PurpleDeep : Theme.TextSecondary;
                 _keyframes.Items.Add(item);
             }
         }
         _keyframes.EndUpdate();
-        int cams = _editing?.Camera.Count ?? 0, caps = _editing?.CaptionPositions.Count ?? 0, ovs = _editing?.Overlays.Count ?? 0;
-        _keyframeHint.Text = _editing is null ? "" : $"{cams} camera cut{(cams == 1 ? "" : "s")}, {caps} caption pos., {ovs} sticker{(ovs == 1 ? "" : "s")}";
+        int cams = _editing?.Camera.Count ?? 0, caps = _editing?.CaptionPositions.Count ?? 0;
+        _keyframeHint.Text = _editing is null ? "" : $"{cams} camera cut{(cams == 1 ? "" : "s")}, {caps} caption pos.";
     }
 
     private async Task DeleteKeyframeAsync()
@@ -1294,7 +1323,6 @@ public sealed class MainForm : Form
         if (_editing is null || _keyframes.SelectedItems.Count == 0 || _keyframes.SelectedItems[0].Tag is not IKeyframe k) return;
         if (k is CameraKeyframe ck) _editing.Camera.Remove(ck);
         else if (k is CaptionKeyframe pk) _editing.CaptionPositions.Remove(pk);
-        else if (k is OverlayItem ov) _editing.Overlays.Remove(ov);
         await PushKeyframesAsync();
     }
 
@@ -1358,7 +1386,7 @@ public sealed class MainForm : Form
             if (row.Tag is TranscriptSegment seg)
             {
                 bool active = t >= seg.Start && t < seg.End;
-                var color = active ? Theme.SurfaceSoft : Color.White;
+                var color = active ? Theme.SelectionBg : Theme.Elevated;
                 if (row.DefaultCellStyle.BackColor != color) row.DefaultCellStyle.BackColor = color;
             }
         }
@@ -1485,6 +1513,7 @@ public sealed class MainForm : Form
         }
         _suggestList.EndUpdate();
         _populatingSuggestions = false;
+        _emptySuggest.Visible = _suggestList.Items.Count == 0;
         if (_suggestList.Items.Count > 0) _suggestList.Items[0].Selected = true;
         UpdateGenerateEnabled();
     }
@@ -1592,6 +1621,7 @@ public sealed class MainForm : Form
     private void UpdateGenerateEnabled()
     {
         _generate.Enabled = _video is not null && _suggestions is not null && _suggestions.Shorts.Any(s => s.Selected) && _cts is null;
+        UpdateNavStates();
     }
 
     /// <param name="only">Render just these shorts (from the editor's "Generate this short"); null = all ticked shorts.</param>

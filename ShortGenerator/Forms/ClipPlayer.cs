@@ -27,8 +27,6 @@ public sealed class ClipPlayer : UserControl
     public event Action<double, double>? CaptionMoved;
     /// <summary>User moved / zoomed the camera box: center as percent of the source frame, and zoom.</summary>
     public event Action<double, double, double>? CameraMoved;
-    /// <summary>User dragged / resized a sticker: id, center percent x/y, width percent.</summary>
-    public event Action<string, double, double, double>? OverlayMoved;
 
     public bool IsReady => _ready;
 
@@ -89,9 +87,7 @@ public sealed class ClipPlayer : UserControl
             if (root.TryGetProperty("playing", out var p)) PlayingChanged?.Invoke(p.GetBoolean());
             if (root.TryGetProperty("status", out var s)) Status?.Invoke(s.GetString() ?? "");
             if (root.TryGetProperty("pos", out var pos)) CaptionMoved?.Invoke(pos.GetProperty("x").GetDouble(), pos.GetProperty("y").GetDouble());
-            if (root.TryGetProperty("camera", out var cam)) CameraMoved?.Invoke(cam.GetProperty("x").GetDouble(), cam.GetProperty("y").GetDouble(), cam.GetProperty("zoom").GetDouble());
-            if (root.TryGetProperty("overlay", out var ov)) OverlayMoved?.Invoke(ov.GetProperty("id").GetString() ?? "", ov.GetProperty("x").GetDouble(), ov.GetProperty("y").GetDouble(), ov.GetProperty("size").GetDouble());
-        }
+            if (root.TryGetProperty("camera", out var cam)) CameraMoved?.Invoke(cam.GetProperty("x").GetDouble(), cam.GetProperty("y").GetDouble(), cam.GetProperty("zoom").GetDouble());        }
         catch { }
     }
 
@@ -117,17 +113,6 @@ public sealed class ClipPlayer : UserControl
     /// <summary>Caption anchors over time (relative to the clip start). Empty = style default placement.</summary>
     public Task SetCaptionPositionsAsync(List<CaptionKeyframe> positions) =>
         Exec($"setCaptionPositions({JsonSerializer.Serialize(positions.OrderBy(k => k.Time).Select(k => new { t = k.Time, x = k.X, y = k.Y }))})");
-
-    /// <summary>Sticker overlays (times relative to the clip start). Files are resolved through the sticker library.</summary>
-    public Task SetOverlaysAsync(List<OverlayItem> overlays)
-    {
-        var items = overlays.Select(o => new
-        {
-            id = o.Id, t = o.Time, dur = o.Duration, x = o.X, y = o.Y, size = o.Size, anim = o.Animation,
-            src = StickerLibrary.Resolve(o.File) is { } p ? new Uri(p).AbsoluteUri : ""
-        }).Where(o => o.src.Length > 0);
-        return Exec($"setOverlays({JsonSerializer.Serialize(items)})");
-    }
 
     /// <summary>Camera edit mode: shows the whole source frame with a draggable 9:16 box (scroll to zoom).</summary>
     public Task SetCameraModeAsync(bool on) => Exec($"setCameraMode({(on ? "true" : "false")})");
@@ -181,20 +166,9 @@ public sealed class ClipPlayer : UserControl
   #camhint{position:absolute;left:8px;bottom:8px;color:#fff;font:12px Arial;background:rgba(0,0,0,.6);padding:4px 8px;border-radius:4px;display:none}
   @keyframes pop{from{transform:scale(.8)}to{transform:scale(1)}}
   .pop{animation:pop 110ms ease-out}
-  #ovs{position:absolute;inset:0;pointer-events:none}
-  .ov{position:absolute;transform:translate(-50%,-50%);pointer-events:auto;cursor:grab;user-select:none;touch-action:none;display:none}
-  .ov.on{display:block}
-  .ov.sel{outline:2px dashed #A855F7;outline-offset:4px}
-  .ov img{width:100%;height:auto;display:block;pointer-events:none;-webkit-user-drag:none}
-  @keyframes ovpop{0%{transform:scale(.2)}60%{transform:scale(1.15)}100%{transform:scale(1)}}
-  @keyframes ovfloat{0%,100%{transform:translateY(-4%)}50%{transform:translateY(4%)}}
-  @keyframes ovshake{0%,100%{transform:rotate(0)}20%{transform:rotate(-12deg)}40%{transform:rotate(10deg)}60%{transform:rotate(-8deg)}80%{transform:rotate(6deg)}}
-  .ov.pop img{animation:ovpop .45s cubic-bezier(.34,1.56,.64,1) both}
-  .ov.float img{animation:ovfloat 1.4s ease-in-out infinite}
-  .ov.shake img{animation:ovshake .6s ease-in-out both}
 </style></head>
 <body>
-<div id="wrap"><div id="frame"><video id="bg" muted></video><video id="v" playsinline></video><div id="ovs"></div><div id="cap"></div><div id="cam"><span class="lbl"></span></div><div id="camhint">Drag the box to move the camera, scroll to zoom. Each change creates a camera cut at the current time.</div></div></div>
+<div id="wrap"><div id="frame"><video id="bg" muted></video><video id="v" playsinline></video><div id="cap"></div><div id="cam"><span class="lbl"></span></div><div id="camhint">Drag the box to move the camera, scroll to zoom. Each change creates a camera cut at the current time.</div></div></div>
 <script>
 const v=document.getElementById('v'),bg=document.getElementById('bg'),frame=document.getElementById('frame'),cap=document.getElementById('cap'),cam=document.getElementById('cam'),camHint=document.getElementById('camhint');
 let range={s:0,e:0},chunks=[],st=null,lastIdx=-1,lastPost=0,drag=null;
@@ -211,33 +185,6 @@ function setCamera(list){camera=list||[];liveCam=null;layout();render(true);}
 function setCaptionPositions(list){capPos=list||[];render(true);}
 function setCameraMode(on){cameraMode=!!on;liveCam=null;layout();render(true);}
 
-// ---- sticker overlays ----
-const ovs=document.getElementById('ovs');let overlays=[],ovDrag=null,ovWheelTimer=null;
-function setOverlays(list){
-  overlays=list||[];ovs.innerHTML='';
-  for(const o of overlays){
-    const d=document.createElement('div');d.className='ov '+(o.anim||'none');d.dataset.id=o.id;
-    const img=document.createElement('img');img.src=o.src;d.appendChild(img);
-    d.addEventListener('pointerdown',e=>{if(cameraMode)return;ovDrag={o,x0:e.clientX,y0:e.clientY,cx:o.x,cy:o.y};d.classList.add('sel');d.setPointerCapture(e.pointerId);e.preventDefault();e.stopPropagation();});
-    d.addEventListener('pointermove',e=>{if(!ovDrag||ovDrag.o!==o)return;const fw=frame.clientWidth,fh=frame.clientHeight;
-      o.x=Math.max(2,Math.min(98,ovDrag.cx+(e.clientX-ovDrag.x0)/fw*100));o.y=Math.max(2,Math.min(98,ovDrag.cy+(e.clientY-ovDrag.y0)/fh*100));placeOverlay(d,o);});
-    d.addEventListener('pointerup',e=>{if(!ovDrag||ovDrag.o!==o)return;ovDrag=null;d.classList.remove('sel');post({overlay:{id:o.id,x:+o.x.toFixed(1),y:+o.y.toFixed(1),size:+o.size.toFixed(1)}});});
-    d.addEventListener('wheel',e=>{if(cameraMode)return;e.preventDefault();e.stopPropagation();o.size=Math.max(6,Math.min(90,o.size+(e.deltaY<0?2:-2)));placeOverlay(d,o);
-      clearTimeout(ovWheelTimer);ovWheelTimer=setTimeout(()=>post({overlay:{id:o.id,x:+o.x.toFixed(1),y:+o.y.toFixed(1),size:+o.size.toFixed(1)}}),350);},{passive:false});
-    ovs.appendChild(d);placeOverlay(d,o);
-  }
-  render(true);
-}
-function placeOverlay(d,o){d.style.left=o.x+'%';d.style.top=o.y+'%';d.style.width=o.size+'%';}
-function renderOverlays(t){
-  const rel=t-range.s;
-  for(const d of ovs.children){
-    const o=overlays.find(x=>x.id===d.dataset.id);if(!o)continue;
-    const on=!cameraMode&&rel>=o.t&&rel<o.t+o.dur;
-    if(on&&!d.classList.contains('on')){d.classList.add('on');const img=d.firstChild;img.style.animation='none';void img.offsetWidth;img.style.animation='';}
-    else if(!on&&d.classList.contains('on')&&!(ovDrag&&ovDrag.o===o)){d.classList.remove('on');}
-  }
-}
 function activeAt(list,t){const rel=t-range.s;let best=null;for(const k of list){if(k.t<=rel+0.001)best=k;else break;}return best||(list.length?list[0]:null);}
 v.addEventListener('play',()=>post({playing:true}));
 v.addEventListener('pause',()=>post({playing:false}));
@@ -339,7 +286,6 @@ function render(force){
   const t=v.currentTime;
   if(v.paused===false&&t>=range.e){pause();v.currentTime=range.s;post({t:range.s});return;}
   applyCamera(t);
-  renderOverlays(t);
   if(cameraMode){drawCam();}
   let idx=-1;
   for(let i=0;i<chunks.length;i++){if(t>=chunks[i].s&&t<chunks[i].e){idx=i;break;}}
