@@ -38,6 +38,11 @@ public static class ChatGptExchange
             sb.AppendLine("- Non-speech reactions are marked in brackets, e.g. [laughs], [applause], [cheering]. Frequent laughter or applause around a passage is a strong signal that the moment lands with an audience: weigh it heavily.");
         if (transcript.Segments.Any(s => TranscriptEvents.ContainsIntense(s.Text)))
             sb.AppendLine("- Intense moments detected from the audio are marked [big laugh], [loud cheering] or [shouting] (anger, screams, excitement). These are the emotional peaks of the video: clips built around them, with a few seconds of setup before, are usually the strongest.");
+        bool hasLoudness = transcript.Segments.Any(s => s.Loudness is not null);
+        if (hasLoudness)
+            sb.AppendLine("- Each line starts with its audio energy, e.g. (+7 dB): how far the loudest moment of that line rises above the speaker's normal speaking level. " +
+                          "0 to +3 dB is ordinary speech, +4 to +6 dB is animated, +7 dB and above is a burst (laugh, shout, excitement, someone talking over another). " +
+                          "Use it as a sensor for emotional intensity and pacing: clusters of high-energy lines are candidate climaxes, and a clip should usually end shortly after its energy peak.");
         sb.AppendLine();
         sb.AppendLine("# Output format");
         sb.AppendLine("Reply with ONLY a JSON object, no markdown, no commentary before or after, exactly in this shape:");
@@ -60,10 +65,18 @@ public static class ChatGptExchange
 }
 """);
         sb.AppendLine();
-        sb.AppendLine("# Transcript (start - end in seconds)");
+        sb.AppendLine(hasLoudness ? "# Transcript (start - end in seconds, then audio energy above normal speech)" : "# Transcript (start - end in seconds)");
         foreach (var s in transcript.Segments)
-            sb.AppendLine($"[{s.Start.ToString("F1", CultureInfo.InvariantCulture)} - {s.End.ToString("F1", CultureInfo.InvariantCulture)}] {s.Text.Trim()}");
+            sb.AppendLine(FormatLine(s, hasLoudness));
         return sb.ToString();
+    }
+
+    /// <summary>One transcript line for a prompt: "[12.4 - 17.8] (+7 dB) text". Shared with the Claude prompt.</summary>
+    public static string FormatLine(TranscriptSegment s, bool withLoudness)
+    {
+        var range = $"[{s.Start.ToString("F1", CultureInfo.InvariantCulture)} - {s.End.ToString("F1", CultureInfo.InvariantCulture)}]";
+        var energy = withLoudness ? $" ({(s.Loudness is { } l ? $"{(l >= 0 ? "+" : "")}{Math.Round(l)} dB" : "n/a")})" : "";
+        return $"{range}{energy} {s.Text.Trim()}";
     }
 
     /// <summary>

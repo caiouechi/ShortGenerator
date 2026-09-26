@@ -31,9 +31,12 @@ public sealed class ShortSuggester
         sb.AppendLine($"Duration: {video.DurationSeconds:F0} seconds");
         if (!string.IsNullOrWhiteSpace(transcript.Language)) sb.AppendLine($"Language: {transcript.Language}");
         sb.AppendLine();
-        sb.AppendLine("Timestamped transcript (start - end in seconds):");
+        bool hasLoudness = transcript.Segments.Any(s => s.Loudness is not null);
+        sb.AppendLine(hasLoudness
+            ? "Timestamped transcript (start - end in seconds, then audio energy above the speaker's normal level):"
+            : "Timestamped transcript (start - end in seconds):");
         foreach (var s in transcript.Segments)
-            sb.AppendLine($"[{s.Start:F1} - {s.End:F1}] {s.Text.Trim()}");
+            sb.AppendLine(ChatGptExchange.FormatLine(s, hasLoudness));
         sb.AppendLine();
         sb.AppendLine($"Task: propose up to {count} short-form clips (Reels / TikTok / YouTube Shorts) from this video.");
         sb.AppendLine($"Each clip must be between {minSeconds} and {maxSeconds} seconds long, self-contained, and start/end on natural sentence boundaries taken from the timestamps above (do not cut mid-sentence).");
@@ -44,6 +47,8 @@ public sealed class ShortSuggester
             sb.AppendLine("Non-speech reactions are marked in brackets, e.g. [laughs], [applause]. Frequent laughter or applause around a passage is a strong signal the moment lands with an audience: weigh it heavily.");
         if (transcript.Segments.Any(s => TranscriptEvents.ContainsIntense(s.Text)))
             sb.AppendLine("Intense moments detected from the audio are marked [big laugh], [loud cheering] or [shouting]. These are the emotional peaks: clips built around them, with a few seconds of setup before, are usually the strongest.");
+        if (hasLoudness)
+            sb.AppendLine("Each line starts with its audio energy, e.g. (+7 dB): how far its loudest moment rises above the speaker's normal level. 0 to +3 dB is ordinary speech, +4 to +6 animated, +7 and above a burst (laugh, shout, excitement). Treat clusters of high-energy lines as candidate climaxes, and end clips shortly after their energy peak.");
 
         const string system =
             "You are a senior short-form video editor and growth strategist who has produced hundreds of viral clips for TikTok, Instagram Reels and YouTube Shorts. " +
