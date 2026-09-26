@@ -67,6 +67,6 @@ Classic, Bold Pop (MrBeast/Hormozi), Karaoke Highlight (spoken word lights up), 
 
 ## Notes
 
-- Transcript and suggestions are saved next to the video as `<video>.shortgen.json`, so reopening the same file restores them.
+- Everything about a video (transcript, suggestions and which are ticked, camera cuts, caption positions, stickers, generated files) is saved next to it as `<video>.shortgen.json`. The app reopens the last video at startup, so you can go straight to editing or regenerating a short without downloading again. Any other downloaded video can be picked from the library on the Video tab.
 - Word-level caption timing is interpolated inside each Whisper segment by character length.
 - Private Instagram/TikTok posts cannot be downloaded. If a site breaks, use Settings -> "Update yt-dlp".

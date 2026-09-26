@@ -111,7 +111,8 @@ public sealed class ShortSuggestion
     public CameraKeyframe? CameraAt(double relativeTime) => Keyframes.ActiveAt(Camera, relativeTime);
 
     [JsonIgnore] public double Duration => EndSeconds - StartSeconds;
-    [JsonIgnore] public bool Selected { get; set; } = true;
+    /// <summary>Ticked for generation / editing. Persisted so the app reopens in the same state.</summary>
+    [JsonPropertyName("selected")] public bool Selected { get; set; } = true;
 }
 
 public interface IKeyframe

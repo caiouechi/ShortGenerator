@@ -40,8 +40,8 @@ public sealed class MainForm : Form
     private readonly TabPage _tabTranscript = new("2. Transcript");
     private readonly TabPage _tabChatGpt = new("3. Ask ChatGPT");
     private readonly TabPage _tabSuggest = new("4. Short suggestions");
-    private readonly TabPage _tabEditor = new("5. Edit & preview");
-    private readonly TabPage _tabGenerate = new("6. Generate shorts");
+    private readonly TabPage _tabGenerate = new("5. Generate shorts");
+    private readonly TabPage _tabEditor = new("6. Edit & preview");
 
     // editor tab
     private readonly ListView _editClips = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
@@ -187,7 +187,7 @@ public sealed class MainForm : Form
         top.Controls.Add(_settingsBtn, 5, 0);
 
         // tabs
-        _tabs.TabPages.AddRange(new[] { _tabVideo, _tabTranscript, _tabChatGpt, _tabSuggest, _tabEditor, _tabGenerate });
+        _tabs.TabPages.AddRange(new[] { _tabVideo, _tabTranscript, _tabChatGpt, _tabSuggest, _tabGenerate, _tabEditor });
         BuildVideoTab();
         BuildTranscriptTab();
         BuildChatGptTab();
@@ -390,7 +390,7 @@ public sealed class MainForm : Form
     private void BuildEditorTab()
     {
         _editorHint.Text = "Pick a short on the left. Drag the caption on the video to place it from the current time on. 'Camera mode' shows the whole frame: drag the 9:16 box and scroll to zoom to add a camera cut at the current time. " +
-                           "'Auto camera' follows faces. Fix wrong words in the Text column (F2 or start typing). Style, framing and words-per-caption come from '6. Generate shorts'.";
+                           "'Auto camera' follows faces. Fix wrong words in the Text column (F2 or start typing). Style, framing and words-per-caption come from '5. Generate shorts'.";
 
         // left: list of selected shorts + timeline of camera cuts and caption positions
         var left = new Panel { Dock = DockStyle.Left, Width = 290, Padding = new Padding(6) };
@@ -640,7 +640,11 @@ public sealed class MainForm : Form
         _suggestList.SelectedIndexChanged += (_, _) => ShowSuggestionDetail();
         _suggestList.ItemChecked += (_, e) =>
         {
-            if (e.Item.Tag is ShortSuggestion s) s.Selected = e.Item.Checked;
+            if (e.Item.Tag is ShortSuggestion s && s.Selected != e.Item.Checked)
+            {
+                s.Selected = e.Item.Checked;
+                if (!_populatingSuggestions) SaveProject(); // ticks survive a restart
+            }
             UpdateGenerateEnabled();
         };
         _suggestList.DoubleClick += (_, _) => EditSelectedClip();
@@ -848,11 +852,27 @@ public sealed class MainForm : Form
         _video = info;
         _transcript = null;
         _suggestions = null;
+        _editing = null;
         _segments.Items.Clear();
         _suggestList.Items.Clear();
         _results.Items.Clear();
+        _editClips.Items.Clear();
+        _keyframes.Items.Clear();
+        _editSegments.Rows.Clear();
         _suggestDetail.Text = "";
         _summary.Text = "";
+
+        // Remember this video so the next start reopens it with everything that was saved for it.
+        _settings.LastVideoPath = info.FilePath;
+        try { SettingsStore.Save(_settings); } catch { }
+
+        _generated = new List<GeneratedFile>();
+        bool hasProject = TryLoadProject(info.FilePath, out var project);
+        // A locally opened file keeps the title / creator / source recorded when it was downloaded.
+        if (hasProject && project.Video is { } pv && info.Source == VideoSource.LocalFile && !string.IsNullOrWhiteSpace(pv.Title))
+        {
+            info.Title = pv.Title; info.Uploader = pv.Uploader; info.Url = pv.Url; info.Source = pv.Source;
+        }
 
         var dur = TimeSpan.FromSeconds(info.DurationSeconds);
         _videoInfo.Text =
@@ -869,8 +889,8 @@ public sealed class MainForm : Form
         _analyze.Enabled = false;
         _saveSrt.Enabled = _saveTxt.Enabled = false;
 
-        // Restore a previous session for this file (transcript + suggestions) if one exists.
-        if (TryLoadProject(info.FilePath, out var project))
+        // Restore a previous session for this file (transcript, suggestions, generated files) if one exists.
+        if (hasProject)
         {
             if (project.Transcript is { Segments.Count: > 0 })
             {
@@ -888,9 +908,29 @@ public sealed class MainForm : Form
                 ShowSuggestions();
                 Log("Restored saved suggestions.");
             }
+            _generated = project.Generated ?? new List<GeneratedFile>();
+            if (project.Generated is { Count: > 0 })
+            {
+                int shown = 0;
+                foreach (var g in project.Generated.Where(g => File.Exists(g.Path)))
+                {
+                    _results.Items.Add(new ListViewItem(new[] { g.Title, "done", g.Path }) { Tag = g.Path });
+                    shown++;
+                }
+                if (shown > 0) Log($"Restored {shown} generated short(s).");
+            }
         }
         UpdateGenerateEnabled();
         _tabs.SelectedTab = _transcript is null ? _tabVideo : (_suggestions is null ? _tabSuggest : _tabGenerate);
+    }
+
+    /// <summary>Reopens the video used last time, if it still exists.</summary>
+    public async Task ReopenLastVideoAsync()
+    {
+        var last = _settings.LastVideoPath;
+        if (string.IsNullOrWhiteSpace(last) || !File.Exists(last)) return;
+        Log($"Reopening last video: {Path.GetFileName(last)}");
+        await OpenLocalFileAsync(last);
     }
 
     // ------------------------------------------------------------------ step 2: transcript
@@ -1428,6 +1468,7 @@ public sealed class MainForm : Form
 
     private void ShowSuggestions()
     {
+        _populatingSuggestions = true;
         _suggestList.BeginUpdate();
         _suggestList.Items.Clear();
         if (_suggestions is not null)
@@ -1443,9 +1484,12 @@ public sealed class MainForm : Form
             _summary.Text = string.IsNullOrWhiteSpace(_suggestions.VideoSummary) ? "" : "Video summary: " + _suggestions.VideoSummary;
         }
         _suggestList.EndUpdate();
+        _populatingSuggestions = false;
         if (_suggestList.Items.Count > 0) _suggestList.Items[0].Selected = true;
         UpdateGenerateEnabled();
     }
+
+    private bool _populatingSuggestions;
 
     private void ShowSuggestionDetail()
     {
@@ -1593,9 +1637,14 @@ public sealed class MainForm : Form
                 item.SubItems[1].Text = r.Success ? "done" : "failed";
                 item.SubItems[2].Text = r.Success ? r.OutputPath : r.Error ?? "";
                 item.Tag = r.OutputPath;
-                if (r.Success) ok++;
+                if (r.Success)
+                {
+                    ok++;
+                    _generated.Add(new GeneratedFile { Title = s.Title, Path = r.OutputPath, When = DateTime.Now });
+                }
                 i++;
             }
+            SaveProject();
             Log($"Finished: {ok}/{selected.Count} shorts generated in {sub}");
             if (ok > 0) OpenPath(sub);
         });
@@ -1696,7 +1745,17 @@ public sealed class MainForm : Form
         public VideoInfo? Video { get; set; }
         public Transcript? Transcript { get; set; }
         public SuggestionResponse? Suggestions { get; set; }
+        public List<GeneratedFile>? Generated { get; set; }
     }
+
+    private sealed class GeneratedFile
+    {
+        public string Title { get; set; } = "";
+        public string Path { get; set; } = "";
+        public DateTime When { get; set; }
+    }
+
+    private List<GeneratedFile> _generated = new();
 
     private static string ProjectPath(string videoPath) => Path.ChangeExtension(videoPath, ".shortgen.json");
 
@@ -1705,7 +1764,7 @@ public sealed class MainForm : Form
         if (_video is null) return;
         try
         {
-            var p = new ProjectFile { Video = _video, Transcript = _transcript, Suggestions = _suggestions };
+            var p = new ProjectFile { Video = _video, Transcript = _transcript, Suggestions = _suggestions, Generated = _generated };
             File.WriteAllText(ProjectPath(_video.FilePath), JsonSerializer.Serialize(p, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) { Log("Could not save project file: " + ex.Message); }

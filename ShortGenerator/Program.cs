@@ -21,6 +21,8 @@ internal static class Program
             // "--open <file>" loads a local video at startup (dev convenience), then "--tab N" selects a step.
             if (openArg >= 0 && openArg + 1 < args.Length && File.Exists(args[openArg + 1]))
                 await form.OpenLocalFileAsync(args[openArg + 1]);
+            else
+                await form.ReopenLastVideoAsync(); // pick up where the user left off
             if (tabArg >= 0 && tabArg + 1 < args.Length && int.TryParse(args[tabArg + 1], out var tab))
                 form.SelectTab(tab);
         };

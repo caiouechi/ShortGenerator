@@ -13,6 +13,8 @@ public sealed class AppSettings
     public string WhisperModel { get; set; } = "Base";
     public string WhisperLanguage { get; set; } = "auto";
     public bool DetectReactions { get; set; } = true;
+    /// <summary>Video that was open when the app was last used; reopened automatically at startup.</summary>
+    public string? LastVideoPath { get; set; }
     public int SuggestionCount { get; set; } = 6;
     public int MinShortSeconds { get; set; } = 15;
     public int MaxShortSeconds { get; set; } = 60;
