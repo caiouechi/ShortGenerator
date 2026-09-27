@@ -116,6 +116,8 @@ public sealed class ClipPlayer : UserControl
 
     /// <summary>Camera edit mode: shows the whole source frame with a draggable 9:16 box (scroll to zoom).</summary>
     public Task SetCameraModeAsync(bool on) => Exec($"setCameraMode({(on ? "true" : "false")})");
+    /// <summary>Approximates the render's colour treatment with a CSS filter on the preview video.</summary>
+    public Task SetLookAsync(string css) => Exec($"setLook({System.Text.Json.JsonSerializer.Serialize(css)})");
 
     /// <summary>Pushes caption chunks (absolute times) and the visual style to the page.</summary>
     public Task SetCaptionsAsync(IReadOnlyList<TranscriptSegment> clipSegments, double clipStart, CaptionStyle style, int fontSizeOverride, int wordsPerCaption, CropMode crop, bool enabled, bool includeReactions)
@@ -184,6 +186,7 @@ function setCaptions(c,s){chunks=c;st=s;lastIdx=-1;layout();render(true);}
 function setCamera(list){camera=list||[];liveCam=null;layout();render(true);}
 function setCaptionPositions(list){capPos=list||[];render(true);}
 function setCameraMode(on){cameraMode=!!on;liveCam=null;layout();render(true);}
+function setLook(f){v.style.filter=f||'none';bg.style.filter=((f&&f!=='none')?f+' ':'')+'blur(24px) brightness(.7)';}
 
 function activeAt(list,t){const rel=t-range.s;let best=null;for(const k of list){if(k.t<=rel+0.001)best=k;else break;}return best||(list.length?list[0]:null);}
 v.addEventListener('play',()=>post({playing:true}));

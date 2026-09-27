@@ -56,6 +56,9 @@ public sealed class ShortRenderer
                     break;
             }
 
+            var look = VisualLook.Get(options.Look);
+            if (look.Filter.Length > 0) filters.Add(look.Filter);
+
             bool hasCaptions = options.AddCaptions && transcript is not null;
             if (hasCaptions)
             {
@@ -153,6 +156,8 @@ public sealed class ShortRenderer
                      "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2";
             }
             else vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2";
+            var coverLook = VisualLook.Get(options.Look);
+            if (coverLook.Filter.Length > 0) vf += "," + coverLook.Filter;
 
             await _ffmpeg.RunAsync(new[]
             {

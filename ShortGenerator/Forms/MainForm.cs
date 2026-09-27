@@ -33,6 +33,7 @@ public sealed class MainForm : Form
     private readonly FancyButton _libraryLoad = new() { Text = "Load selected", Width = 120, Enabled = false };
     private readonly FancyButton _libraryTranscribe = new() { Text = "Transcribe selected", Width = 170, Enabled = false };
     private readonly FancyButton _libraryOpenFolder = new() { Text = "Open downloads folder", Width = 160 };
+    private readonly FancyButton _libraryDelete = new() { Text = "Delete", Width = 90, Enabled = false };
 
     // ---- tabs ----
     private readonly TabControl _tabs = new() { Dock = DockStyle.Fill };
@@ -49,8 +50,8 @@ public sealed class MainForm : Form
     private readonly ListView _editClips = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
     private readonly ClipPlayer _player = new() { Dock = DockStyle.Fill };
     private readonly FancyButton _playPause = new() { Text = "Play", Width = 80 };
-    private readonly TrackBar _timeline = new() { Minimum = 0, Maximum = 1000, TickStyle = TickStyle.None, Dock = DockStyle.Fill, AutoSize = false, Height = 30 };
-    private readonly Label _timeLabel = new() { AutoSize = false, Width = 130, TextAlign = ContentAlignment.MiddleLeft };
+    private readonly TimelineBar _timeline = new() { Maximum = 1000, Dock = DockStyle.Fill, Height = 30 };
+    private readonly Label _timeLabel = new() { AutoSize = true, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(6, 10, 0, 0) };
     private readonly NumericUpDown _clipStart = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
     private readonly NumericUpDown _clipEnd = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
     private readonly FancyButton _renderPreview = new() { Text = "Render preview", Width = 160 };
@@ -63,6 +64,9 @@ public sealed class MainForm : Form
     private readonly Label _coverInfo = new() { AutoSize = true, MaximumSize = new Size(170, 0), ForeColor = Color.DimGray };
     private readonly CheckBox _cameraMode = new() { Text = "Camera mode", AutoSize = false, Appearance = Appearance.Button, TextAlign = ContentAlignment.MiddleCenter, Width = 110, Height = 28 };
     private readonly FancyButton _autoCamera = new() { Text = "Auto camera (faces)", Width = 185 };
+    private readonly FancyButton _changeCamera = new() { Text = "Change camera", Width = 135 };
+    // face analysis per short, kept for the session so "Change camera" can offer other framings instantly
+    private readonly Dictionary<ShortSuggestion, FaceFramer.Analysis> _faces = new(ReferenceEqualityComparer.Instance);
     private readonly Label _keyframeHint = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 7, 0, 0) };
     private readonly ListView _keyframes = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
     private readonly FancyButton _keyframeDelete = new() { Text = "Delete", Width = 70 };
@@ -117,6 +121,8 @@ public sealed class MainForm : Form
     private readonly FancyButton _loadTranscript = new() { Text = "Load transcript file...", Width = 150, Enabled = false };
     private readonly FancyButton _saveSrt = new() { Text = "Save .srt", Width = 90, Enabled = false };
     private readonly FancyButton _saveTxt = new() { Text = "Save .txt", Width = 90, Enabled = false };
+    private readonly FancyButton _deleteTranscript = new() { Text = "Delete transcript", Width = 140, Enabled = false };
+    private readonly FancyButton _deleteShort = new() { Text = "Delete short", Width = 120, Enabled = false };
     private readonly ListView _segments = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true };
 
     // suggestions tab
@@ -143,6 +149,8 @@ public sealed class MainForm : Form
     private readonly CheckBox _burnHook = new() { Text = "Show the hook as a title at the start", AutoSize = true };
     private readonly CheckBox _includeReactions = new() { Text = "Show [laughs] tags in captions", AutoSize = true };
     private readonly CheckBox _autoCameraOpt = new() { Text = "Auto camera (follow faces)", Checked = true, AutoSize = true };
+    private readonly ComboBox _look = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
+    private readonly Label _lookDesc = new() { AutoSize = true, MaximumSize = new Size(300, 0), ForeColor = Color.DimGray };
     private readonly TextBox _outputFolder = new() { Width = 230 };
     private readonly FancyButton _generate = new() { Text = "Generate selected shorts", Width = 190, Height = 34, Enabled = false, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold) };
     // hand-off from Suggestions to Generate shorts, and the queue of ticked shorts shown there
@@ -379,6 +387,7 @@ public sealed class MainForm : Form
         _transcribe.Glyph = "";
         _analyze.Glyph = "";
         _gptCopy.Glyph = "";
+        _changeCamera.Glyph = "\uE89E";
         _autoCamera.Glyph = "";
         _playPause.Glyph = "";
         UpdateNavStates();
@@ -407,6 +416,7 @@ public sealed class MainForm : Form
         libBar.Controls.Add(_libraryLoad);
         libBar.Controls.Add(_libraryRefresh);
         libBar.Controls.Add(_libraryOpenFolder);
+        libBar.Controls.Add(_libraryDelete);
 
         _library.Columns.Add("File", 520);
         _library.Columns.Add("Length", 80);
@@ -424,7 +434,7 @@ public sealed class MainForm : Form
 
     private void BuildTranscriptTab()
     {
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 54, Padding = new Padding(0, 6, 0, 0), WrapContents = false };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 6, 0, 0), WrapContents = true };
         foreach (var m in Transcriber.ModelNames) _whisperModel.Items.Add(Transcriber.DescribeModel(m));
         _whisperModel.SelectedIndex = Math.Max(0, Array.IndexOf(Transcriber.ModelNames, _settings.WhisperModel));
         _language.Items.AddRange(LanguageOptions.DisplayNames);
@@ -441,6 +451,7 @@ public sealed class MainForm : Form
         bar.Controls.Add(_loadTranscript);
         bar.Controls.Add(_saveSrt);
         bar.Controls.Add(_saveTxt);
+        bar.Controls.Add(_deleteTranscript);
 
         _segments.Columns.Add("Start", 80);
         _segments.Columns.Add("End", 80);
@@ -456,7 +467,7 @@ public sealed class MainForm : Form
 
     private void BuildChatGptTab()
     {
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 54, Padding = new Padding(0, 6, 0, 0), WrapContents = false };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 6, 0, 0), WrapContents = true };
         bar.Controls.Add(_gptBuild);
         bar.Controls.Add(new Label { Text = "Shorts:", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         bar.Controls.Add(_gptCount);
@@ -515,7 +526,7 @@ public sealed class MainForm : Form
 
     private void BuildSuggestTab()
     {
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 54, Padding = new Padding(0, 6, 0, 0), WrapContents = false };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 6, 0, 0), WrapContents = true };
         _count.Value = Math.Clamp(_settings.SuggestionCount, 1, 20);
         _minSec.Value = Math.Clamp(_settings.MinShortSeconds, 5, 180);
         _maxSec.Value = Math.Clamp(_settings.MaxShortSeconds, 10, 180);
@@ -605,13 +616,16 @@ public sealed class MainForm : Form
         _generateOne.Height = 38; _generateOne.Dock = DockStyle.Fill; _generateOne.Margin = new Padding(0, 0, 0, 8);
         _renderPreview.Dock = DockStyle.Fill; _renderPreview.Margin = new Padding(0, 0, 4, 8);
         _autoCamera.Text = "Auto camera"; _autoCamera.Dock = DockStyle.Fill; _autoCamera.Margin = new Padding(4, 0, 0, 8);
-        _cameraMode.Dock = DockStyle.Fill; _cameraMode.Height = 32; _cameraMode.Margin = new Padding(0, 0, 0, 12);
+        _changeCamera.Dock = DockStyle.Fill; _changeCamera.Margin = new Padding(0, 0, 4, 12);
+        _cameraMode.Dock = DockStyle.Fill; _cameraMode.Height = 32; _cameraMode.Margin = new Padding(4, 0, 0, 12);
         actions.RowCount = 0;
         Row(_generateOne, true);
         actions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         actions.Controls.Add(_renderPreview, 0, actions.RowCount);
         actions.Controls.Add(_autoCamera, 1, actions.RowCount++);
-        Row(_cameraMode, true);
+        actions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        actions.Controls.Add(_changeCamera, 0, actions.RowCount);
+        actions.Controls.Add(_cameraMode, 1, actions.RowCount++);
         Row(new Label { Text = "Cover / thumbnail", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 0, 0, 4) }, true);
         var cover = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Dock = DockStyle.Fill, Margin = Padding.Empty };
         cover.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -667,7 +681,7 @@ public sealed class MainForm : Form
         controls.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         controls.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         controls.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-        _playPause.Width = 96; _playPause.Margin = new Padding(0, 3, 8, 3);
+        _playPause.Width = 84; _playPause.Margin = new Padding(0, 3, 6, 3);
         controls.Controls.Add(_playPause, 0, 0);
         controls.Controls.Add(_timeline, 1, 0);
         controls.Controls.Add(_timeLabel, 2, 0);
@@ -695,7 +709,7 @@ public sealed class MainForm : Form
             if (innerSet || inner.Width < 700) return;
             innerSet = true;
             inner.Panel2MinSize = 260;
-            inner.SplitterDistance = inner.Width - 400;
+            inner.SplitterDistance = inner.Width - 340;
         };
         inner.Panel1.Controls.Add(center);
         inner.Panel2.Controls.Add(right);
@@ -734,8 +748,13 @@ public sealed class MainForm : Form
         };
         folderRow.Controls.Add(_outputFolder); folderRow.Controls.Add(browse);
 
+        foreach (var l in VisualLook.All) _look.Items.Add(l.Name);
+        _look.SelectedIndex = 0;
+        _lookDesc.Text = VisualLook.All[0].Description;
         Add("Framing", _crop);
         Add("", _autoCameraOpt);
+        Add("Look", _look);
+        Add("", _lookDesc);
         Add("", _addCaptions);
         Add("Caption style", _style);
         Add("", _styleDesc);
@@ -783,7 +802,10 @@ public sealed class MainForm : Form
         _results.Columns.Add("File", 500);
         Theme.FillColumn(_results, 2);
         var resultsHost = new Panel { Dock = DockStyle.Fill };
+        var resultsBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(0, 8, 0, 0), WrapContents = false };
+        resultsBar.Controls.Add(_deleteShort);
         resultsHost.Controls.Add(_results);
+        resultsHost.Controls.Add(resultsBar);
         resultsHost.Controls.Add(new Label { Text = "Generated files (double-click to play)", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, Padding = new Padding(4, 0, 0, 0) });
         right.Panel2.Controls.Add(resultsHost);
 
@@ -803,7 +825,11 @@ public sealed class MainForm : Form
 
         _libraryRefresh.Click += (_, _) => RefreshLibrary();
         _libraryOpenFolder.Click += (_, _) => { Directory.CreateDirectory(_settings.DownloadFolder); OpenPath(_settings.DownloadFolder); };
-        _library.SelectedIndexChanged += (_, _) => _libraryLoad.Enabled = _libraryTranscribe.Enabled = _library.SelectedItems.Count > 0 && _cts is null;
+        _library.SelectedIndexChanged += (_, _) => _libraryLoad.Enabled = _libraryTranscribe.Enabled = _libraryDelete.Enabled = _library.SelectedItems.Count > 0 && _cts is null;
+        _libraryDelete.Click += (_, _) => DeleteLibraryVideo();
+        _deleteTranscript.Click += (_, _) => DeleteTranscript();
+        _deleteShort.Click += (_, _) => DeleteGeneratedShort();
+        _results.SelectedIndexChanged += (_, _) => _deleteShort.Enabled = _results.SelectedItems.Count > 0 && _cts is null;
         _library.DoubleClick += async (_, _) => await LoadFromLibraryAsync(thenTranscribe: false);
         _libraryLoad.Click += async (_, _) => await LoadFromLibraryAsync(thenTranscribe: false);
         _libraryTranscribe.Click += async (_, _) => await LoadFromLibraryAsync(thenTranscribe: true);
@@ -832,6 +858,19 @@ public sealed class MainForm : Form
             await _player.SetCameraModeAsync(_cameraMode.Checked);
         };
         _autoCamera.Click += async (_, _) => await AutoCameraAsync();
+        _changeCamera.Click += async (_, _) => await ChangeCameraAsync();
+        _look.SelectedIndexChanged += async (_, _) =>
+        {
+            var look = VisualLook.All[Math.Max(0, _look.SelectedIndex)];
+            _lookDesc.Text = look.Description;
+            if (_player.IsReady) await _player.SetLookAsync(look.Css);
+        };
+        // one click on a camera cut or caption position jumps there
+        _keyframes.SelectedIndexChanged += async (_, _) =>
+        {
+            if (_editing is not null && _keyframes.SelectedItems.Count > 0 && _keyframes.SelectedItems[0].Tag is IKeyframe k)
+                await _player.SeekAsync(_editing.StartSeconds + k.Time);
+        };
         _setCover.Click += async (_, _) =>
         {
             if (_editing is null) return;
@@ -877,6 +916,11 @@ public sealed class MainForm : Form
         _renderPreview.Click += async (_, _) => await RenderEditorPreviewAsync();
         _editSegments.CellEndEdit += (_, e) => OnSegmentEdited(e.RowIndex);
         _editSegments.CellDoubleClick += async (_, e) => { if (e.RowIndex >= 0 && e.ColumnIndex != 2) await PlayFromRowAsync(e.RowIndex); };
+        // one click on a transcript line jumps the player there (double-click plays from it)
+        _editSegments.CellClick += async (_, e) =>
+        {
+            if (e.RowIndex >= 0 && _editSegments.Rows[e.RowIndex].Tag is TranscriptSegment seg && _player.IsReady) await _player.SeekAsync(seg.Start);
+        };
         _segPlay.Click += async (_, _) => { if (_editSegments.CurrentRow is not null) await PlayFromRowAsync(_editSegments.CurrentRow.Index); };
         _segDelete.Click += (_, _) => DeleteSegmentRow();
         Shown += (_, _) => RefreshLibrary();
@@ -1123,6 +1167,95 @@ public sealed class MainForm : Form
         });
     }
 
+    // ------------------------------------------------------------------ deleting
+
+    /// <summary>Deletes the selected downloaded video with its project file, transcript files and generated shorts.</summary>
+    private void DeleteLibraryVideo()
+    {
+        if (_library.SelectedItems.Count == 0 || _library.SelectedItems[0].Tag is not string path) return;
+        var name = Path.GetFileNameWithoutExtension(path);
+        var generated = TryLoadProject(path, out var project) ? project.Generated?.Where(g => File.Exists(g.Path)).ToList() ?? new() : new();
+        var msg = $"Delete \"{name}\"?\n\nThis removes the video, its transcript and project data" +
+                  (generated.Count > 0 ? $", and the {generated.Count} generated short{(generated.Count == 1 ? "" : "s")} made from it." : ".") +
+                  "\n\nThis cannot be undone.";
+        if (MessageBox.Show(this, msg, "Delete video", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+
+        bool current = _video is not null && string.Equals(_video.FilePath, path, StringComparison.OrdinalIgnoreCase);
+        if (current) { _ = _player.PauseAsync(); ClearVideo(); }
+        int removed = 0;
+        foreach (var g in generated) { removed += TryDelete(g.Path) ? 1 : 0; TryDelete(g.CoverPath); }
+        // companions saved next to the video: project file, transcripts, covers, yt-dlp metadata
+        var dir = Path.GetDirectoryName(path)!;
+        foreach (var f in Directory.EnumerateFiles(dir, name + ".*"))
+            if (!string.Equals(f, path, StringComparison.OrdinalIgnoreCase)) TryDelete(f);
+        TryDelete(path);
+        Log($"Deleted \"{name}\" with its project data" + (removed > 0 ? $" and {removed} generated short(s)." : "."));
+        RefreshLibrary();
+    }
+
+    /// <summary>Forgets the transcript of the current video (and deletes .srt / .vtt / .txt files saved next to it).</summary>
+    private void DeleteTranscript()
+    {
+        if (_video is null || _transcript is null) return;
+        var name = Path.GetFileNameWithoutExtension(_video.FilePath);
+        var dir = Path.GetDirectoryName(_video.FilePath)!;
+        var companions = new[] { ".srt", ".vtt", ".txt" }.Select(ext => Path.Combine(dir, name + ext)).Where(File.Exists).ToList();
+        var msg = "Delete the transcript of this video?" + (companions.Count > 0 ? $"\n\nThe transcript file{(companions.Count == 1 ? "" : "s")} next to the video ({string.Join(", ", companions.Select(Path.GetFileName))}) will be deleted too." : "") +
+                  "\n\nSuggestions and shorts already made stay as they are.";
+        if (MessageBox.Show(this, msg, "Delete transcript", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+        foreach (var f in companions) TryDelete(f);
+        _transcript = null;
+        ShowTranscript();
+        SaveProject();
+        UpdateNavStates();
+        RefreshLibrary();
+        Log("Transcript deleted.");
+    }
+
+    /// <summary>Deletes the generated short selected in the results list, with its cover, and forgets it in the project.</summary>
+    private void DeleteGeneratedShort()
+    {
+        if (_results.SelectedItems.Count == 0) return;
+        var item = _results.SelectedItems[0];
+        var path = item.Tag as string;
+        var file = _generated.LastOrDefault(g => g.Path == path);
+        var title = file?.Title ?? item.Text;
+        if (MessageBox.Show(this, $"Delete the short \"{title}\" and its cover image?\n\nThis cannot be undone.", "Delete short",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+        TryDelete(path);
+        TryDelete(file?.CoverPath);
+        if (file is not null) _generated.Remove(file);
+        _results.Items.Remove(item);
+        SaveProject();
+        _publishPanel.RefreshList();
+        RefreshQueue();
+        UpdateNavStates();
+        Log($"Deleted short \"{title}\".");
+    }
+
+    private bool TryDelete(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return false;
+        try { File.Delete(path); return true; }
+        catch (Exception ex) { Log($"Could not delete {Path.GetFileName(path)}: {ex.Message}"); return false; }
+    }
+
+    /// <summary>Back to the empty state, as if no video had been opened.</summary>
+    private void ClearVideo()
+    {
+        _video = null; _transcript = null; _suggestions = null; _editing = null;
+        _generated = new List<GeneratedFile>();
+        _segments.Items.Clear(); _suggestList.Items.Clear(); _results.Items.Clear(); _editClips.Items.Clear(); _keyframes.Items.Clear(); _editSegments.Rows.Clear();
+        _suggestDetail.Text = ""; _summary.Text = ""; _videoInfo.Text = ""; _gptPrompt.Text = "";
+        _emptyVideo.Visible = _emptyTranscript.Visible = _emptySuggest.Visible = true;
+        _settings.LastVideoPath = null;
+        try { SettingsStore.Save(_settings); } catch { }
+        ShowTranscript();
+        ShowSuggestions();
+        _publishPanel.RefreshList();
+        UpdateNavStates();
+    }
+
     private void SetVideo(VideoInfo info)
     {
         _video = info;
@@ -1264,7 +1397,7 @@ public sealed class MainForm : Form
             }
         }
         _segments.EndUpdate();
-        _saveSrt.Enabled = _saveTxt.Enabled = _transcript is { Segments.Count: > 0 };
+        _saveSrt.Enabled = _saveTxt.Enabled = _deleteTranscript.Enabled = _transcript is { Segments.Count: > 0 };
         _emptyTranscript.Visible = _transcript is not { Segments.Count: > 0 };
         _analyze.Enabled = _transcript is { Segments.Count: > 0 };
     }
@@ -1487,8 +1620,12 @@ public sealed class MainForm : Form
             await PushCaptionsAsync();
         }
         await PushKeyframesAsync();
+        if (_player.IsReady) await _player.SetLookAsync(VisualLook.All[Math.Max(0, _look.SelectedIndex)].Css);
         UpdateTimeLabel(s.StartSeconds);
         _ = UpdateCoverPreviewAsync();
+        // Auto camera is the default: a short that was never framed gets face framing as soon as it opens.
+        if (s.Camera.Count == 0 && _autoCameraOpt.Checked && _crop.SelectedIndex == 0 && FaceFramer.IsSupported && _cts is null)
+            await AutoCameraAsync(silent: true);
     }
 
     /// <summary>Renders the cover frame for the current short into a temp file and shows it in the editor.</summary>
@@ -1562,6 +1699,11 @@ public sealed class MainForm : Form
         _keyframes.EndUpdate();
         int cams = _editing?.Camera.Count ?? 0, caps = _editing?.CaptionPositions.Count ?? 0;
         _keyframeHint.Text = _editing is null ? "" : $"{cams} camera cut{(cams == 1 ? "" : "s")}, {caps} caption pos.";
+        // edits show on the scrub bar: camera cuts in violet, caption positions in blue
+        if (_editing is not null && _editing.Duration > 0)
+            _timeline.SetMarks(_editing.Camera.Where(k => k.Time > 0.05).Select(k => new TimelineBar.Mark(k.Time / _editing.Duration, Theme.Nebula, $"Camera cut at {Fmt(k.Time)} ({k.Source})"))
+                .Concat(_editing.CaptionPositions.Select(k => new TimelineBar.Mark(k.Time / _editing.Duration, Theme.CosmicBlue, $"Caption moved at {Fmt(k.Time)}"))));
+        else _timeline.SetMarks(Array.Empty<TimelineBar.Mark>());
     }
 
     private async Task DeleteKeyframeAsync()
@@ -1573,25 +1715,67 @@ public sealed class MainForm : Form
     }
 
     /// <summary>Runs face detection on the current short and replaces its camera cuts.</summary>
-    private async Task AutoCameraAsync()
+    private async Task AutoCameraAsync(bool silent = false)
     {
         if (_video is null || _editing is null) return;
         if (!FaceFramer.IsSupported)
         {
-            MessageBox.Show(this, "Face detection is not available on this Windows build. Use Camera mode to place the camera manually.", "Auto camera");
+            if (!silent) MessageBox.Show(this, "Face detection is not available on this Windows build. Use Camera mode to place the camera manually.", "Auto camera");
             return;
         }
         var s = _editing;
-        if (s.Camera.Any(k => k.Source == "manual") &&
-            MessageBox.Show(this, "This short has manual camera cuts. Replace them with automatic face framing?", "Auto camera",
+        if (!silent && s.Camera.Any(k => k.Source is "manual" or "alt") &&
+            MessageBox.Show(this, "This short has camera cuts you changed. Replace them with automatic face framing?", "Auto camera",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
 
         await RunBusyAsync("Detecting faces", async ct =>
         {
-            var cuts = await new FaceFramer(_ffmpeg).DetectAsync(_video, s, ProgressReporter(), new Progress<string>(Log), ct);
-            s.Camera = cuts;
+            var analysis = await new FaceFramer(_ffmpeg).AnalyzeAsync(_video, s, ProgressReporter(), new Progress<string>(Log), ct);
+            _faces[s] = analysis;
+            s.Camera = analysis.Cuts.Select(k => new CameraKeyframe { Time = k.Time, X = k.X, Y = k.Y, Zoom = k.Zoom, Source = k.Source }).ToList();
             if (ReferenceEquals(_editing, s)) await PushKeyframesAsync(); else SaveProject();
         });
+    }
+
+    /// <summary>
+    /// Moves the camera of the cut under the playhead to the next best place to look (another person, both,
+    /// the wide shot), cycling on each click. Only that cut changes; the rest of the short keeps its framing.
+    /// </summary>
+    private async Task ChangeCameraAsync()
+    {
+        if (_video is null || _editing is null) return;
+        var s = _editing;
+        if (!_faces.TryGetValue(s, out var analysis))
+        {
+            if (!FaceFramer.IsSupported) { MessageBox.Show(this, "Face detection is not available on this Windows build. Use Camera mode to drag the camera instead.", "Change camera"); return; }
+            await RunBusyAsync("Detecting faces", async ct =>
+            {
+                _faces[s] = await new FaceFramer(_ffmpeg).AnalyzeAsync(_video, s, ProgressReporter(), new Progress<string>(Log), ct);
+            });
+            if (!_faces.TryGetValue(s, out analysis)) return;
+        }
+
+        double rel = RelativeTime;
+        var cuts = s.Camera.OrderBy(k => k.Time).ToList();
+        var current = cuts.LastOrDefault(k => k.Time <= rel + 0.001);
+        if (current is null)
+        {
+            current = new CameraKeyframe { Time = 0, X = 50, Y = 50, Zoom = 1, Source = "auto" };
+            s.Camera.Add(current);
+            cuts = s.Camera.OrderBy(k => k.Time).ToList();
+        }
+        var next = cuts.FirstOrDefault(k => k.Time > current.Time);
+        double from = current.Time, to = next?.Time ?? s.Duration;
+
+        var options = FaceFramer.Alternatives(analysis, from, to);
+        if (options.Count == 0) return;
+        // where are we now in that list? then step to the next one
+        int at = options.FindIndex(o => Math.Abs(o.Key.X - current.X) < 6 && Math.Abs(o.Key.Zoom - current.Zoom) < 0.15);
+        var pick = options[(at + 1) % options.Count];
+        current.X = pick.Key.X; current.Y = pick.Key.Y; current.Zoom = pick.Key.Zoom; current.Source = "alt";
+        await PushKeyframesAsync();
+        await _player.SeekAsync(s.StartSeconds + from);
+        _status.Text = $"Camera {Fmt(from)} - {Fmt(to)}: now on {pick.Label} ({(at + 1) % options.Count + 1} of {options.Count}). Click again for the next option.";
     }
 
     private void FillSegmentGrid(ShortSuggestion s)
@@ -1870,6 +2054,7 @@ public sealed class MainForm : Form
         BurnTitleHook = _burnHook.Checked,
         IncludeReactions = _includeReactions.Checked,
         AutoCamera = _autoCameraOpt.Checked,
+        Look = VisualLook.All[Math.Max(0, _look.SelectedIndex)].Id,
         OutputFolder = string.IsNullOrWhiteSpace(_outputFolder.Text) ? _settings.OutputFolder : _outputFolder.Text.Trim()
     };
 
@@ -2024,6 +2209,8 @@ public sealed class MainForm : Form
         _cancel.Enabled = busy;
         _download.Enabled = _downloadTranscribe.Enabled = _openLocal.Enabled = !busy;
         _libraryRefresh.Enabled = _libraryOpenFolder.Enabled = !busy;
+        _libraryDelete.Enabled = !busy && _library.SelectedItems.Count > 0;
+        _deleteShort.Enabled = !busy && _results.SelectedItems.Count > 0;
         _libraryLoad.Enabled = _libraryTranscribe.Enabled = !busy && _library.SelectedItems.Count > 0;
         _transcribe.Enabled = !busy; // with no video loaded it offers to download + transcribe the link
         _loadTranscript.Enabled = !busy && _video is not null;

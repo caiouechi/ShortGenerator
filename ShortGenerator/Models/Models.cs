@@ -230,6 +230,8 @@ public sealed class GenerateOptions
     public bool IncludeReactions { get; set; } = false;
     /// <summary>Run face detection to place the vertical crop when a short has no camera cuts yet.</summary>
     public bool AutoCamera { get; set; } = true;
+    /// <summary>Colour / exposure treatment (see VisualLook). "auto" by default, "none" leaves the picture alone.</summary>
+    public string Look { get; set; } = "auto";
 }
 
 public sealed class ShortResult

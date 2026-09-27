@@ -22,10 +22,24 @@ public sealed class FaceFramer
         get { try { return FaceDetector.IsSupported; } catch { return false; } }
     }
 
-    private sealed record Sample(double Time, double X, double Y, double Zoom, bool Found);
+    private sealed record Sample(double Time, double X, double Y, double Zoom, bool Found, List<Face> Faces);
+
+    /// <summary>One detected face, in percent of the frame (centre and height).</summary>
+    public sealed record Face(double X, double Y, double Height);
+
+    /// <summary>Everything detection learned about a short, kept so the editor can offer other framings without re-running.</summary>
+    public sealed class Analysis
+    {
+        public double Duration { get; init; }
+        public List<(double Time, List<Face> Faces)> Frames { get; init; } = new();
+        public List<CameraKeyframe> Cuts { get; init; } = new();
+    }
 
     /// <param name="samplesPerSecond">Detection rate. 2 is plenty for talking heads.</param>
     public async Task<List<CameraKeyframe>> DetectAsync(VideoInfo video, ShortSuggestion s, IProgress<double>? progress, IProgress<string> log, CancellationToken ct, double samplesPerSecond = 2)
+        => (await AnalyzeAsync(video, s, progress, log, ct, samplesPerSecond)).Cuts;
+
+    public async Task<Analysis> AnalyzeAsync(VideoInfo video, ShortSuggestion s, IProgress<double>? progress, IProgress<string> log, CancellationToken ct, double samplesPerSecond = 2)
     {
         if (!IsSupported) throw new PlatformNotSupportedException("Face detection is not available on this Windows build.");
 
@@ -59,7 +73,7 @@ public sealed class FaceFramer
             int found = samples.Count(x => x.Found);
             var cuts = ToCuts(samples, s.Duration);
             log.Report($"Camera: faces found in {found}/{samples.Count} frames -> {cuts.Count} camera cut(s) for \"{s.Title}\".");
-            return cuts;
+            return new Analysis { Duration = s.Duration, Cuts = cuts, Frames = samples.Select(x => (x.Time, x.Faces)).ToList() };
         }
         finally
         {
@@ -78,7 +92,8 @@ public sealed class FaceFramer
         using var converted = SoftwareBitmap.Convert(bmp, format);
         var faces = await detector.DetectFacesAsync(converted);
         int w = bmp.PixelWidth, h = bmp.PixelHeight;
-        if (faces.Count == 0) return new Sample(t, 50, 50, 1, false);
+        var all = faces.Select(f => new Face((f.FaceBox.X + f.FaceBox.Width / 2.0) / w * 100, (f.FaceBox.Y + f.FaceBox.Height / 2.0) / h * 100, f.FaceBox.Height / (double)h * 100)).ToList();
+        if (faces.Count == 0) return new Sample(t, 50, 50, 1, false, all);
 
         // Largest face is the active speaker most of the time. If two faces of similar size fit inside one
         // 9:16 window, frame both; otherwise follow the largest.
@@ -106,7 +121,51 @@ public sealed class FaceFramer
         double cropH = h / zoom;
         double targetCy = cy + cropH * 0.10;
 
-        return new Sample(t, cx / w * 100, targetCy / h * 100, zoom, true);
+        return new Sample(t, cx / w * 100, targetCy / h * 100, zoom, true, all);
+    }
+
+    /// <summary>Camera keyframe values that frame a face of the given size at the given centre (percent).</summary>
+    public static (double X, double Y, double Zoom) Frame(double cx, double cy, double faceHeightPct)
+    {
+        double zoom = Math.Clamp(0.20 / Math.Max(0.05, faceHeightPct / 100.0), 1.0, 1.6);
+        double cropH = 100 / zoom;
+        return (Math.Round(cx, 1), Math.Round(cy + cropH * 0.10, 1), Math.Round(zoom, 2));
+    }
+
+    /// <summary>
+    /// Other places the camera could look during [from, to): every person seen there (largest and most
+    /// present first), a two-shot when two people fit side by side, and finally the wide centred frame.
+    /// </summary>
+    public static List<(CameraKeyframe Key, string Label)> Alternatives(Analysis a, double from, double to)
+    {
+        var faces = a.Frames.Where(f => f.Time >= from && f.Time < to).SelectMany(f => f.Faces).ToList();
+        // cluster by horizontal position: faces within 15% of a cluster centre are the same person
+        var clusters = new List<List<Face>>();
+        foreach (var f in faces.OrderByDescending(f => f.Height))
+        {
+            var c = clusters.FirstOrDefault(cl => Math.Abs(cl.Average(x => x.X) - f.X) < 15);
+            if (c is null) clusters.Add(new List<Face> { f }); else c.Add(f);
+        }
+        var ranked = clusters.Where(c => c.Count >= 2).OrderByDescending(c => c.Count * c.Average(x => x.Height)).ToList();
+        var result = new List<(CameraKeyframe, string)>();
+        int n = 1;
+        foreach (var c in ranked)
+        {
+            var (x, y, z) = Frame(Median(c.Select(f => f.X)), Median(c.Select(f => f.Y)), Median(c.Select(f => f.Height)));
+            result.Add((new CameraKeyframe { Time = from, X = x, Y = y, Zoom = z, Source = "alt" }, $"person {n++}"));
+        }
+        if (ranked.Count >= 2)
+        {
+            var a1 = ranked[0]; var a2 = ranked[1];
+            double x1 = Median(a1.Select(f => f.X)), x2 = Median(a2.Select(f => f.X));
+            if (Math.Abs(x1 - x2) < 45)
+            {
+                var (x, y, _) = Frame((x1 + x2) / 2, (Median(a1.Select(f => f.Y)) + Median(a2.Select(f => f.Y))) / 2, Math.Max(Median(a1.Select(f => f.Height)), Median(a2.Select(f => f.Height))));
+                result.Add((new CameraKeyframe { Time = from, X = x, Y = Math.Round(y, 1), Zoom = 1.0, Source = "alt" }, "both"));
+            }
+        }
+        result.Add((new CameraKeyframe { Time = from, X = 50, Y = 50, Zoom = 1.0, Source = "alt" }, "wide shot"));
+        return result;
     }
 
     /// <summary>
@@ -122,7 +181,7 @@ public sealed class FaceFramer
         // fill gaps: carry the last detection forward (and the first one backward)
         var filled = new List<Sample>(samples.Count);
         Sample last = detected[0];
-        foreach (var s in samples) { if (s.Found) last = s; filled.Add(new Sample(s.Time, last.X, last.Y, last.Zoom, true)); }
+        foreach (var s in samples) { if (s.Found) last = s; filled.Add(new Sample(s.Time, last.X, last.Y, last.Zoom, true, s.Faces)); }
 
         // A cut must hold for 2 s to count, and no cut may be shorter than 3 s: short flickers read as mistakes.
         const double moveThreshold = 12, zoomThreshold = 0.25, minHold = 2.0, minCut = 3.0;
