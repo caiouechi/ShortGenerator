@@ -18,7 +18,10 @@ public sealed class ShortSuggester
         _model = string.IsNullOrWhiteSpace(model) ? "claude-opus-5" : model;
     }
 
-    public async Task<SuggestionResponse> SuggestAsync(VideoInfo video, Transcript transcript, int count, int minSeconds, int maxSeconds, IProgress<string> log, CancellationToken ct)
+    public Task<SuggestionResponse> SuggestAsync(VideoInfo video, Transcript transcript, int count, int minSeconds, int maxSeconds, IProgress<string> log, CancellationToken ct)
+        => SuggestAsync(video, transcript, count, minSeconds, maxSeconds, default, log, ct);
+
+    public async Task<SuggestionResponse> SuggestAsync(VideoInfo video, Transcript transcript, int count, int minSeconds, int maxSeconds, PostTargets targets, IProgress<string> log, CancellationToken ct)
     {
         if (transcript.Segments.Count == 0)
             throw new InvalidOperationException("The transcript is empty. Transcribe the video first.");
@@ -38,11 +41,20 @@ public sealed class ShortSuggester
         foreach (var s in transcript.Segments)
             sb.AppendLine(ChatGptExchange.FormatLine(s, hasLoudness));
         sb.AppendLine();
-        sb.AppendLine($"Task: propose up to {count} short-form clips (Reels / TikTok / YouTube Shorts) from this video.");
+        if (count > 0)
+            sb.AppendLine($"Task: propose up to {count} short-form clips (Reels / TikTok / YouTube Shorts) from this video.");
+        else
+            sb.AppendLine("Task: propose the short-form clips (Reels / TikTok / YouTube Shorts) YOU judge worth cutting from this video. Decide the number yourself: include every moment that would genuinely make a strong short and leave out filler. There is no fixed count - it might be 3, it might be 15. Do not force a number.");
+        sb.AppendLine("Read the ENTIRE transcript from the first timestamp to the last BEFORE choosing. The strongest moments are often in the middle or the end, not the opening. Spread your picks across the whole video (early, middle AND late sections) and cover the full duration - do not just take the first few minutes.");
         sb.AppendLine($"Each clip must be between {minSeconds} and {maxSeconds} seconds long, self-contained, and start/end on natural sentence boundaries taken from the timestamps above (do not cut mid-sentence).");
         sb.AppendLine("Clips should not overlap. Order them from most to least viral potential.");
         sb.AppendLine("For each clip explain concretely WHY it could go viral (hook strength, emotion, curiosity gap, controversy, relatability, payoff, quotability, pattern interrupt, etc.), quoting the transcript where useful.");
         sb.AppendLine("Write hooks, captions and hashtags in the same language as the transcript.");
+        if (targets.Any)
+        {
+            sb.AppendLine("For each clip also write ready-to-publish post text per network, tailored to how that platform is searched and consumed:");
+            foreach (var rule in ChatGptExchange.PlatformRules(targets)) sb.AppendLine("- " + rule);
+        }
         if (transcript.Segments.Any(s => TranscriptEvents.ContainsReaction(s.Text)))
             sb.AppendLine("Non-speech reactions are marked in brackets, e.g. [laughs], [applause]. Frequent laughter or applause around a passage is a strong signal the moment lands with an audience: weigh it heavily.");
         if (transcript.Segments.Any(s => TranscriptEvents.ContainsIntense(s.Text)))
@@ -55,7 +67,7 @@ public sealed class ShortSuggester
             "You judge moments by: a strong hook in the first 2 seconds, one clear idea, emotional peak or surprising payoff, quotability, and a natural ending. " +
             "You are honest: if the material is weak you say so in the scores and reasoning rather than hyping it.";
 
-        var schema = BuildSchema();
+        var schema = BuildSchema(targets);
 
         log.Report($"Asking {_model} for short suggestions...");
         var response = await client.Messages.Create(new MessageCreateParams
@@ -107,25 +119,44 @@ public sealed class ShortSuggester
         if (Math.Abs(bestEnd - s.EndSeconds) <= tolerance) s.EndSeconds = bestEnd + 0.25;
     }
 
-    private static Dictionary<string, JsonElement> BuildSchema()
+    private static Dictionary<string, JsonElement> BuildSchema(PostTargets targets)
     {
+        // Structured outputs need every property listed in "required" and additionalProperties=false,
+        // so the per-network blocks are only added when they were asked for.
+        var props = new Dictionary<string, object>
+        {
+            ["title"] = new { type = "string", description = "Short, punchy working title for the clip" },
+            ["start_seconds"] = new { type = "number", description = "Clip start, in seconds, aligned to a transcript segment start" },
+            ["end_seconds"] = new { type = "number", description = "Clip end, in seconds, aligned to a transcript segment end" },
+            ["hook"] = new { type = "string", description = "The first line the viewer hears/reads; why they will keep watching" },
+            ["why_viral"] = new { type = "string", description = "2-4 sentences explaining the viral mechanics of this moment" },
+            ["virality_score"] = new { type = "integer", minimum = 1, maximum = 10, description = "Honest 1-10 estimate of viral potential" },
+            ["emotion"] = new { type = "string", description = "Dominant emotion, e.g. surprise, humor, inspiration, outrage, curiosity" },
+            ["suggested_caption"] = new { type = "string", description = "Generic post caption to publish with the clip" },
+            ["hashtags"] = new { type = "array", items = new { type = "string" }, description = "3-6 hashtags without the # symbol" },
+        };
+        object Network(string titleDesc, string descDesc, string tagsDesc) => new
+        {
+            type = "object",
+            additionalProperties = false,
+            required = new[] { "title", "description", "tags" },
+            properties = new
+            {
+                title = new { type = "string", description = titleDesc },
+                description = new { type = "string", description = descDesc },
+                tags = new { type = "array", items = new { type = "string" }, description = tagsDesc }
+            }
+        };
+        if (targets.YouTube) props["youtube"] = Network("SEO title, max 100 characters, main keyword first", "2-4 short paragraphs; keywords and promise in the first two lines; ends with a call to action", "8-15 keyword tags, no #");
+        if (targets.TikTok) props["tiktok"] = Network("Leave empty", "Caption up to 150 characters in native TikTok tone", "3-6 hashtags without #");
+        if (targets.Instagram) props["instagram"] = Network("Leave empty", "Reels caption: scroll-stopping first line, context, call to action", "5-10 hashtags without #");
+
         var shortSchema = new
         {
             type = "object",
             additionalProperties = false,
-            required = new[] { "title", "start_seconds", "end_seconds", "hook", "why_viral", "virality_score", "emotion", "suggested_caption", "hashtags" },
-            properties = new
-            {
-                title = new { type = "string", description = "Short, punchy working title for the clip" },
-                start_seconds = new { type = "number", description = "Clip start, in seconds, aligned to a transcript segment start" },
-                end_seconds = new { type = "number", description = "Clip end, in seconds, aligned to a transcript segment end" },
-                hook = new { type = "string", description = "The first line the viewer hears/reads; why they will keep watching" },
-                why_viral = new { type = "string", description = "2-4 sentences explaining the viral mechanics of this moment" },
-                virality_score = new { type = "integer", minimum = 1, maximum = 10, description = "Honest 1-10 estimate of viral potential" },
-                emotion = new { type = "string", description = "Dominant emotion, e.g. surprise, humor, inspiration, outrage, curiosity" },
-                suggested_caption = new { type = "string", description = "Post caption to publish with the clip" },
-                hashtags = new { type = "array", items = new { type = "string" }, description = "3-6 hashtags without the # symbol" }
-            }
+            required = props.Keys.ToArray(),
+            properties = props
         };
 
         return new Dictionary<string, JsonElement>

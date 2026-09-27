@@ -43,6 +43,8 @@ public sealed class MainForm : Form
     private readonly TabPage _tabSuggest = new("4. Short suggestions");
     private readonly TabPage _tabGenerate = new("5. Generate shorts");
     private readonly TabPage _tabEditor = new("6. Edit & preview");
+    private readonly TabPage _tabPublish = new("7. Publish");
+    private readonly PublishPanel _publishPanel = new();
 
     // editor tab
     private readonly ListView _editClips = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
@@ -54,6 +56,12 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _clipEnd = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
     private readonly FancyButton _renderPreview = new() { Text = "Render preview", Width = 160 };
     private readonly FancyButton _generateOne = new() { Text = "Generate this short", Width = 190 };
+    // cover / thumbnail for the short
+    private readonly PictureBox _coverPreview = new() { Width = 96, Height = 170, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(19, 24, 52), BorderStyle = BorderStyle.None };
+    private readonly FancyButton _setCover = new() { Text = "Use this frame", Width = 170, Glyph = "" };
+    private readonly FancyButton _pickCoverImage = new() { Text = "Choose image...", Width = 170 };
+    private readonly FancyButton _clearCover = new() { Text = "Reset to default", Width = 170 };
+    private readonly Label _coverInfo = new() { AutoSize = true, MaximumSize = new Size(170, 0), ForeColor = Color.DimGray };
     private readonly CheckBox _cameraMode = new() { Text = "Camera mode", AutoSize = false, Appearance = Appearance.Button, TextAlign = ContentAlignment.MiddleCenter, Width = 110, Height = 28 };
     private readonly FancyButton _autoCamera = new() { Text = "Auto camera (faces)", Width = 185 };
     private readonly Label _keyframeHint = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 7, 0, 0) };
@@ -77,6 +85,7 @@ public sealed class MainForm : Form
 
     // chatgpt tab
     private readonly NumericUpDown _gptCount = new() { Minimum = 1, Maximum = 20, Value = 6, Width = 55 };
+    private readonly CheckBox _gptAuto = new() { Text = "AI decides", AutoSize = true, Margin = new Padding(8, 8, 4, 0) };
     private readonly NumericUpDown _gptMin = new() { Minimum = 5, Maximum = 180, Value = 15, Width = 55 };
     private readonly NumericUpDown _gptMax = new() { Minimum = 10, Maximum = 180, Value = 60, Width = 55 };
     private readonly FancyButton _gptBuild = new() { Text = "Generate prompt", Width = 160 };
@@ -104,7 +113,7 @@ public sealed class MainForm : Form
     // transcript tab
     private readonly FancyButton _transcribe = new() { Text = "Transcribe", Width = 130 };
     private readonly ComboBox _whisperModel = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
-    private readonly TextBox _language = new() { Width = 60 };
+    private readonly ComboBox _language = new() { Width = 130, DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly CheckBox _detectReactions = new() { Text = "Detect laughs / reactions", AutoSize = true };
     private readonly FancyButton _loadTranscript = new() { Text = "Load transcript file...", Width = 150, Enabled = false };
     private readonly FancyButton _saveSrt = new() { Text = "Save .srt", Width = 90, Enabled = false };
@@ -114,6 +123,7 @@ public sealed class MainForm : Form
     // suggestions tab
     private readonly FancyButton _analyze = new() { Text = "Analyze with Claude", Width = 185, Enabled = false };
     private readonly NumericUpDown _count = new() { Minimum = 1, Maximum = 20, Width = 55 };
+    private readonly CheckBox _autoCount = new() { Text = "AI decides", AutoSize = true, Margin = new Padding(8, 8, 4, 0) };
     private readonly NumericUpDown _minSec = new() { Minimum = 5, Maximum = 180, Width = 55 };
     private readonly NumericUpDown _maxSec = new() { Minimum = 10, Maximum = 180, Width = 55 };
     private readonly FancyButton _addClip = new() { Text = "Add custom clip", Width = 120, Enabled = false };
@@ -189,6 +199,7 @@ public sealed class MainForm : Form
         ("Suggestions", "The moments most likely to travel, with the reasoning and a score.", "Pick your moments", ""),
         ("Generate shorts", "Framing, captions and camera. Render the shorts you ticked.", "Render the clips", ""),
         ("Edit & preview", "Play a short, fix words, place the caption, direct the camera.", "Fine-tune each short", ""),
+        ("Publish", "Send the rendered shorts, with cover and per-network text, to the Instagram, TikTok and YouTube accounts connected on galiluna.", "Post with galiluna", ""),
     };
 
     private void BuildLayout()
@@ -218,7 +229,7 @@ public sealed class MainForm : Form
         bar.Controls.Add(_settingsBtn, 4, 0);
 
         // pages (the tab strip is hidden; the side navigation drives it)
-        _tabs.TabPages.AddRange(new[] { _tabVideo, _tabTranscript, _tabChatGpt, _tabSuggest, _tabGenerate, _tabEditor });
+        _tabs.TabPages.AddRange(new[] { _tabVideo, _tabTranscript, _tabChatGpt, _tabSuggest, _tabGenerate, _tabEditor, _tabPublish });
         _tabs.SelectedIndexChanged += (_, _) =>
         {
             _nav.SelectedIndex = _tabs.SelectedIndex;
@@ -231,6 +242,7 @@ public sealed class MainForm : Form
         BuildSuggestTab();
         BuildEditorTab();
         BuildGenerateTab();
+        BuildPublishTab();
 
         // activity drawer: status line always visible, log expands on demand
         _drawer = new Panel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(24, 6, 24, 6), BackColor = Theme.Elevated };
@@ -309,6 +321,19 @@ public sealed class MainForm : Form
         _nav.SetState(3, suggestions ? StepState.Done : (transcript ? StepState.Ready : StepState.Pending));
         _nav.SetState(4, generated ? StepState.Done : (suggestions ? StepState.Ready : StepState.Pending));
         _nav.SetState(5, suggestions ? StepState.Ready : StepState.Pending);
+        _nav.SetState(6, _generated.Any(g => g.Sent) ? StepState.Done : (generated ? StepState.Ready : StepState.Pending));
+    }
+
+    /// <summary>Step 7: publishing goes through galiluna's Shorts API; the panel owns the UI and
+    /// this form only lends it the settings, the generated files and the project save.</summary>
+    private void BuildPublishTab()
+    {
+        _publishPanel.ClientFactory = () => SettingsStore.CreateGaliLunaClient(_settings);
+        _publishPanel.Files = () => _generated;
+        _publishPanel.Saved = () => { SaveProject(); UpdateNavStates(); };
+        _publishPanel.Log = Log;
+        _publishPanel.OpenSettings = OpenSettings;
+        _tabPublish.Controls.Add(_publishPanel);
     }
 
     private void ApplyTheme()
@@ -385,7 +410,8 @@ public sealed class MainForm : Form
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 54, Padding = new Padding(0, 6, 0, 0), WrapContents = false };
         foreach (var m in Transcriber.ModelNames) _whisperModel.Items.Add(Transcriber.DescribeModel(m));
         _whisperModel.SelectedIndex = Math.Max(0, Array.IndexOf(Transcriber.ModelNames, _settings.WhisperModel));
-        _language.Text = _settings.WhisperLanguage;
+        _language.Items.AddRange(LanguageOptions.DisplayNames);
+        _language.SelectedIndex = LanguageOptions.IndexOfCode(_settings.WhisperLanguage);
         bar.Controls.Add(_transcribe);
         bar.Controls.Add(new Label { Text = "Whisper model:", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         bar.Controls.Add(_whisperModel);
@@ -416,10 +442,14 @@ public sealed class MainForm : Form
         bar.Controls.Add(_gptBuild);
         bar.Controls.Add(new Label { Text = "Shorts:", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         bar.Controls.Add(_gptCount);
+        _gptAuto.CheckedChanged += (_, _) => _gptCount.Enabled = !_gptAuto.Checked;
+        bar.Controls.Add(_gptAuto);
         bar.Controls.Add(new Label { Text = "Length (s):", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         bar.Controls.Add(_gptMin);
         bar.Controls.Add(new Label { Text = "to", AutoSize = true, Margin = new Padding(4, 7, 4, 0) });
         bar.Controls.Add(_gptMax);
+        bar.Controls.Add(new Label { Text = "Post text for:", AutoSize = true, Margin = new Padding(18, 7, 4, 0) });
+        bar.Controls.Add(PostTargetBoxes());
         bar.Controls.Add(new Label { Text = "", Width = 20 });
         bar.Controls.Add(_gptCopy);
         bar.Controls.Add(_gptSave);
@@ -471,10 +501,14 @@ public sealed class MainForm : Form
         bar.Controls.Add(_analyze);
         bar.Controls.Add(new Label { Text = "Shorts:", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         bar.Controls.Add(_count);
+        _autoCount.CheckedChanged += (_, _) => _count.Enabled = !_autoCount.Checked;
+        bar.Controls.Add(_autoCount);
         bar.Controls.Add(new Label { Text = "Length (s):", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         bar.Controls.Add(_minSec);
         bar.Controls.Add(new Label { Text = "to", AutoSize = true, Margin = new Padding(4, 7, 4, 0) });
         bar.Controls.Add(_maxSec);
+        bar.Controls.Add(new Label { Text = "Post text for:", AutoSize = true, Margin = new Padding(18, 7, 4, 0) });
+        bar.Controls.Add(PostTargetBoxes());
         bar.Controls.Add(new Label { Text = "", Width = 20 });
         bar.Controls.Add(_previewClip);
         bar.Controls.Add(_editClip);
@@ -516,21 +550,31 @@ public sealed class MainForm : Form
         _keyframes.Columns.Add("What", 60);
         _keyframes.Columns.Add("Details", 170);
         var leftSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, FixedPanel = FixedPanel.Panel1 };
-        SplitWhenSized(leftSplit, 150);
+        SplitWhenSized(leftSplit, 120);
         var clipsHost = new Panel { Dock = DockStyle.Fill };
         clipsHost.Controls.Add(_editClips);
         clipsHost.Controls.Add(new Label { Text = "Selected shorts", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
 
-        // actions for the current short (wrap into two rows)
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 140, WrapContents = true, Padding = new Padding(0, 8, 0, 0) };
+        // actions for the current short (wrap into rows), then the cover / thumbnail chooser
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 330, WrapContents = true, Padding = new Padding(0, 8, 0, 0) };
         _generateOne.Width = 276; _generateOne.Height = 36; _generateOne.Margin = new Padding(0, 0, 0, 6);
         _renderPreview.Width = 135; _renderPreview.Margin = new Padding(0, 0, 6, 6);
         _autoCamera.Width = 135; _autoCamera.Text = "Auto camera"; _autoCamera.Margin = new Padding(0, 0, 0, 6);
-        _cameraMode.Width = 276; _cameraMode.Height = 32; _cameraMode.Margin = new Padding(0, 0, 0, 0);
+        _cameraMode.Width = 276; _cameraMode.Height = 32; _cameraMode.Margin = new Padding(0, 0, 0, 10);
         actions.Controls.Add(_generateOne);
         actions.Controls.Add(_renderPreview);
         actions.Controls.Add(_autoCamera);
         actions.Controls.Add(_cameraMode);
+        actions.Controls.Add(new Label { Text = "Cover / thumbnail", AutoSize = false, Width = 276, Height = 22, ForeColor = Color.DimGray, Margin = new Padding(0, 0, 0, 2) });
+        _coverPreview.Margin = new Padding(0, 0, 8, 0);
+        actions.Controls.Add(_coverPreview);
+        var coverButtons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
+        _setCover.Margin = _pickCoverImage.Margin = _clearCover.Margin = new Padding(0, 0, 0, 6);
+        coverButtons.Controls.Add(_setCover);
+        coverButtons.Controls.Add(_pickCoverImage);
+        coverButtons.Controls.Add(_clearCover);
+        coverButtons.Controls.Add(_coverInfo);
+        actions.Controls.Add(coverButtons);
 
         var kfHost = new Panel { Dock = DockStyle.Fill };
         var kfBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(0, 10, 0, 0), WrapContents = false };
@@ -603,7 +647,7 @@ public sealed class MainForm : Form
         }
 
         foreach (var s in CaptionStyle.All) _style.Items.Add(s.Name);
-        _style.SelectedIndex = Math.Max(0, CaptionStyle.All.ToList().FindIndex(s => s.Id == "bold-pop"));
+        _style.SelectedIndex = Math.Max(0, CaptionStyle.All.ToList().FindIndex(s => s.Id == "karaoke"));
         _crop.Items.AddRange(new object[] { "Vertical 9:16 - center crop", "Vertical 9:16 - blurred background", "Keep original aspect ratio" });
         _crop.SelectedIndex = 0;
         _outputFolder.Text = _settings.OutputFolder;
@@ -668,6 +712,7 @@ public sealed class MainForm : Form
         {
             if (_tabs.SelectedTab == _tabVideo) RefreshLibrary();
             else if (_tabs.SelectedTab == _tabEditor) await EnterEditorAsync();
+            else if (_tabs.SelectedTab == _tabPublish) await _publishPanel.RefreshAsync();
             else await _player.PauseAsync();
         };
 
@@ -687,6 +732,30 @@ public sealed class MainForm : Form
             await _player.SetCameraModeAsync(_cameraMode.Checked);
         };
         _autoCamera.Click += async (_, _) => await AutoCameraAsync();
+        _setCover.Click += async (_, _) =>
+        {
+            if (_editing is null) return;
+            _editing.CoverTime = RelativeTime;
+            _editing.CoverImage = null;
+            SaveProject();
+            await UpdateCoverPreviewAsync();
+        };
+        _pickCoverImage.Click += async (_, _) =>
+        {
+            if (_editing is null) return;
+            using var d = new OpenFileDialog { Title = "Choose a cover image", Filter = "Images|*.png;*.jpg;*.jpeg;*.webp|All files|*.*" };
+            if (d.ShowDialog(this) != DialogResult.OK) return;
+            _editing.CoverImage = d.FileName;
+            SaveProject();
+            await UpdateCoverPreviewAsync();
+        };
+        _clearCover.Click += async (_, _) =>
+        {
+            if (_editing is null) return;
+            _editing.CoverTime = null; _editing.CoverImage = null;
+            SaveProject();
+            await UpdateCoverPreviewAsync();
+        };
         _keyframes.DoubleClick += async (_, _) =>
         {
             if (_editing is not null && _keyframes.SelectedItems.Count > 0 && _keyframes.SelectedItems[0].Tag is IKeyframe k)
@@ -793,7 +862,7 @@ public sealed class MainForm : Form
             _settings = SettingsStore.Load();
             RebuildServices();
             _whisperModel.SelectedIndex = Math.Max(0, Array.IndexOf(Transcriber.ModelNames, _settings.WhisperModel));
-            _language.Text = _settings.WhisperLanguage;
+            _language.SelectedIndex = LanguageOptions.IndexOfCode(_settings.WhisperLanguage);
             _count.Value = Math.Clamp(_settings.SuggestionCount, 1, 20);
             _minSec.Value = Math.Clamp(_settings.MinShortSeconds, 5, 180);
             _maxSec.Value = Math.Clamp(_settings.MaxShortSeconds, 10, 180);
@@ -1055,7 +1124,7 @@ public sealed class MainForm : Form
     {
         if (_video is null) return;
         var model = Transcriber.ModelNames[Math.Max(0, _whisperModel.SelectedIndex)];
-        var language = string.IsNullOrWhiteSpace(_language.Text) ? "auto" : _language.Text.Trim();
+        var language = LanguageOptions.CodeAt(_language.SelectedIndex);
 
         _tabs.SelectedTab = _tabTranscript;
         _settings.DetectReactions = _detectReactions.Checked;
@@ -1139,6 +1208,45 @@ public sealed class MainForm : Form
 
     // ------------------------------------------------------------------ step 3: ChatGPT (manual copy / paste)
 
+    // ---- which networks the AI writes post text for (YouTube title/description/keywords, TikTok and Instagram captions) ----
+    private readonly List<(CheckBox Box, string Key)> _targetBoxes = new();
+    private bool _syncingTargets;
+
+    /// <summary>Three synced checkboxes (YouTube / TikTok / Instagram). Several bars can host their own copy.</summary>
+    private FlowLayoutPanel PostTargetBoxes()
+    {
+        var panel = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty, Padding = Padding.Empty };
+        foreach (var (key, label, checkedNow) in new[]
+        {
+            ("youtube", "YouTube", _settings.PostTextYouTube),
+            ("tiktok", "TikTok", _settings.PostTextTikTok),
+            ("instagram", "Instagram", _settings.PostTextInstagram),
+        })
+        {
+            var box = new CheckBox { Text = label, AutoSize = true, Checked = checkedNow, Margin = new Padding(0, 8, 10, 0) };
+            var k = key;
+            box.CheckedChanged += (_, _) =>
+            {
+                if (_syncingTargets) return;
+                _syncingTargets = true;
+                foreach (var (other, otherKey) in _targetBoxes) if (otherKey == k && !ReferenceEquals(other, box)) other.Checked = box.Checked;
+                _syncingTargets = false;
+                switch (k)
+                {
+                    case "youtube": _settings.PostTextYouTube = box.Checked; break;
+                    case "tiktok": _settings.PostTextTikTok = box.Checked; break;
+                    default: _settings.PostTextInstagram = box.Checked; break;
+                }
+                try { SettingsStore.Save(_settings); } catch { }
+            };
+            _targetBoxes.Add((box, key));
+            panel.Controls.Add(box);
+        }
+        return panel;
+    }
+
+    private PostTargets CurrentTargets => new(_settings.PostTextYouTube, _settings.PostTextTikTok, _settings.PostTextInstagram);
+
     private void BuildChatGptPrompt()
     {
         if (_video is null || _transcript is not { Segments.Count: > 0 })
@@ -1148,7 +1256,8 @@ public sealed class MainForm : Form
             return;
         }
         int max = (int)Math.Max(_gptMax.Value, _gptMin.Value + 5);
-        _gptPrompt.Text = ChatGptExchange.BuildPrompt(_video, _transcript, (int)_gptCount.Value, (int)_gptMin.Value, max);
+        int count = _gptAuto.Checked ? 0 : (int)_gptCount.Value;
+        _gptPrompt.Text = ChatGptExchange.BuildPrompt(_video, _transcript, count, (int)_gptMin.Value, max, CurrentTargets);
         _gptCopy.Enabled = _gptSave.Enabled = true;
         _status.Text = $"Prompt ready ({_gptPrompt.Text.Length:N0} characters). Copy it and paste into ChatGPT.";
     }
@@ -1265,6 +1374,29 @@ public sealed class MainForm : Form
         }
         await PushKeyframesAsync();
         UpdateTimeLabel(s.StartSeconds);
+        _ = UpdateCoverPreviewAsync();
+    }
+
+    /// <summary>Renders the cover frame for the current short into a temp file and shows it in the editor.</summary>
+    private async Task UpdateCoverPreviewAsync()
+    {
+        if (_video is null || _editing is null) { _coverPreview.Image = null; _coverInfo.Text = ""; return; }
+        var s = _editing;
+        _coverInfo.Text = s.CoverImage is not null ? "Custom image" : s.CoverTime is { } t ? $"Frame at {Fmt(t)}" : "Default: 1 s into the clip";
+        try
+        {
+            var tmp = Path.Combine(Path.GetTempPath(), "shortgen_covers", $"{Guid.NewGuid():N}.mp4");
+            Directory.CreateDirectory(Path.GetDirectoryName(tmp)!);
+            var path = await _renderer.ExportCoverAsync(_video, s, ReadOptions(), tmp, CancellationToken.None);
+            if (path is null || !ReferenceEquals(_editing, s)) return;
+            using var fs = File.OpenRead(path);
+            var img = Image.FromStream(fs);
+            var old = _coverPreview.Image;
+            _coverPreview.Image = img;
+            old?.Dispose();
+            try { File.Delete(path); } catch { }
+        }
+        catch (Exception ex) { Log("Cover preview failed: " + ex.Message); }
     }
 
     /// <summary>Current position relative to the clip start, rounded to 0.1 s.</summary>
@@ -1482,12 +1614,13 @@ public sealed class MainForm : Form
             return;
         }
 
-        int count = (int)_count.Value, min = (int)_minSec.Value, max = (int)Math.Max(_maxSec.Value, _minSec.Value + 5);
+        int count = _autoCount.Checked ? 0 : (int)_count.Value;
+        int min = (int)_minSec.Value, max = (int)Math.Max(_maxSec.Value, _minSec.Value + 5);
         await RunBusyAsync("Analyzing with Claude", async ct =>
         {
             var suggester = new ShortSuggester(apiKey, _settings.ClaudeModel);
             var custom = _suggestions?.Shorts.Where(s => s.Emotion == "custom").ToList() ?? new List<ShortSuggestion>();
-            _suggestions = await suggester.SuggestAsync(_video, _transcript, count, min, max, new Progress<string>(Log), ct);
+            _suggestions = await suggester.SuggestAsync(_video, _transcript, count, min, max, CurrentTargets, new Progress<string>(Log), ct);
             _suggestions.Shorts.AddRange(custom);
             ShowSuggestions();
             SaveProject();
@@ -1536,6 +1669,24 @@ public sealed class MainForm : Form
         if (!string.IsNullOrWhiteSpace(s.WhyViral)) { H("Why this could go viral"); P(s.WhyViral); }
         if (!string.IsNullOrWhiteSpace(s.SuggestedCaption)) { H("Suggested post caption"); P(s.SuggestedCaption); }
         if (s.Hashtags.Count > 0) { H("Hashtags"); P(string.Join(" ", s.Hashtags.Select(h => h.StartsWith('#') ? h : "#" + h))); }
+        void Net(string name, NetworkPost? p, bool hashtags)
+        {
+            if (p is null) return;
+            H(name);
+            var sbNet = new System.Text.StringBuilder();
+            if (!string.IsNullOrWhiteSpace(p.Title)) sbNet.AppendLine("Title: " + p.Title);
+            if (!string.IsNullOrWhiteSpace(p.Description)) sbNet.AppendLine(p.Description.Trim());
+            if (p.Tags.Count > 0) sbNet.AppendLine((hashtags ? "" : "Keywords: ") + string.Join(hashtags ? " " : ", ", p.Tags.Select(t => hashtags ? "#" + t.TrimStart('#') : t)));
+            P(sbNet.ToString().TrimEnd());
+        }
+        Net("YouTube", s.Youtube, false);
+        Net("TikTok", s.Tiktok, true);
+        Net("Instagram", s.Instagram, true);
+        if (s.CoverImage is not null || s.CoverTime is not null)
+        {
+            H("Cover");
+            P(s.CoverImage is not null ? $"Custom image: {Path.GetFileName(s.CoverImage)}" : $"Frame at {Fmt(s.CoverTime!.Value)} into the clip");
+        }
         if (_transcript is not null)
         {
             H("Transcript of this clip");
@@ -1647,7 +1798,8 @@ public sealed class MainForm : Form
             foreach (var s in selected)
             {
                 ct.ThrowIfCancellationRequested();
-                _status.Text = $"Generating {i}/{selected.Count}: {s.Title}";
+                _busyTitle = $"Generating {i}/{selected.Count}: {s.Title}";
+                _status.Text = _busyTitle + "...";
                 var item = _results.Items.Add(new ListViewItem(new[] { s.Title, "rendering...", "" }));
                 if (options.CropMode == CropMode.VerticalCrop && options.AutoCamera && s.Camera.Count == 0 && FaceFramer.IsSupported)
                 {
@@ -1670,12 +1822,21 @@ public sealed class MainForm : Form
                 if (r.Success)
                 {
                     ok++;
-                    _generated.Add(new GeneratedFile { Title = s.Title, Path = r.OutputPath, When = DateTime.Now });
+                    _generated.Add(new GeneratedFile
+                    {
+                        Title = s.Title, Path = r.OutputPath, When = DateTime.Now,
+                        // Carried along so the Publish step has the post text without finding the suggestion again.
+                        Caption = s.SuggestedCaption, Hashtags = s.Hashtags?.ToList(),
+                        Youtube = s.Youtube, Tiktok = s.Tiktok, Instagram = s.Instagram,
+                        // Cover / thumbnail exported next to the video so publishing can send it along.
+                        CoverPath = await _renderer.ExportCoverAsync(_video, s, options, r.OutputPath, ct),
+                    });
                 }
                 i++;
             }
             SaveProject();
-            Log($"Finished: {ok}/{selected.Count} shorts generated in {sub}");
+            _publishPanel.RefreshList();
+            Log($"Finished: {ok}/{selected.Count} shorts generated in {sub}" + (ok > 0 ? ". Open the Publish step to send them to your accounts." : ""));
             if (ok > 0) OpenPath(sub);
         });
     }
@@ -1725,13 +1886,19 @@ public sealed class MainForm : Form
         UpdateGenerateEnabled();
         // No wait cursor: long jobs run in the background and the rest of the app stays usable
         // (browse tabs, read the log, tweak caption options). The progress bar and status show activity.
+        _busyTitle = busy ? title : "";
         _progress.Value = 0;
         if (busy) _status.Text = title + "...";
     }
 
+    /// <summary>The current operation's label, so the progress reporter can show "Transcribing - 70%" next to the bar.</summary>
+    private string _busyTitle = "";
+
     private IProgress<double> ProgressReporter() => new Progress<double>(p =>
     {
-        _progress.Value = (int)Math.Clamp(p * 100, 0, 100);
+        int pct = (int)Math.Clamp(p * 100, 0, 100);
+        _progress.Value = pct;
+        _status.Text = _busyTitle.Length == 0 ? $"{pct}%" : $"{_busyTitle} - {pct}%";
     });
 
     private void Log(string message)
@@ -1776,13 +1943,6 @@ public sealed class MainForm : Form
         public Transcript? Transcript { get; set; }
         public SuggestionResponse? Suggestions { get; set; }
         public List<GeneratedFile>? Generated { get; set; }
-    }
-
-    private sealed class GeneratedFile
-    {
-        public string Title { get; set; } = "";
-        public string Path { get; set; } = "";
-        public DateTime When { get; set; }
     }
 
     private List<GeneratedFile> _generated = new();

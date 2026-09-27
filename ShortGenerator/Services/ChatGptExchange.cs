@@ -13,6 +13,20 @@ namespace ShortGenerator.Services;
 public static class ChatGptExchange
 {
     public static string BuildPrompt(VideoInfo video, Transcript transcript, int count, int minSeconds, int maxSeconds)
+        => BuildPrompt(video, transcript, count, minSeconds, maxSeconds, default);
+
+    /// <summary>Platform guidance shared by the ChatGPT prompt and the Claude prompt.</summary>
+    public static IEnumerable<string> PlatformRules(PostTargets targets)
+    {
+        if (targets.YouTube)
+            yield return "youtube: a searchable title (max 100 characters, main keyword first, no clickbait lies), a description of 2-4 short paragraphs where the first two lines carry the keywords and the promise (they show before 'more'), ending with a call to action, and 8-15 keyword tags (single words or short phrases, no #).";
+        if (targets.TikTok)
+            yield return "tiktok: a caption of at most 150 characters that reads like a native TikTok hook (casual, curiosity or bold claim, can include 1-2 emojis), and 3-6 hashtags without # mixing one broad (fyp-style), two niche and the topic.";
+        if (targets.Instagram)
+            yield return "instagram: a Reels caption with a first line that stops the scroll, 1-3 short lines of context, a question or call to action, and 5-10 hashtags without # (mix of niche and medium-size tags, no banned or spammy ones).";
+    }
+
+    public static string BuildPrompt(VideoInfo video, Transcript transcript, int count, int minSeconds, int maxSeconds, PostTargets targets)
     {
         var sb = new StringBuilder();
         sb.AppendLine("You are a senior short-form video editor and growth strategist who has produced hundreds of viral clips for TikTok, Instagram Reels and YouTube Shorts.");
@@ -26,14 +40,23 @@ public static class ChatGptExchange
         if (!string.IsNullOrWhiteSpace(transcript.Language)) sb.AppendLine($"Language: {transcript.Language}");
         sb.AppendLine();
         sb.AppendLine("# Task");
-        sb.AppendLine($"Propose up to {count} short-form clips from the transcript below.");
+        if (count > 0)
+            sb.AppendLine($"Propose up to {count} short-form clips from the transcript below.");
+        else
+            sb.AppendLine("Propose the clips YOU judge worth cutting from the transcript below. Decide the number yourself: include every moment that would genuinely make a strong short, and leave out filler. There is no fixed count - it might be 3, it might be 15. Do not force a number.");
         sb.AppendLine($"Rules:");
+        sb.AppendLine($"- Read the ENTIRE transcript from the first timestamp to the last BEFORE choosing. The strongest moments are often in the middle or the end, not the opening. Spread your picks across the whole video (early, middle AND late sections) and cover the full duration - do NOT just take the first few minutes.");
         sb.AppendLine($"- Each clip must be between {minSeconds} and {maxSeconds} seconds long and self-contained (understandable without the rest of the video).");
         sb.AppendLine("- start_seconds and end_seconds MUST be taken from the timestamps in the transcript, so the clip starts and ends on natural sentence boundaries. Never cut mid-sentence.");
         sb.AppendLine("- Clips must not overlap. Order them from most to least viral potential.");
         sb.AppendLine("- For every clip explain concretely WHY it could go viral (hook strength, emotion, curiosity gap, controversy, relatability, payoff, quotability, pattern interrupt...). Quote the transcript where useful.");
         sb.AppendLine("- Rate each clip's viral potential from 1 to 10 (10 = exceptional). Use the whole scale.");
         sb.AppendLine("- Write title, hook, caption and hashtags in the same language as the transcript.");
+        if (targets.Any)
+        {
+            sb.AppendLine("- For EACH clip also write ready-to-publish post text per network, tailored to how that platform is searched and consumed:");
+            foreach (var rule in PlatformRules(targets)) sb.AppendLine("  - " + rule);
+        }
         if (transcript.Segments.Any(s => TranscriptEvents.ContainsReaction(s.Text)))
             sb.AppendLine("- Non-speech reactions are marked in brackets, e.g. [laughs], [applause], [cheering]. Frequent laughter or applause around a passage is a strong signal that the moment lands with an audience: weigh it heavily.");
         if (transcript.Segments.Any(s => TranscriptEvents.ContainsIntense(s.Text)))
@@ -46,28 +69,50 @@ public static class ChatGptExchange
         sb.AppendLine();
         sb.AppendLine("# Output format");
         sb.AppendLine("Reply with ONLY a JSON object, no markdown, no commentary before or after, exactly in this shape:");
-        sb.AppendLine("""
-{
-  "video_summary": "one paragraph about what the video is about",
-  "shorts": [
-    {
-      "title": "short punchy working title",
-      "start_seconds": 123.4,
-      "end_seconds": 168.9,
-      "hook": "the first line the viewer hears or reads",
-      "why_viral": "2-4 sentences explaining the viral mechanics of this moment",
-      "virality_score": 8,
-      "emotion": "surprise | humor | inspiration | outrage | curiosity | ...",
-      "suggested_caption": "post caption to publish with the clip",
-      "hashtags": ["tag1", "tag2", "tag3"]
-    }
-  ]
-}
-""");
+        sb.AppendLine(OutputShape(targets));
         sb.AppendLine();
         sb.AppendLine(hasLoudness ? "# Transcript (start - end in seconds, then audio energy above normal speech)" : "# Transcript (start - end in seconds)");
         foreach (var s in transcript.Segments)
             sb.AppendLine(FormatLine(s, hasLoudness));
+        return sb.ToString();
+    }
+
+    /// <summary>The JSON shape shown to the assistant, with a block per requested network.</summary>
+    public static string OutputShape(PostTargets targets)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("{");
+        sb.AppendLine("  \"video_summary\": \"one paragraph about what the video is about\",");
+        sb.AppendLine("  \"shorts\": [");
+        sb.AppendLine("    {");
+        sb.AppendLine("      \"title\": \"short punchy working title\",");
+        sb.AppendLine("      \"start_seconds\": 123.4,");
+        sb.AppendLine("      \"end_seconds\": 168.9,");
+        sb.AppendLine("      \"hook\": \"the first line the viewer hears or reads\",");
+        sb.AppendLine("      \"why_viral\": \"2-4 sentences explaining the viral mechanics of this moment\",");
+        sb.AppendLine("      \"virality_score\": 8,");
+        sb.AppendLine("      \"emotion\": \"surprise | humor | inspiration | outrage | curiosity | ...\",");
+        sb.AppendLine("      \"suggested_caption\": \"generic post caption to publish with the clip\",");
+        sb.Append("      \"hashtags\": [\"tag1\", \"tag2\", \"tag3\"]");
+        if (targets.YouTube)
+        {
+            sb.AppendLine(",");
+            sb.Append("      \"youtube\": { \"title\": \"SEO title, max 100 chars\", \"description\": \"2-4 short paragraphs, keywords in the first two lines, ends with a call to action\", \"tags\": [\"keyword one\", \"keyword two\"] }");
+        }
+        if (targets.TikTok)
+        {
+            sb.AppendLine(",");
+            sb.Append("      \"tiktok\": { \"title\": \"\", \"description\": \"caption up to 150 chars, native TikTok tone\", \"tags\": [\"fyp\", \"niche1\", \"niche2\", \"topic\"] }");
+        }
+        if (targets.Instagram)
+        {
+            sb.AppendLine(",");
+            sb.Append("      \"instagram\": { \"title\": \"\", \"description\": \"Reels caption: scroll-stopping first line, context, call to action\", \"tags\": [\"tag1\", \"tag2\", \"tag3\", \"tag4\", \"tag5\"] }");
+        }
+        sb.AppendLine();
+        sb.AppendLine("    }");
+        sb.AppendLine("  ]");
+        sb.AppendLine("}");
         return sb.ToString();
     }
 
@@ -128,11 +173,40 @@ public static class ChatGptExchange
                 else if (tags.ValueKind == JsonValueKind.String)
                     s.Hashtags = tags.GetString()!.Split(new[] { ' ', ',', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(t => t.TrimStart('#')).ToList();
             }
+            s.Youtube = Network(e, "youtube");
+            s.Tiktok = Network(e, "tiktok");
+            s.Instagram = Network(e, "instagram");
             if (string.IsNullOrWhiteSpace(s.Title)) s.Title = $"Clip {result.Shorts.Count + 1}";
             if (s.EndSeconds > s.StartSeconds) result.Shorts.Add(s);
         }
         if (result.Shorts.Count == 0) throw new FormatException("No usable clips were found in the pasted text.");
         return result;
+    }
+
+    /// <summary>Reads a per-network block; tolerant of "caption"/"keywords"/"hashtags" naming and string tag lists.</summary>
+    private static NetworkPost? Network(JsonElement e, string name)
+    {
+        if (!e.TryGetProperty(name, out var n) || n.ValueKind != JsonValueKind.Object) return null;
+        var post = new NetworkPost
+        {
+            Title = Str(n, "title"),
+            Description = Str(n, "description", "caption", "text"),
+        };
+        foreach (var key in new[] { "tags", "keywords", "hashtags" })
+        {
+            if (!n.TryGetProperty(key, out var tags)) continue;
+            if (tags.ValueKind == JsonValueKind.Array)
+                post.Tags.AddRange(tags.EnumerateArray().Select(t => t.ToString().Trim().TrimStart('#')).Where(t => t.Length > 0));
+            else if (tags.ValueKind == JsonValueKind.String)
+            {
+                // "keyword one, keyword two" keeps phrases; "#canada #eu #news" splits on spaces
+                var raw = tags.GetString()!;
+                var separators = raw.Contains(',') || raw.Contains('\n') ? new[] { ',', '\n' } : new[] { ' ', '\t' };
+                post.Tags.AddRange(raw.Split(separators, StringSplitOptions.RemoveEmptyEntries).Select(t => t.Trim().TrimStart('#')).Where(t => t.Length > 0));
+            }
+        }
+        post.Tags = post.Tags.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return string.IsNullOrWhiteSpace(post.Title) && string.IsNullOrWhiteSpace(post.Description) && post.Tags.Count == 0 ? null : post;
     }
 
     private static string Str(JsonElement e, params string[] names)

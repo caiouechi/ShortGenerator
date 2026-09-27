@@ -116,6 +116,58 @@ public sealed class ShortRenderer
         return result;
     }
 
+    /// <summary>
+    /// Exports the cover / thumbnail for a short as a JPEG next to the video: the user's custom image when
+    /// set, otherwise the frame at <see cref="ShortSuggestion.CoverTime"/> (default 1 s in), framed with the
+    /// camera cut active at that moment so it matches the rendered video. Returns the JPEG path or null.
+    /// </summary>
+    public async Task<string?> ExportCoverAsync(VideoInfo video, ShortSuggestion s, GenerateOptions options, string videoOutPath, CancellationToken ct)
+    {
+        var coverPath = Path.ChangeExtension(videoOutPath, ".cover.jpg");
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(s.CoverImage) && File.Exists(s.CoverImage))
+            {
+                var (w, h) = OutputSize(video, options.CropMode);
+                // normalise the custom image to the output size (cover-fit) so every network gets the right aspect
+                await _ffmpeg.RunAsync(new[]
+                {
+                    "-y", "-i", s.CoverImage,
+                    "-vf", $"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}",
+                    "-frames:v", "1", "-q:v", "2", coverPath
+                }, null, null, 0, ct);
+                return coverPath;
+            }
+
+            double t = Math.Clamp(s.CoverTime ?? Math.Min(1.0, s.Duration / 2), 0, Math.Max(0, s.Duration - 0.05));
+            string vf;
+            if (options.CropMode == CropMode.VerticalCrop && video.Width > 0 && video.Height > 0)
+            {
+                var k = s.CameraAt(t) ?? CameraMath.Centered();
+                var r = CameraMath.CropRect(video.Width, video.Height, k);
+                vf = $"crop={r.W}:{r.H}:{r.X}:{r.Y},scale=1080:1920:flags=lanczos";
+            }
+            else if (options.CropMode == CropMode.VerticalBlurredBackground)
+            {
+                vf = "split=2[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:8[bgb];" +
+                     "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2";
+            }
+            else vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2";
+
+            await _ffmpeg.RunAsync(new[]
+            {
+                "-y", "-ss", (s.StartSeconds + t).ToString("F3", CultureInfo.InvariantCulture), "-i", video.FilePath,
+                "-filter_complex", "[0:v]" + vf + "[vout]", "-map", "[vout]",
+                "-frames:v", "1", "-q:v", "2", coverPath
+            }, null, null, 0, ct);
+            return coverPath;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
     public static (int W, int H) OutputSize(VideoInfo video, CropMode mode)
     {
         if (mode != CropMode.Original) return (1080, 1920);

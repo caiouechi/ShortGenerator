@@ -1,4 +1,5 @@
 using ShortGenerator.Forms.Controls;
+using ShortGenerator.Models;
 using ShortGenerator.Services;
 
 namespace ShortGenerator.Forms;
@@ -9,7 +10,7 @@ public sealed class SettingsForm : Form
     private readonly TextBox _apiKey = new() { UseSystemPasswordChar = true, Width = 420 };
     private readonly TextBox _model = new() { Width = 420 };
     private readonly ComboBox _whisperModel = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 420 };
-    private readonly TextBox _language = new() { Width = 120 };
+    private readonly ComboBox _language = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
     private readonly TextBox _downloadFolder = new() { Width = 380 };
     private readonly TextBox _outputFolder = new() { Width = 380 };
     private readonly TextBox _toolsFolder = new() { Width = 380 };
@@ -19,6 +20,12 @@ public sealed class SettingsForm : Form
     private readonly Label _toolStatus = new() { AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(520, 0) };
     private readonly FancyButton _downloadTools = new() { Text = "Download missing tools", AutoSize = true };
     private readonly FancyButton _updateYtDlp = new() { Text = "Update yt-dlp", AutoSize = true };
+    // galiluna (Shorts API): environment, personal API key, test
+    private readonly ComboBox _glEnv = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
+    private readonly TextBox _glUrl = new() { Width = 420 };
+    private readonly TextBox _glKey = new() { UseSystemPasswordChar = true, Width = 420, PlaceholderText = "glk_..." };
+    private readonly FancyButton _glTest = new() { Text = "Test connection", AutoSize = true };
+    private readonly Label _glStatus = new() { AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(440, 0) };
 
     public SettingsForm(AppSettings settings)
     {
@@ -29,7 +36,7 @@ public sealed class SettingsForm : Form
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
         Padding = new Padding(12);
-        ClientSize = new Size(620, 560);
+        ClientSize = new Size(620, 760);
 
         var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true };
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
@@ -61,7 +68,7 @@ public sealed class SettingsForm : Form
         Add("Claude model", _model);
         Add("Whisper model", _whisperModel);
         Add("Spoken language", _language);
-        Add("", new Label { Text = "'auto' detects the language. Use ISO codes like en, pt, es to force one.", AutoSize = true, ForeColor = Color.DimGray });
+        Add("", new Label { Text = "Auto-detect can guess wrong on short or noisy clips. Pick English or Portuguese to force it.", AutoSize = true, ForeColor = Color.DimGray });
         Add("Suggestions", _count);
         Add("Min short (s)", _minSec);
         Add("Max short (s)", _maxSec);
@@ -73,6 +80,17 @@ public sealed class SettingsForm : Form
         toolsRow.Controls.Add(_downloadTools); toolsRow.Controls.Add(_updateYtDlp);
         Add("", toolsRow);
         Add("", _toolStatus);
+
+        // ---- galiluna: publish shorts to the accounts connected on galiluna.com ----
+        Add("", new Label { Text = "galiluna", AutoSize = true, Font = Theme.Body(10.5f), ForeColor = Theme.Heading, Margin = new Padding(0, 14, 0, 0) });
+        Add("", new Label { Text = "Publish shorts to the Instagram and TikTok accounts connected on galiluna. Sign in to galiluna in your browser, open the account menu, Connected apps, create a key and paste it here. No password is stored.", AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(440, 0) });
+        Add("Environment", _glEnv);
+        Add("Address", _glUrl);
+        Add("API key", _glKey);
+        var glRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+        glRow.Controls.Add(_glTest);
+        Add("", glRow);
+        Add("", _glStatus);
 
         var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Bottom, Height = 40 };
         var ok = new FancyButton { Text = "Save", Width = 90, DialogResult = DialogResult.OK };
@@ -88,13 +106,27 @@ public sealed class SettingsForm : Form
         _apiKey.Text = SettingsStore.GetApiKey(settings) is { } key && !string.IsNullOrEmpty(settings.ProtectedApiKey) ? key : "";
         _model.Text = settings.ClaudeModel;
         _whisperModel.SelectedIndex = Math.Max(0, Array.IndexOf(Transcriber.ModelNames, settings.WhisperModel));
-        _language.Text = settings.WhisperLanguage;
+        _language.Items.AddRange(LanguageOptions.DisplayNames);
+        _language.SelectedIndex = LanguageOptions.IndexOfCode(settings.WhisperLanguage);
         _count.Value = Math.Clamp(settings.SuggestionCount, 1, 20);
         _minSec.Value = Math.Clamp(settings.MinShortSeconds, 5, 180);
         _maxSec.Value = Math.Clamp(settings.MaxShortSeconds, 10, 180);
         _downloadFolder.Text = settings.DownloadFolder;
         _outputFolder.Text = settings.OutputFolder;
         _toolsFolder.Text = settings.ToolsFolder;
+
+        _glEnv.Items.AddRange(new object[] { "Production (galiluna.com)", "Development (torontodeveloper.ca)", "Custom address" });
+        _glUrl.Text = string.IsNullOrWhiteSpace(settings.GaliLunaBaseUrl) ? GaliLunaClient.PrdBaseUrl : settings.GaliLunaBaseUrl;
+        _glEnv.SelectedIndex = _glUrl.Text.TrimEnd('/') == GaliLunaClient.PrdBaseUrl ? 0 : _glUrl.Text.TrimEnd('/') == GaliLunaClient.DevBaseUrl ? 1 : 2;
+        _glUrl.ReadOnly = _glEnv.SelectedIndex != 2;
+        _glEnv.SelectedIndexChanged += (_, _) =>
+        {
+            if (_glEnv.SelectedIndex == 0) _glUrl.Text = GaliLunaClient.PrdBaseUrl;
+            else if (_glEnv.SelectedIndex == 1) _glUrl.Text = GaliLunaClient.DevBaseUrl;
+            _glUrl.ReadOnly = _glEnv.SelectedIndex != 2;
+        };
+        _glKey.Text = SettingsStore.GetGaliLunaKey(settings) ?? "";
+        _glTest.Click += async (_, _) => await TestGaliLunaAsync();
 
         _downloadTools.Click += async (_, _) => await RunToolActionAsync(async (loc, log) => await loc.DownloadMissingToolsAsync(log, CancellationToken.None));
         _updateYtDlp.Click += async (_, _) => await RunToolActionAsync(async (loc, log) => log.Report(await loc.UpdateYtDlpAsync(CancellationToken.None)));
@@ -138,12 +170,35 @@ public sealed class SettingsForm : Form
         }
     }
 
+    private async Task TestGaliLunaAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_glKey.Text)) { _glStatus.Text = "Paste the API key first."; _glStatus.ForeColor = Theme.Warning; return; }
+        _glTest.Enabled = false;
+        _glStatus.ForeColor = Color.DimGray;
+        _glStatus.Text = "Contacting galiluna...";
+        try
+        {
+            using var client = new GaliLunaClient(_glUrl.Text.Trim(), _glKey.Text);
+            var accounts = await client.GetAccountsAsync(CancellationToken.None);
+            _glStatus.Text = accounts.Summary;
+            _glStatus.ForeColor = Theme.Success;
+        }
+        catch (Exception ex)
+        {
+            _glStatus.Text = ex.Message;
+            _glStatus.ForeColor = Theme.Danger;
+        }
+        finally { _glTest.Enabled = true; }
+    }
+
     private void ApplyToSettings()
     {
         SettingsStore.SetApiKey(_settings, _apiKey.Text);
+        SettingsStore.SetGaliLunaKey(_settings, _glKey.Text);
+        _settings.GaliLunaBaseUrl = _glUrl.Text.Trim().TrimEnd('/');
         _settings.ClaudeModel = _model.Text.Trim();
         _settings.WhisperModel = Transcriber.ModelNames[Math.Max(0, _whisperModel.SelectedIndex)];
-        _settings.WhisperLanguage = string.IsNullOrWhiteSpace(_language.Text) ? "auto" : _language.Text.Trim();
+        _settings.WhisperLanguage = LanguageOptions.CodeAt(_language.SelectedIndex);
         // DetectReactions is edited on the Transcript tab and carried over unchanged here.
         _settings.SuggestionCount = (int)_count.Value;
         _settings.MinShortSeconds = (int)_minSec.Value;

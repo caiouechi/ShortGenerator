@@ -86,6 +86,28 @@ public sealed class ShortSuggestion
     [JsonPropertyName("suggested_caption")] public string SuggestedCaption { get; set; } = "";
     [JsonPropertyName("hashtags")] public List<string> Hashtags { get; set; } = new();
 
+    /// <summary>Platform-specific post text (only the networks that were requested are filled).</summary>
+    [JsonPropertyName("youtube")] public NetworkPost? Youtube { get; set; }
+    [JsonPropertyName("tiktok")] public NetworkPost? Tiktok { get; set; }
+    [JsonPropertyName("instagram")] public NetworkPost? Instagram { get; set; }
+
+    /// <summary>Cover / thumbnail frame, seconds from the clip start. Null = first second of the clip.</summary>
+    [JsonPropertyName("cover_time")] public double? CoverTime { get; set; }
+    /// <summary>Custom cover image chosen by the user (absolute path). Takes precedence over <see cref="CoverTime"/>.</summary>
+    [JsonPropertyName("cover_image")] public string? CoverImage { get; set; }
+
+    /// <summary>The post text for a network, falling back to the generic caption / hashtags.</summary>
+    public NetworkPost PostFor(string network)
+    {
+        var p = network.ToLowerInvariant() switch { "youtube" => Youtube, "tiktok" => Tiktok, "instagram" => Instagram, _ => null };
+        return new NetworkPost
+        {
+            Title = string.IsNullOrWhiteSpace(p?.Title) ? Title : p!.Title,
+            Description = string.IsNullOrWhiteSpace(p?.Description) ? SuggestedCaption : p!.Description,
+            Tags = p?.Tags is { Count: > 0 } ? p.Tags : Hashtags
+        };
+    }
+
     /// <summary>Legacy single caption anchor (percent of frame). Migrated into <see cref="CaptionPositions"/> on load.</summary>
     [JsonPropertyName("caption_x")] public double? CaptionX { get; set; }
     [JsonPropertyName("caption_y")] public double? CaptionY { get; set; }
@@ -110,6 +132,23 @@ public sealed class ShortSuggestion
     [JsonIgnore] public double Duration => EndSeconds - StartSeconds;
     /// <summary>Ticked for generation / editing. Persisted so the app reopens in the same state.</summary>
     [JsonPropertyName("selected")] public bool Selected { get; set; } = true;
+}
+
+/// <summary>Title, description / caption and keyword tags written for one social network.</summary>
+public sealed class NetworkPost
+{
+    [JsonPropertyName("title")] public string Title { get; set; } = "";
+    /// <summary>YouTube description, or the TikTok / Instagram caption.</summary>
+    [JsonPropertyName("description")] public string Description { get; set; } = "";
+    /// <summary>Keywords for YouTube tags, hashtags (without #) for TikTok and Instagram.</summary>
+    [JsonPropertyName("tags")] public List<string> Tags { get; set; } = new();
+}
+
+/// <summary>Which networks the AI should write post text for.</summary>
+public readonly record struct PostTargets(bool YouTube, bool TikTok, bool Instagram)
+{
+    public bool Any => YouTube || TikTok || Instagram;
+    public static PostTargets All => new(true, true, true);
 }
 
 public interface IKeyframe

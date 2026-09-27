@@ -8,6 +8,11 @@ Windows desktop app (.NET 9, WinForms) that turns a long video into captioned sh
 4. **Suggest shorts**: clips imported from ChatGPT, or produced by Claude via the API, each with a hook, a virality score out of 10 and a plain-language explanation of *why* that moment could go viral.
 5. **Edit & preview**: an in-app player (Edge WebView2) plays each selected short with the captions overlaid live in the chosen style. Fix wrong words in the transcript lines of that short, delete lines, and nudge the start/end.
 6. **Generate** the selected clips with ffmpeg: 9:16 reframing (center crop, blurred background or original), burned-in captions in one of six styles, optional hook title, optional `[laughs]`-style reaction tags.
+7. **Publish**: send the rendered shorts to the Instagram, TikTok and YouTube accounts connected on galiluna. In Settings, paste a personal API key from galiluna (account menu, Connected apps) and press Test connection; the Publish step then lists your accounts, lets you tick which ones each short goes to (Instagram Reels; TikTok as drafts or direct), and records the outcome per account in the project file. No galiluna password is ever stored here.
+
+**Post text per network.** On the Ask ChatGPT and Suggestions steps, tick YouTube / TikTok / Instagram to have the AI write tailored post text for each short: a searchable YouTube title, description and keyword tags; a native TikTok caption with hashtags; an Instagram Reels caption with hashtags. The Publish step shows a "Text for" selector to review or edit each version, and sends one request per network so every platform receives its own text (the generic caption is the fallback).
+
+**Cover / thumbnail.** In Edit & preview, "Use this frame" makes the current frame the cover, "Choose image..." uses your own picture, and the preview shows the result. On generation the cover is exported as `<short>.cover.jpg` next to the video (framed with the camera cut active at that moment) and sent to galiluna as the `cover` part of the publish request. galiluna's Shorts API needs to accept that part to forward it as the Reel cover, the TikTok cover frame and the YouTube thumbnail; until then the field is ignored server-side.
 
 **Laughs and reactions.** The Transcript tab has a "Detect laughs / reactions" checkbox. When on, Whisper is nudged to write non-speech reactions as tags, normalised to `[laughs]`, `[applause]`, `[music]`, `[cheering]`, `[crying]`, `[sighs]`, `[gasps]`, `[pause]`. A loudness pass over the audio then flags genuine bursts (a moment in the loudest 5% of the recording, well above normal speech and clearly louder than the seconds around it): `[laughs]` becomes `[big laugh]`, `[cheering]` becomes `[loud cheering]`, and a loud line with no reaction tag gets `[shouting]`. Each line's peak above normal speech is shown in the "Peak dB" column, intense lines in red. The ChatGPT and Claude prompts are told to treat these as the emotional peaks. When the checkbox is off, all annotations are stripped. A separate checkbox on the Generate tab decides whether tags are shown in the burned captions. Detection is heuristic: Whisper only tags what it hears as a distinct reaction, and the loudness rule can be fooled by music stings or a change of speaker.
 
@@ -45,6 +50,8 @@ dotnet run --project ShortGenerator/ShortGenerator.csproj
 | `Forms/Theme.cs` | Galiluna brand palette, header, buttons, progress bar |
 | `Forms/CaptionPreview.cs` | GDI+ preview of the selected caption style |
 | `Forms/ClipPlayer.cs` | WebView2 video player with live caption overlay (Edit & preview tab) |
+| `Forms/Controls/PublishPanel.cs` | Publish step: account checklist, TikTok mode, caption, per-account outcome |
+| `Services/GaliLunaClient.cs` | Client for galiluna's Shorts API (bearer API key); contract in the CampaignStudio repo, `docs/shorts-api.md` |
 | `Services/TranscriptEvents.cs` | Normalises / strips reaction tags such as `[laughs]`, intensity upgrades |
 | `Services/AudioEnergy.cs` | Loudness profile of the audio used to flag big laughs / shouting |
 | `Services/TranscriptImporter.cs` | Loads .srt / .vtt / JSON transcripts |
