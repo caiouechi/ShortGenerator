@@ -1,3 +1,4 @@
+using System.Text;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -156,9 +157,44 @@ public sealed class GaliLunaClient : IDisposable
         throw new GaliLunaException((int)response.StatusCode, Describe((int)response.StatusCode, body));
     }
 
-    /// <summary>The browser page that starts the loopback sign-in for this app.</summary>
-    public static string AuthorizeUrl(string baseUrl, int port, string state) =>
-        $"{baseUrl.TrimEnd('/')}/ConnectedApps/Authorize?app=short-generator&port={port}&state={Uri.EscapeDataString(state)}&device={Uri.EscapeDataString(Environment.MachineName)}";
+    // ------------------------------------------------------------------ device-code sign-in (anonymous)
+
+    /// <summary>Answer of POST /api/connected-apps/device/start.</summary>
+    public sealed record DeviceStart(string UserCode, string PollToken, string VerificationUrl, string VerificationUrlBase, int ExpiresInSeconds, int IntervalSeconds);
+
+    /// <summary>Answer of POST /api/connected-apps/device/poll: status is pending, approved (with the key, once), denied, expired or claimed.</summary>
+    public sealed record DevicePoll(string Status, string? Key);
+
+    private static readonly HttpClient Anonymous = CreateAnonymous();
+
+    private static HttpClient CreateAnonymous()
+    {
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("GalilunaShortGenerator/1.0");
+        return http;
+    }
+
+    /// <summary>Starts a device-code sign-in: galiluna returns a short code the person approves in the browser.</summary>
+    public static async Task<DeviceStart> DeviceStartAsync(string baseUrl, CancellationToken ct)
+    {
+        var body = JsonSerializer.Serialize(new { app = "short-generator", device = Environment.MachineName }, Json);
+        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var response = await Anonymous.PostAsync(baseUrl.TrimEnd('/') + "/api/connected-apps/device/start", content, ct);
+        var start = await ReadAsync<DeviceStart>(response, ct);
+        if (string.IsNullOrWhiteSpace(start.UserCode) || string.IsNullOrWhiteSpace(start.PollToken))
+            throw new GaliLunaException((int)response.StatusCode, "galiluna did not return a sign-in code.");
+        return start with { IntervalSeconds = Math.Max(1, start.IntervalSeconds), ExpiresInSeconds = Math.Max(30, start.ExpiresInSeconds) };
+    }
+
+    /// <summary>One poll of the device-code sign-in. The key comes back exactly once, on the first "approved" answer.</summary>
+    public static async Task<DevicePoll> DevicePollAsync(string baseUrl, string pollToken, CancellationToken ct)
+    {
+        var body = JsonSerializer.Serialize(new { pollToken }, Json);
+        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var response = await Anonymous.PostAsync(baseUrl.TrimEnd('/') + "/api/connected-apps/device/poll", content, ct);
+        var poll = await ReadAsync<DevicePoll>(response, ct);
+        return poll with { Status = (poll.Status ?? "").Trim().ToLowerInvariant() };
+    }
 
     /// <summary>GET /api/shorts/{id}: current state; TikTok rows still processing are re-checked by galiluna.</summary>
     public async Task<ShortInfo> GetShortAsync(int id, CancellationToken ct)

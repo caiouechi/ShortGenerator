@@ -33,7 +33,6 @@ public sealed class MainForm : Form
     private readonly FancyButton _libraryLoad = new() { Text = "Load selected", Width = 120, Enabled = false };
     private readonly FancyButton _libraryTranscribe = new() { Text = "Transcribe selected", Width = 170, Enabled = false };
     private readonly FancyButton _libraryOpenFolder = new() { Text = "Open downloads folder", Width = 160 };
-    private readonly FancyButton _settingsBtn = new() { Text = "Settings", Width = 90 };
 
     // ---- tabs ----
     private readonly TabControl _tabs = new() { Dock = DockStyle.Fill };
@@ -146,6 +145,12 @@ public sealed class MainForm : Form
     private readonly CheckBox _autoCameraOpt = new() { Text = "Auto camera (follow faces)", Checked = true, AutoSize = true };
     private readonly TextBox _outputFolder = new() { Width = 230 };
     private readonly FancyButton _generate = new() { Text = "Generate selected shorts", Width = 190, Height = 34, Enabled = false, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold) };
+    // hand-off from Suggestions to Generate shorts, and the queue of ticked shorts shown there
+    private readonly FancyButton _continueToGenerate = new() { Text = "Continue with selected shorts", Width = 250, Height = 36, Enabled = false };
+    private readonly FancyButton _backToSuggestions = new() { Text = "Change selection", Width = 150 };
+    private readonly Label _selectionSummary = new() { AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.DimGray };
+    private readonly ListView _queue = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, CheckBoxes = true, HideSelection = false };
+    private readonly Label _queueTitle = new() { Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, Text = "Shorts to generate" };
     private readonly CaptionPreview _preview = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(30, 30, 30) };
     private readonly ListView _results = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true };
 
@@ -187,6 +192,7 @@ public sealed class MainForm : Form
 
     // ---- shell: side navigation + header + command bar + activity drawer ----
     private readonly SideNav _nav = new();
+    private TableLayoutPanel _commandBar = null!;
     private readonly FancyButton _activityToggle = new() { Text = "Activity", Width = 96, Glyph = "" };
     private Panel _drawer = null!;
     private bool _drawerOpen;
@@ -208,10 +214,13 @@ public sealed class MainForm : Form
         foreach (var p in Pages) _nav.Add(p.Title, p.Hint, p.Glyph);
         _nav.SelectedIndexChanged += (_, _) => { if (_tabs.SelectedIndex != _nav.SelectedIndex) _tabs.SelectedIndex = _nav.SelectedIndex; };
 
-        // command bar: the link box and the primary actions, always visible
-        var bar = new TableLayoutPanel { Dock = DockStyle.Top, Height = 58, ColumnCount = 5, Padding = new Padding(24, 12, 24, 10), BackColor = Theme.Bg };
+        _nav.SettingsClicked += (_, _) => OpenSettings();
+
+        // command bar: the link box and the source actions. It belongs to step 1 only, so it is built here
+        // and docked inside the Video page (see BuildVideoTab).
+        var bar = new TableLayoutPanel { Dock = DockStyle.Top, Height = 58, ColumnCount = 4, Padding = new Padding(0, 8, 0, 12), BackColor = Theme.Bg };
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (int i = 0; i < 4; i++) bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (int i = 0; i < 3; i++) bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _url.Font = Theme.Body(10f);
         var urlField = Theme.WrapInput(_url);
         urlField.Dock = DockStyle.Fill;
@@ -221,12 +230,11 @@ public sealed class MainForm : Form
         bar.Controls.Add(urlField, 0, 0);
         _download.Glyph = ""; _download.Width = 128; _download.Margin = new Padding(0, 1, 8, 0);
         _downloadTranscribe.Glyph = ""; _downloadTranscribe.Width = 200; _downloadTranscribe.Margin = new Padding(0, 1, 8, 0);
-        _openLocal.Glyph = ""; _openLocal.Text = "Open file"; _openLocal.Width = 118; _openLocal.Margin = new Padding(0, 1, 8, 0);
-        _settingsBtn.Glyph = ""; _settingsBtn.Width = 110; _settingsBtn.Margin = new Padding(0, 1, 0, 0);
+        _openLocal.Glyph = ""; _openLocal.Text = "Open file"; _openLocal.Width = 118; _openLocal.Margin = new Padding(0, 1, 0, 0);
         bar.Controls.Add(_download, 1, 0);
         bar.Controls.Add(_downloadTranscribe, 2, 0);
         bar.Controls.Add(_openLocal, 3, 0);
-        bar.Controls.Add(_settingsBtn, 4, 0);
+        _commandBar = bar;
 
         // pages (the tab strip is hidden; the side navigation drives it)
         _tabs.TabPages.AddRange(new[] { _tabVideo, _tabTranscript, _tabChatGpt, _tabSuggest, _tabGenerate, _tabEditor, _tabPublish });
@@ -278,7 +286,6 @@ public sealed class MainForm : Form
         var right = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
         right.Controls.Add(content);
         right.Controls.Add(_drawer);
-        right.Controls.Add(bar);
         right.Controls.Add(_header);
 
         Controls.Add(right);
@@ -345,7 +352,7 @@ public sealed class MainForm : Form
 
     private void ApplyTheme()
     {
-        foreach (var b in new[] { _download, _downloadTranscribe, _transcribe, _analyze, _generate, _libraryTranscribe, _gptBuild, _gptImport, _playPause, _generateOne }) Theme.Primary(b);
+        foreach (var b in new[] { _download, _downloadTranscribe, _transcribe, _analyze, _generate, _continueToGenerate, _libraryTranscribe, _gptBuild, _gptCopy, _gptImport, _playPause, _generateOne }) Theme.Primary(b);
         Theme.Apply(this);
         _videoInfo.Font = Theme.Body(10f);
         _videoInfo.ForeColor = Theme.TextSecondary;
@@ -365,7 +372,8 @@ public sealed class MainForm : Form
         _cameraMode.FlatAppearance.BorderColor = Theme.BorderStrong;
         _cameraMode.FlatAppearance.CheckedBackColor = Theme.Nebula;
         _generate.Font = Theme.Body(10f, FontStyle.Bold);
-        _generate.Height = 40; _generate.Width = 230; _generate.Glyph = "";
+        _generate.Height = 36; _generate.Width = 210; _generate.Glyph = "";
+        _continueToGenerate.Glyph = ""; _continueToGenerate.Font = Theme.Body(10f, FontStyle.Bold);
         _generateOne.Glyph = "";
         _renderPreview.Glyph = "";
         _transcribe.Glyph = "";
@@ -410,6 +418,7 @@ public sealed class MainForm : Form
         split.Panel2.Controls.Add(_library);
         split.Panel2.Controls.Add(libBar);
         _tabVideo.Controls.Add(split);
+        _tabVideo.Controls.Add(_commandBar);
     }
 
     private void BuildTranscriptTab()
@@ -457,9 +466,6 @@ public sealed class MainForm : Form
         bar.Controls.Add(_gptMax);
         bar.Controls.Add(new Label { Text = "Post text for:", AutoSize = true, Margin = new Padding(18, 7, 4, 0) });
         bar.Controls.Add(PostTargetBoxes());
-        bar.Controls.Add(new Label { Text = "", Width = 20 });
-        bar.Controls.Add(_gptCopy);
-        bar.Controls.Add(_gptSave);
 
         var help = new Label
         {
@@ -481,7 +487,13 @@ public sealed class MainForm : Form
         };
 
         var left = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6) };
+        // Copy sits right under the prompt, mirroring "Import" under the answer: read on the left, act, paste on the right.
+        var leftBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(0, 10, 0, 0), FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
+        _gptCopy.Width = 160; _gptCopy.Margin = new Padding(8, 0, 0, 0);
+        leftBar.Controls.Add(_gptCopy);
+        leftBar.Controls.Add(_gptSave);
         left.Controls.Add(_gptPrompt);
+        left.Controls.Add(leftBar);
         left.Controls.Add(new Label { Text = "Prompt for ChatGPT", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
         split.Panel1.Controls.Add(left);
 
@@ -540,7 +552,17 @@ public sealed class MainForm : Form
         split.Panel2.Controls.Add(_summary);
         _suggestDetail.Text = "Get suggestions from '3. Ask ChatGPT' (copy/paste) or click 'Analyze with Claude' (API key). Select one to read why it could go viral.";
 
+        // footer: tick the moments above, then move on with one clear primary action
+        var footer = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 52, ColumnCount = 2, Padding = new Padding(0, 10, 0, 0) };
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _selectionSummary.Font = Theme.Body(9f);
+        footer.Controls.Add(_selectionSummary, 0, 0);
+        _continueToGenerate.Margin = Padding.Empty;
+        footer.Controls.Add(_continueToGenerate, 1, 0);
+
         _tabSuggest.Controls.Add(split);
+        _tabSuggest.Controls.Add(footer);
         _tabSuggest.Controls.Add(bar);
     }
 
@@ -549,39 +571,58 @@ public sealed class MainForm : Form
         _editorHint.Text = "Drag the caption on the video to place it from the current time on. Camera mode: drag the 9:16 box, scroll to zoom, and a camera cut is added at the current time. " +
                            "Edit the Text column to fix words. Style and framing come from Generate shorts.";
 
-        // left: selected shorts, the actions for the current short, and the timeline of cuts / caption positions
-        var left = new Panel { Dock = DockStyle.Left, Width = 300, Padding = new Padding(6) };
-        _editClips.Columns.Add("Short", 180);
-        _editClips.Columns.Add("Range", 100);
+        // Three resizable columns: shorts + actions | player | transcript. Inside the left column the
+        // shorts list, the actions and the keyframe timeline are separated by a draggable splitter too,
+        // because a long list of shorts or of camera cuts needs room the fixed heights never gave it.
+        var left = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 4, 6) };
+        _editClips.Columns.Add("Short", 190);
+        _editClips.Columns.Add("Range", 110);
         _keyframes.Columns.Add("At", 50);
-        _keyframes.Columns.Add("What", 60);
-        _keyframes.Columns.Add("Details", 170);
-        var leftSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, FixedPanel = FixedPanel.Panel1 };
-        SplitWhenSized(leftSplit, 120);
+        _keyframes.Columns.Add("What", 64);
+        _keyframes.Columns.Add("Details", 190);
+        var leftSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
+        SplitWhenSized(leftSplit, 170);
         var clipsHost = new Panel { Dock = DockStyle.Fill };
         clipsHost.Controls.Add(_editClips);
         clipsHost.Controls.Add(new Label { Text = "Selected shorts", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
 
-        // actions for the current short (wrap into rows), then the cover / thumbnail chooser
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 330, WrapContents = true, Padding = new Padding(0, 8, 0, 0) };
-        _generateOne.Width = 276; _generateOne.Height = 36; _generateOne.Margin = new Padding(0, 0, 0, 6);
-        _renderPreview.Width = 135; _renderPreview.Margin = new Padding(0, 0, 6, 6);
-        _autoCamera.Width = 135; _autoCamera.Text = "Auto camera"; _autoCamera.Margin = new Padding(0, 0, 0, 6);
-        _cameraMode.Width = 276; _cameraMode.Height = 32; _cameraMode.Margin = new Padding(0, 0, 0, 10);
-        actions.Controls.Add(_generateOne);
-        actions.Controls.Add(_renderPreview);
-        actions.Controls.Add(_autoCamera);
-        actions.Controls.Add(_cameraMode);
-        actions.Controls.Add(new Label { Text = "Cover / thumbnail", AutoSize = false, Width = 276, Height = 22, ForeColor = Color.DimGray, Margin = new Padding(0, 0, 0, 2) });
-        _coverPreview.Margin = new Padding(0, 0, 8, 0);
-        actions.Controls.Add(_coverPreview);
-        var coverButtons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
+        // actions for the current short: one primary, a row of two, the mode toggle, then the cover
+        var actions = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Padding = new Padding(0, 8, 0, 4) };
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        void Row(Control c, bool span)
+        {
+            actions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            int r = actions.RowCount++;
+            actions.Controls.Add(c, 0, r);
+            if (span) actions.SetColumnSpan(c, 2);
+        }
+        _generateOne.Height = 38; _generateOne.Dock = DockStyle.Fill; _generateOne.Margin = new Padding(0, 0, 0, 8);
+        _renderPreview.Dock = DockStyle.Fill; _renderPreview.Margin = new Padding(0, 0, 4, 8);
+        _autoCamera.Text = "Auto camera"; _autoCamera.Dock = DockStyle.Fill; _autoCamera.Margin = new Padding(4, 0, 0, 8);
+        _cameraMode.Dock = DockStyle.Fill; _cameraMode.Height = 32; _cameraMode.Margin = new Padding(0, 0, 0, 12);
+        actions.RowCount = 0;
+        Row(_generateOne, true);
+        actions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        actions.Controls.Add(_renderPreview, 0, actions.RowCount);
+        actions.Controls.Add(_autoCamera, 1, actions.RowCount++);
+        Row(_cameraMode, true);
+        Row(new Label { Text = "Cover / thumbnail", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 0, 0, 4) }, true);
+        var cover = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Dock = DockStyle.Fill, Margin = Padding.Empty };
+        cover.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        cover.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _coverPreview.Width = 78; _coverPreview.Height = 138; _coverPreview.Margin = new Padding(0, 0, 10, 0);
+        cover.Controls.Add(_coverPreview, 0, 0);
+        var coverButtons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
+        _setCover.Width = _pickCoverImage.Width = _clearCover.Width = 150;
         _setCover.Margin = _pickCoverImage.Margin = _clearCover.Margin = new Padding(0, 0, 0, 6);
+        _coverInfo.MaximumSize = new Size(150, 0);
         coverButtons.Controls.Add(_setCover);
         coverButtons.Controls.Add(_pickCoverImage);
         coverButtons.Controls.Add(_clearCover);
         coverButtons.Controls.Add(_coverInfo);
-        actions.Controls.Add(coverButtons);
+        cover.Controls.Add(coverButtons, 1, 0);
+        Row(cover, true);
 
         var kfHost = new Panel { Dock = DockStyle.Fill };
         var kfBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(0, 10, 0, 0), WrapContents = false };
@@ -589,14 +630,18 @@ public sealed class MainForm : Form
         kfBar.Controls.Add(_keyframeClear);
         kfHost.Controls.Add(_keyframes);
         kfHost.Controls.Add(kfBar);
-        kfHost.Controls.Add(new Label { Text = "Camera cuts and caption positions (double-click to jump)", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, UseMnemonic = false });
-        kfHost.Controls.Add(actions);
+        kfHost.Controls.Add(new Label { Text = "Camera cuts and caption positions", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, UseMnemonic = false });
+        // the actions scroll with the column when the window is short, so nothing is ever clipped
+        var actionsScroll = new Panel { Dock = DockStyle.Top, AutoScroll = true, Height = 340 };
+        actionsScroll.Controls.Add(actions);
+        actions.SizeChanged += (_, _) => actionsScroll.Height = Math.Min(actions.Height + 4, 360);
+        kfHost.Controls.Add(actionsScroll);
         leftSplit.Panel1.Controls.Add(clipsHost);
         leftSplit.Panel2.Controls.Add(kfHost);
         left.Controls.Add(leftSplit);
 
         // right: transcript lines of the clip
-        var right = new Panel { Dock = DockStyle.Right, Width = 400, Padding = new Padding(6) };
+        var right = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 6, 0, 6) };
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "Start", HeaderText = "Start", ReadOnly = true, FillWeight = 18 });
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "End", HeaderText = "End", ReadOnly = true, FillWeight = 18 });
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "Text", HeaderText = "Text (editable)", FillWeight = 64 });
@@ -633,9 +678,25 @@ public sealed class MainForm : Form
         center.Controls.Add(_player);
         center.Controls.Add(controls);
 
-        _tabEditor.Controls.Add(center);
-        _tabEditor.Controls.Add(right);
-        _tabEditor.Controls.Add(left);
+        // columns: drag the splitters to give the list, the player or the transcript more room
+        var columns = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, FixedPanel = FixedPanel.Panel1 };
+        SplitWhenSized(columns, 330);
+        columns.Panel1MinSize = 280;
+        columns.Panel1.Controls.Add(left);
+        var inner = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, FixedPanel = FixedPanel.Panel2 };
+        bool innerSet = false;
+        inner.SizeChanged += (_, _) =>
+        {
+            if (innerSet || inner.Width < 700) return;
+            innerSet = true;
+            inner.Panel2MinSize = 260;
+            inner.SplitterDistance = inner.Width - 400;
+        };
+        inner.Panel1.Controls.Add(center);
+        inner.Panel2.Controls.Add(right);
+        columns.Panel2.Controls.Add(inner);
+
+        _tabEditor.Controls.Add(columns);
         _tabEditor.Controls.Add(_editorHint);
     }
 
@@ -679,13 +740,38 @@ public sealed class MainForm : Form
         Add("", _burnHook);
         Add("", _includeReactions);
         Add("Output folder", folderRow);
-        Add("", _generate);
 
         var right = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 330 };
-        var previewHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6) };
+
+        // top: what will be rendered (ticked in Suggestions; can still be unticked here), the caption
+        // preview beside it, and the one primary action underneath
+        var top = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6) };
+        _queue.Columns.Add("Render", 58);
+        _queue.Columns.Add("#", 26);
+        _queue.Columns.Add("Title", 200);
+        _queue.Columns.Add("Range", 112);
+        _queue.Columns.Add("Status", 78);
+        // the title takes whatever width is left, so the range and status stay visible without scrolling
+        _queue.Resize += (_, _) => _queue.Columns[2].Width = Math.Max(110, _queue.ClientSize.Width - (58 + 26 + 112 + 78) - 4);
+        var queueHost = new Panel { Dock = DockStyle.Fill };
+        var queueBar = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 52, ColumnCount = 3, Padding = new Padding(0, 10, 0, 0) };
+        queueBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        queueBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        queueBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _backToSuggestions.Glyph = "\uE72B"; _backToSuggestions.Width = 170; _backToSuggestions.Height = 36; _backToSuggestions.Margin = Padding.Empty;
+        _generate.Margin = Padding.Empty;
+        queueBar.Controls.Add(_backToSuggestions, 0, 0);
+        queueBar.Controls.Add(new Panel { Dock = DockStyle.Fill }, 1, 0);
+        queueBar.Controls.Add(_generate, 2, 0);
+        queueHost.Controls.Add(_queue);
+        queueHost.Controls.Add(queueBar);
+        queueHost.Controls.Add(_queueTitle);
+        var previewHost = new Panel { Dock = DockStyle.Right, Width = 230, Padding = new Padding(12, 0, 0, 0) };
         previewHost.Controls.Add(_preview);
-        previewHost.Controls.Add(new Label { Text = "Caption preview (approximate)", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
-        right.Panel1.Controls.Add(previewHost);
+        previewHost.Controls.Add(new Label { Text = "Caption preview", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
+        top.Controls.Add(queueHost);
+        top.Controls.Add(previewHost);
+        right.Panel1.Controls.Add(top);
 
         _results.Columns.Add("Short", 300);
         _results.Columns.Add("Status", 90);
@@ -718,6 +804,7 @@ public sealed class MainForm : Form
         _tabs.SelectedIndexChanged += async (_, _) =>
         {
             if (_tabs.SelectedTab == _tabVideo) RefreshLibrary();
+            else if (_tabs.SelectedTab == _tabGenerate) RefreshQueue();
             else if (_tabs.SelectedTab == _tabEditor) await EnterEditorAsync();
             else if (_tabs.SelectedTab == _tabPublish) await _publishPanel.RefreshAsync();
             else await _player.PauseAsync();
@@ -787,7 +874,6 @@ public sealed class MainForm : Form
         _segPlay.Click += async (_, _) => { if (_editSegments.CurrentRow is not null) await PlayFromRowAsync(_editSegments.CurrentRow.Index); };
         _segDelete.Click += (_, _) => DeleteSegmentRow();
         Shown += (_, _) => RefreshLibrary();
-        _settingsBtn.Click += (_, _) => OpenSettings();
         _cancel.Click += (_, _) => _cts?.Cancel();
 
         _openFile.Click += (_, _) => { if (_video is not null) OpenPath(_video.FilePath); };
@@ -829,6 +915,21 @@ public sealed class MainForm : Form
         _includeReactions.CheckedChanged += (_, _) => RefreshPreview();
         _crop.SelectedIndexChanged += (_, _) => RefreshPreview();
         _generate.Click += async (_, _) => await GenerateAsync();
+        _continueToGenerate.Click += (_, _) => SelectTab(4);
+        _backToSuggestions.Click += (_, _) => SelectTab(3);
+        _queue.ItemChecked += (_, e) =>
+        {
+            if (_populatingQueue || e.Item.Tag is not ShortSuggestion s || s.Selected == e.Item.Checked) return;
+            s.Selected = e.Item.Checked;
+            e.Item.ForeColor = s.Selected ? Theme.Text : Theme.TextMuted;
+            e.Item.SubItems[4].Text = s.Selected && e.Item.SubItems[4].Text == "" ? "queued" : (!s.Selected && e.Item.SubItems[4].Text == "queued" ? "" : e.Item.SubItems[4].Text);
+            SaveProject();
+            // mirror the tick in the Suggestions list without re-entering
+            _populatingSuggestions = true;
+            foreach (ListViewItem it in _suggestList.Items) if (ReferenceEquals(it.Tag, s)) it.Checked = s.Selected;
+            _populatingSuggestions = false;
+            UpdateGenerateEnabled();
+        };
         _generateOne.Click += async (_, _) =>
         {
             if (_editing is null) { MessageBox.Show(this, "Pick a short first.", "Generate"); return; }
@@ -1778,8 +1879,40 @@ public sealed class MainForm : Form
 
     private void UpdateGenerateEnabled()
     {
-        _generate.Enabled = _video is not null && _suggestions is not null && _suggestions.Shorts.Any(s => s.Selected) && _cts is null;
+        int ticked = _suggestions?.Shorts.Count(s => s.Selected) ?? 0, total = _suggestions?.Shorts.Count ?? 0;
+        bool can = _video is not null && ticked > 0 && _cts is null;
+        _generate.Enabled = can;
+        _generate.Text = ticked > 0 ? $"Generate {ticked} short{(ticked == 1 ? "" : "s")}" : "Generate shorts";
+        _continueToGenerate.Enabled = can;
+        _continueToGenerate.Text = ticked > 0 ? $"Continue with {ticked} short{(ticked == 1 ? "" : "s")}" : "Continue with selected shorts";
+        _selectionSummary.Text = total == 0 ? "" : ticked == 0 ? "Tick the moments you want as shorts." : $"{ticked} of {total} moments ticked. Framing and captions come next.";
+        _queueTitle.Text = ticked == 0 ? "Shorts to generate" : $"Shorts to generate ({ticked})";
         UpdateNavStates();
+    }
+
+    private bool _populatingQueue;
+
+    /// <summary>The Generate step lists the shorts ticked in Suggestions, with what already rendered.</summary>
+    private void RefreshQueue()
+    {
+        _populatingQueue = true;
+        _queue.BeginUpdate();
+        _queue.Items.Clear();
+        if (_suggestions is not null)
+        {
+            int i = 1;
+            foreach (var s in _suggestions.Shorts)
+            {
+                var file = _generated.LastOrDefault(g => g.Title == s.Title && File.Exists(g.Path));
+                string status = file is null ? (s.Selected ? "queued" : "") : file.Sent ? "published" : "rendered";
+                var item = new ListViewItem(new[] { "", (i++).ToString(), s.Title, $"{Fmt(s.StartSeconds)} - {Fmt(s.EndSeconds)}  ({s.Duration:F0}s)", status })
+                { Tag = s, Checked = s.Selected };
+                if (!s.Selected) item.ForeColor = Theme.TextMuted;
+                _queue.Items.Add(item);
+            }
+        }
+        _queue.EndUpdate();
+        _populatingQueue = false;
     }
 
     /// <param name="only">Render just these shorts (from the editor's "Generate this short"); null = all ticked shorts.</param>
@@ -1843,6 +1976,7 @@ public sealed class MainForm : Form
             }
             SaveProject();
             _publishPanel.RefreshList();
+            RefreshQueue();
             Log($"Finished: {ok}/{selected.Count} shorts generated in {sub}" + (ok > 0 ? ". Open the Publish step to send them to your accounts." : ""));
             if (ok > 0) OpenPath(sub);
         });
@@ -1882,7 +2016,7 @@ public sealed class MainForm : Form
     private void SetBusy(bool busy, string title)
     {
         _cancel.Enabled = busy;
-        _download.Enabled = _downloadTranscribe.Enabled = _openLocal.Enabled = _settingsBtn.Enabled = !busy;
+        _download.Enabled = _downloadTranscribe.Enabled = _openLocal.Enabled = !busy;
         _libraryRefresh.Enabled = _libraryOpenFolder.Enabled = !busy;
         _libraryLoad.Enabled = _libraryTranscribe.Enabled = !busy && _library.SelectedItems.Count > 0;
         _transcribe.Enabled = !busy; // with no video loaded it offers to download + transcribe the link

@@ -4,9 +4,10 @@ using ShortGenerator.Services;
 namespace ShortGenerator.Forms;
 
 /// <summary>
-/// "Sign in with galiluna": the browser does the login on galiluna, galiluna mints a personal API key and
-/// redirects to a loopback listener here. The key is stored DPAPI-protected; no password ever enters
-/// this app and the key itself is never shown or logged. A manual paste fallback is behind an expander.
+/// "Sign in with galiluna" with a device code: the app asks galiluna for a short code, shows it large,
+/// opens the browser where the person signs in as usual and approves the code, and polls until galiluna
+/// hands over a personal API key. No password enters this app, no local port is opened, and the key is
+/// stored DPAPI-protected and never shown or logged. A manual paste fallback is behind an expander.
 /// </summary>
 public sealed class GaliLunaSignInForm : Form
 {
@@ -19,13 +20,19 @@ public sealed class GaliLunaSignInForm : Form
     private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(430, 0), ForeColor = Color.DimGray };
     private readonly BrandProgressBar _spinner = new() { Width = 300, Visible = false };
 
+    // the code card: shown while a sign-in is in progress
+    private readonly Panel _codeCard = new() { Width = 430, Height = 132, Visible = false };
+    private readonly Label _codeTitle = new() { Text = "Approve this code on galiluna", AutoSize = false, Height = 22, TextAlign = ContentAlignment.MiddleCenter };
+    private readonly Label _code = new() { AutoSize = false, Height = 56, TextAlign = ContentAlignment.MiddleCenter };
+    private readonly LinkLabel _codeHelp = new() { AutoSize = false, Height = 40, TextAlign = ContentAlignment.MiddleCenter };
+
     private readonly CheckBox _advanced = new() { Text = "Advanced: paste a key instead", AutoSize = true, Appearance = Appearance.Normal };
     private readonly Panel _advancedPanel = new() { AutoSize = true, Visible = false };
     private readonly TextBox _key = new() { UseSystemPasswordChar = true, Width = 300, PlaceholderText = "glk_..." };
     private readonly FancyButton _test = new() { Text = "Test and save", Width = 140 };
 
-    private LoopbackSignIn? _loopback;
     private CancellationTokenSource? _cts;
+    private string? _verificationUrl;
 
     /// <summary>Set when the form closes after a successful sign-in (also on the manual path).</summary>
     [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
@@ -39,7 +46,7 @@ public sealed class GaliLunaSignInForm : Form
         MaximizeBox = false; MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(480, 440);
+        ClientSize = new Size(480, 560);
         BackColor = Theme.Bg;
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(24, 16, 24, 16), AutoSize = true };
@@ -61,11 +68,36 @@ public sealed class GaliLunaSignInForm : Form
         root.Controls.Add(new Label { Text = "Environment", AutoSize = true, ForeColor = Theme.TextMuted });
         root.Controls.Add(_env);
         root.Controls.Add(_url);
-        root.Controls.Add(new Label { Text = "Your browser opens galiluna, where you sign in as usual and approve this app. No password is typed here.", AutoSize = true, MaximumSize = new Size(430, 0), ForeColor = Theme.TextMuted, Margin = new Padding(0, 10, 0, 8) });
+        root.Controls.Add(new Label { Text = "Your browser opens galiluna, where you sign in as usual and approve a short code shown here. No password is typed into this app.", AutoSize = true, MaximumSize = new Size(430, 0), ForeColor = Theme.TextMuted, Margin = new Padding(0, 10, 0, 8) });
         var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
         actions.Controls.Add(_signIn);
         actions.Controls.Add(_cancel);
         root.Controls.Add(actions);
+
+        // code card
+        _codeCard.Margin = new Padding(0, 12, 0, 4);
+        _codeCard.Paint += (_, e) =>
+        {
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var r = new Rectangle(0, 0, _codeCard.Width - 1, _codeCard.Height - 1);
+            using var path = FancyButton.Rounded(r, 14);
+            using var fill = new SolidBrush(Theme.SurfaceSoft);
+            using var pen = new Pen(Theme.Border);
+            e.Graphics.FillPath(fill, path);
+            e.Graphics.DrawPath(pen, path);
+        };
+        _codeTitle.Font = Theme.Body(9.5f); _codeTitle.ForeColor = Theme.TextSecondary; _codeTitle.BackColor = Color.Transparent;
+        _codeTitle.SetBounds(0, 12, 430, 22);
+        _code.Font = Theme.HeadingFont(30f); _code.ForeColor = Theme.PurpleDeep; _code.BackColor = Color.Transparent;
+        _code.SetBounds(0, 36, 430, 56);
+        _codeHelp.Font = Theme.Body(8.5f); _codeHelp.BackColor = Color.Transparent; _codeHelp.LinkColor = Theme.Purple; _codeHelp.ActiveLinkColor = Theme.PurpleDeep;
+        _codeHelp.SetBounds(12, 92, 406, 36);
+        _codeHelp.LinkClicked += (_, _) => OpenBrowser(_verificationUrl);
+        _codeCard.Controls.Add(_codeTitle);
+        _codeCard.Controls.Add(_code);
+        _codeCard.Controls.Add(_codeHelp);
+        root.Controls.Add(_codeCard);
+
         _spinner.Margin = new Padding(0, 8, 0, 4);
         root.Controls.Add(_spinner);
         root.Controls.Add(_status);
@@ -92,11 +124,10 @@ public sealed class GaliLunaSignInForm : Form
             _url.ReadOnly = _env.SelectedIndex != 2;
         };
 
-        _signIn.Click += (_, _) => StartSignIn();
-        _cancel.Click += (_, _) => { UserCancelled = true; _cts?.Cancel(); };
+        _signIn.Click += async (_, _) => await SignInAsync();
+        _cancel.Click += (_, _) => _cts?.Cancel();
         _advanced.CheckedChanged += (_, _) => _advancedPanel.Visible = _advanced.Checked;
         _test.Click += async (_, _) => await TestPastedKeyAsync();
-        FormClosed += (_, _) => StopListener();
 
         Theme.Primary(_signIn);
         Theme.Apply(this);
@@ -105,74 +136,99 @@ public sealed class GaliLunaSignInForm : Form
 
     private string BaseUrl => _url.Text.Trim().TrimEnd('/');
 
-    // ------------------------------------------------------------------ loopback sign-in
+    // ------------------------------------------------------------------ device-code sign-in
 
-    private void StartSignIn()
+    private async Task SignInAsync()
     {
         if (!Uri.TryCreate(BaseUrl, UriKind.Absolute, out var baseUri) || (baseUri.Scheme != "https" && baseUri.Scheme != "http"))
         {
             SetStatus("Enter a valid galiluna address (https://...).", Theme.Warning);
             return;
         }
+        if (_cts is not null) return;
 
-        try { _loopback = LoopbackSignIn.Start(); }
-        catch (Exception ex) { SetStatus("Could not open a local port for the browser callback: " + ex.Message, Theme.Danger); return; }
-
-        _cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        var baseUrl = BaseUrl;
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
         SetBusy(true);
-        SetStatus("Waiting for you to approve in the browser...", Theme.TextMuted);
-
+        SetStatus("Asking galiluna for a sign-in code...", Theme.TextMuted);
         try
         {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(GaliLunaClient.AuthorizeUrl(BaseUrl, _loopback.Port, _loopback.State)) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            StopListener();
-            SetBusy(false);
-            SetStatus("Could not open the browser: " + ex.Message, Theme.Danger);
-            return;
-        }
+            var start = await GaliLunaClient.DeviceStartAsync(baseUrl, ct);
+            _verificationUrl = start.VerificationUrl;
+            _code.Text = start.UserCode;
+            _codeCard.Visible = true;
+            bool opened = OpenBrowser(start.VerificationUrl);
+            if (opened)
+            {
+                _codeHelp.Text = "Your browser opened galiluna. Didn't see it? Open it again";
+                _codeHelp.LinkArea = new LinkArea(_codeHelp.Text.Length - 13, 13);
+            }
+            else
+            {
+                _codeHelp.Text = $"The browser could not be opened. Go to {start.VerificationUrlBase} and type the code.";
+                _codeHelp.LinkArea = new LinkArea(0, 0);
+            }
+            SetStatus("Waiting for you to approve the code on galiluna...", Theme.TextMuted);
 
-        var loopback = _loopback;
-        var ct = _cts.Token;
-        // The wait runs off the UI thread; the result comes back through BeginInvoke.
-        _ = Task.Run(async () =>
-        {
-            LoopbackSignIn.Result? result = null;
-            string? failure = null;
-            try { result = await loopback.WaitAsync(ct); }
-            catch (Exception ex) { failure = "listener: " + ex.Message; }
-            bool cancelled = result is null && failure is null;
-            bool timedOut = cancelled && !UserCancelled;
-            if (!IsDisposed) BeginInvoke(async () => await FinishAsync(result?.Key, result?.Error ?? failure, cancelled, timedOut));
-        });
+            var deadline = DateTime.UtcNow.AddSeconds(start.ExpiresInSeconds);
+            var interval = TimeSpan.FromSeconds(start.IntervalSeconds);
+            while (true)
+            {
+                await Task.Delay(interval, ct);
+                if (DateTime.UtcNow >= deadline) { Finish("The code expired. Click Sign in to get a new one.", Theme.Warning); return; }
+                GaliLunaClient.DevicePoll poll;
+                try { poll = await GaliLunaClient.DevicePollAsync(baseUrl, start.PollToken, ct); }
+                catch (GaliLunaClient.GaliLunaException ex) when (ex.StatusCode == 429) { await Task.Delay(interval, ct); continue; } // rate limited: back off one interval
+                catch (HttpRequestException) { continue; } // transient network hiccup: keep polling until the deadline
+                switch (poll.Status)
+                {
+                    case "pending":
+                        continue;
+                    case "approved" when !string.IsNullOrWhiteSpace(poll.Key):
+                        SettingsStore.SetGaliLunaKey(_settings, poll.Key);
+                        _settings.GaliLunaBaseUrl = baseUrl;
+                        try { SettingsStore.Save(_settings); } catch { }
+                        await ShowSignedInAsync();
+                        return;
+                    case "denied":
+                        Finish("Sign-in was cancelled on galiluna.", Theme.Warning);
+                        return;
+                    case "expired":
+                    case "claimed":
+                    case "approved": // approved without a key = already handed over
+                        Finish("The code expired. Click Sign in to get a new one.", Theme.Warning);
+                        return;
+                    default:
+                        Finish("galiluna answered with an unknown state: " + poll.Status, Theme.Danger);
+                        return;
+                }
+            }
+        }
+        catch (OperationCanceledException) { Finish("Sign-in cancelled.", Theme.TextMuted); }
+        catch (Exception ex) { Finish("Could not reach galiluna: " + ex.Message, Theme.Danger); }
     }
 
-    private bool UserCancelled;
-
-    private async Task FinishAsync(string? key, string? error, bool cancelled, bool timedOut)
+    private void Finish(string message, Color color)
     {
-        StopListener();
-        if (key is not null)
-        {
-            SettingsStore.SetGaliLunaKey(_settings, key);
-            _settings.GaliLunaBaseUrl = BaseUrl;
-            try { SettingsStore.Save(_settings); } catch { }
-            await ShowSignedInAsync();
-            return;
-        }
+        StopPolling();
         SetBusy(false);
-        if (error == "access_denied") SetStatus("Sign-in was cancelled on galiluna.", Theme.Warning);
-        else if (error == "too_many_keys") SetStatus("You already have 10 keys on galiluna. Revoke one under Connected apps and try again.", Theme.Warning);
-        else if (error is not null) SetStatus("galiluna reported: " + error, Theme.Danger);
-        else if (timedOut) SetStatus("No answer from the browser after 5 minutes. Click Sign in to try again.", Theme.Warning);
-        else if (cancelled) SetStatus("Sign-in cancelled.", Theme.TextMuted);
+        _codeCard.Visible = false;
+        SetStatus(message, color);
+    }
+
+    private static bool OpenBrowser(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); return true; }
+        catch { return false; }
     }
 
     /// <summary>Calls GET accounts with the stored key, shows who is signed in, and closes on success.</summary>
     private async Task ShowSignedInAsync()
     {
+        StopPolling();
+        _codeCard.Visible = false;
         SetStatus("Checking who is signed in...", Theme.TextMuted);
         try
         {
@@ -191,8 +247,7 @@ public sealed class GaliLunaSignInForm : Form
     }
 
     public static string Summary(GaliLunaClient.Accounts a) =>
-        $"Signed in as {a.User.Email} at {a.Organization.Name}: {a.Instagram.Count} Instagram account{(a.Instagram.Count == 1 ? "" : "s")}, " +
-        $"{a.Youtube.Channels.Count} YouTube channel{(a.Youtube.Channels.Count == 1 ? "" : "s")}, TikTok {(a.Tiktok is null ? "not connected" : "connected")}.";
+        $"Signed in as {a.User.Email} at {a.Organization.Name}: {a.Instagram.Count} Instagram, {a.Youtube.Channels.Count} YouTube, TikTok {(a.Tiktok is null ? "no" : "yes")}.";
 
     // ------------------------------------------------------------------ manual paste fallback
 
@@ -222,10 +277,8 @@ public sealed class GaliLunaSignInForm : Form
 
     // ------------------------------------------------------------------ plumbing
 
-    private void StopListener()
+    private void StopPolling()
     {
-        _loopback?.Dispose();
-        _loopback = null;
         _cts?.Dispose();
         _cts = null;
     }
@@ -239,14 +292,13 @@ public sealed class GaliLunaSignInForm : Form
         _spinner.Visible = busy;
         _spinner.Value = busy ? 35 : 0;
         _advanced.Enabled = !busy;
-        if (busy) UserCancelled = false;
     }
 
     private void SetStatus(string text, Color color) { _status.Text = text; _status.ForeColor = color; }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        if (_cts is not null && !_cts.IsCancellationRequested) { UserCancelled = true; _cts.Cancel(); }
+        if (_cts is not null && !_cts.IsCancellationRequested) _cts.Cancel();
         base.OnFormClosing(e);
     }
 }

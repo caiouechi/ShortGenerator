@@ -28,8 +28,10 @@ public sealed class SideNav : Control
     private readonly Image? _logo = Theme.LoadImage("galiluna-logo-light.png");
 
     public event EventHandler? SelectedIndexChanged;
+    /// <summary>Raised when the Settings entry in the footer is clicked.</summary>
+    public event EventHandler? SettingsClicked;
 
-    private const int HeaderH = 84, ItemH = 62, ListTop = 100, Side = 12;
+    private const int ItemH = 62, ListTop = 112, Side = 12;
 
     public SideNav()
     {
@@ -69,12 +71,16 @@ public sealed class SideNav : Control
     }
 
     private Rectangle ItemRect(int i) => new(Side, ListTop + i * (ItemH + 6), Width - Side * 2, ItemH);
+    /// <summary>Footer entry (Settings): a utility, not a workflow step, so it sits apart at the bottom.</summary>
+    private Rectangle FooterRect => new(Side, Height - 78, Width - Side * 2, 44);
+    private const int FooterIndex = -2;
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         int h = -1;
         for (int i = 0; i < _items.Count; i++) if (ItemRect(i).Contains(e.Location)) { h = i; break; }
-        if (h != _hover) { _hover = h; Cursor = h >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
+        if (h < 0 && FooterRect.Contains(e.Location)) h = FooterIndex;
+        if (h != _hover) { _hover = h; Cursor = h != -1 ? Cursors.Hand : Cursors.Default; Invalidate(); }
         base.OnMouseMove(e);
     }
 
@@ -83,6 +89,7 @@ public sealed class SideNav : Control
     protected override void OnMouseClick(MouseEventArgs e)
     {
         for (int i = 0; i < _items.Count; i++) if (ItemRect(i).Contains(e.Location)) { SelectedIndex = i; break; }
+        if (FooterRect.Contains(e.Location)) SettingsClicked?.Invoke(this, EventArgs.Empty);
         base.OnMouseClick(e);
     }
 
@@ -105,16 +112,48 @@ public sealed class SideNav : Control
         }
         using (var edge = new Pen(Color.FromArgb(40, 255, 255, 255))) g.DrawLine(edge, Width - 1, 0, Width - 1, Height);
 
-        // brand
-        int x = Side + 4, y = 18;
-        if (_mark is not null) { g.DrawImage(_mark, new Rectangle(x, y, 40, 40)); x += 48; }
+        // brand: a frosted glass card lifts the logo off the nebula so the purple "luna" keeps its contrast,
+        // with a soft glow behind the mark and a tracked product label beneath
+        var card = new Rectangle(Side, 14, Width - Side * 2, 66);
+        using (var cardPath = FancyButton.Rounded(card, 16))
+        {
+            using var glass = new SolidBrush(Color.FromArgb(28, 255, 255, 255));
+            g.FillPath(glass, cardPath);
+            using var sheen = new LinearGradientBrush(card, Color.FromArgb(34, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f);
+            g.FillPath(sheen, cardPath);
+            using var rim = new Pen(Color.FromArgb(56, 255, 255, 255));
+            g.DrawPath(rim, cardPath);
+        }
+        int x = card.X + 14, y = card.Y + 13;
+        if (_mark is not null)
+        {
+            var glow = new Rectangle(x - 10, y - 10, 60, 60);
+            using (var gp = new GraphicsPath())
+            {
+                gp.AddEllipse(glow);
+                using var gb = new PathGradientBrush(gp) { CenterColor = Color.FromArgb(110, Theme.Nebula), SurroundColors = new[] { Color.FromArgb(0, Theme.Nebula) } };
+                g.FillEllipse(gb, glow);
+            }
+            g.DrawImage(_mark, new Rectangle(x, y, 40, 40));
+            x += 52;
+        }
         if (_logo is not null)
         {
-            int lh = 26, lw = (int)(_logo.Width * (lh / (double)_logo.Height));
-            g.DrawImage(_logo, new Rectangle(x, y + 7, Math.Min(lw, Width - x - Side), lh));
+            int lh = 24, lw = (int)(_logo.Width * (lh / (double)_logo.Height));
+            g.DrawImage(_logo, new Rectangle(x, y + 8, Math.Min(lw, card.Right - x - 12), lh));
         }
-        using (var f = Theme.Body(8f))
-            TextRenderer.DrawText(g, "SHORT GENERATOR", f, new Point(Side + 6, 66), Color.FromArgb(200, Theme.DarkTextMuted), TextFormatFlags.NoPrefix);
+        using (var f = Theme.Body(7.5f))
+        {
+            // tracked label: letters drawn one by one for a premium, spaced look
+            const string label = "SHORT GENERATOR";
+            int lx = Side + 6, ly = card.Bottom + 8;
+            foreach (var ch in label)
+            {
+                var text = ch.ToString();
+                TextRenderer.DrawText(g, text, f, new Point(lx, ly), Color.FromArgb(190, Theme.DarkTextMuted), TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                lx += TextRenderer.MeasureText(g, text, f, Size.Empty, TextFormatFlags.NoPadding).Width + 2;
+            }
+        }
 
         // items
         for (int i = 0; i < _items.Count; i++)
@@ -169,6 +208,25 @@ public sealed class SideNav : Control
             var dotColor = it.State switch { StepState.Done => ColorTranslator.FromHtml("#34D399"), StepState.Ready => Theme.Nebula, _ => Color.FromArgb(90, 255, 255, 255) };
             using var dot = new SolidBrush(dotColor);
             g.FillEllipse(dot, r.Right - 16, r.Y + r.Height / 2 - 4, 8, 8);
+        }
+
+        // footer: Settings entry, separated from the steps by a hairline
+        var fr = FooterRect;
+        using (var sep = new Pen(Color.FromArgb(40, 255, 255, 255))) g.DrawLine(sep, Side + 6, fr.Y - 10, Width - Side - 6, fr.Y - 10);
+        using (var fpath = FancyButton.Rounded(fr, 12))
+        {
+            if (_hover == FooterIndex)
+            {
+                using var fill = new SolidBrush(Color.FromArgb(50, 255, 255, 255));
+                g.FillPath(fill, fpath);
+            }
+            var gear = new Rectangle(fr.X + 14, fr.Y + (fr.Height - 30) / 2, 30, 30);
+            using (var gb = new SolidBrush(Color.FromArgb(_hover == FooterIndex ? 70 : 40, 255, 255, 255))) g.FillEllipse(gb, gear);
+            using (var gf = Theme.IconFont(12f))
+                TextRenderer.DrawText(g, "", gf, gear, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            using var sf = Theme.HeadingFont(10f);
+            TextRenderer.DrawText(g, "Settings", sf, new Rectangle(gear.Right + 12, fr.Y, fr.Right - gear.Right - 24, fr.Height),
+                _hover == FooterIndex ? Color.White : Theme.DarkTextSecondary, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
 
         // footer hint
