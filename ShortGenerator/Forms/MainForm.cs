@@ -293,20 +293,6 @@ public sealed class MainForm : Form
         _header.Set(Pages[0].Title, Pages[0].Tagline);
     }
 
-    /// <summary>Makes one column absorb the width the other columns leave, so lists fill their panel at any size.</summary>
-    private static void FillColumn(ListView list, int index)
-    {
-        void Fit()
-        {
-            if (list.Columns.Count <= index) return;
-            int others = 0;
-            for (int i = 0; i < list.Columns.Count; i++) if (i != index) others += list.Columns[i].Width;
-            list.Columns[index].Width = Math.Max(80, list.ClientSize.Width - others - 4);
-        }
-        list.Resize += (_, _) => Fit();
-        list.HandleCreated += (_, _) => Fit();
-    }
-
     /// <summary>
     /// SplitContainer clamps SplitterDistance to its (tiny) construction-time size, so the wanted distance
     /// is applied once the control has been laid out at its real size.
@@ -428,7 +414,7 @@ public sealed class MainForm : Form
         _library.Columns.Add("Shorts", 70);
         _library.Columns.Add("Downloaded", 140);
         _library.Columns.Add("Size", 80);
-        FillColumn(_library, 0);
+        Theme.FillColumn(_library, 0);
 
         split.Panel2.Controls.Add(_library);
         split.Panel2.Controls.Add(libBar);
@@ -460,6 +446,7 @@ public sealed class MainForm : Form
         _segments.Columns.Add("End", 80);
         _segments.Columns.Add("Text", 820);
         _segments.Columns.Add("Peak dB", 70);
+        Theme.FillColumn(_segments, 2);
 
         _tabTranscript.Controls.Add(_emptyTranscript);
         _tabTranscript.Controls.Add(_segments);
@@ -557,7 +544,7 @@ public sealed class MainForm : Form
         _suggestList.Columns.Add("Length", 60);
         _suggestList.Columns.Add("Viral score", 95);
         _suggestList.Columns.Add("Emotion", 110);
-        FillColumn(_suggestList, 2);
+        Theme.FillColumn(_suggestList, 2);
 
         var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
         SplitWhenSized(split, 260);
@@ -593,11 +580,11 @@ public sealed class MainForm : Form
         var left = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 4, 6) };
         _editClips.Columns.Add("Short", 190);
         _editClips.Columns.Add("Range", 118);
-        FillColumn(_editClips, 0);
+        Theme.FillColumn(_editClips, 0);
         _keyframes.Columns.Add("At", 50);
         _keyframes.Columns.Add("What", 64);
         _keyframes.Columns.Add("Details", 190);
-        FillColumn(_keyframes, 2);
+        Theme.FillColumn(_keyframes, 2);
         var leftSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
         SplitWhenSized(leftSplit, 170);
         var clipsHost = new Panel { Dock = DockStyle.Fill };
@@ -770,7 +757,7 @@ public sealed class MainForm : Form
         _queue.Columns.Add("Range", 112);
         _queue.Columns.Add("Status", 78);
         // the title takes whatever width is left, so the range and status stay visible without scrolling
-        FillColumn(_queue, 2);
+        Theme.FillColumn(_queue, 2);
         var queueHost = new Panel { Dock = DockStyle.Fill };
         var queueBar = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 52, ColumnCount = 3, Padding = new Padding(0, 10, 0, 0) };
         queueBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -794,7 +781,7 @@ public sealed class MainForm : Form
         _results.Columns.Add("Short", 300);
         _results.Columns.Add("Status", 90);
         _results.Columns.Add("File", 500);
-        FillColumn(_results, 2);
+        Theme.FillColumn(_results, 2);
         var resultsHost = new Panel { Dock = DockStyle.Fill };
         resultsHost.Controls.Add(_results);
         resultsHost.Controls.Add(new Label { Text = "Generated files (double-click to play)", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, Padding = new Padding(4, 0, 0, 0) });

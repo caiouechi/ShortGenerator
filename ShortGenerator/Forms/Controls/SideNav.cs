@@ -25,7 +25,7 @@ public sealed class SideNav : Control
     private int _hover = -1;
     private readonly Image? _bg = Theme.LoadImage("sidebar-bg.png");
     private readonly Image? _mark = Theme.LoadImage("galiluna-icon.png");
-    private readonly Image? _logo = Theme.LoadImage("galiluna-logo-light.png");
+    private readonly Image? _logo = Theme.LoadImage("galiluna-logo.png");
 
     public event EventHandler? SelectedIndexChanged;
     /// <summary>Raised when the Settings entry in the footer is clicked.</summary>
@@ -100,15 +100,15 @@ public sealed class SideNav : Control
         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-        // artwork: a calm matte indigo with one aurora sweep at the foot; cover-fit, anchored to the bottom
-        using (var bg = new SolidBrush(Theme.DarkBg)) g.FillRectangle(bg, ClientRectangle);
+        // artwork: bright white with a pastel aurora at the foot; cover-fit, anchored to the bottom
+        using (var bg = new SolidBrush(Theme.Elevated)) g.FillRectangle(bg, ClientRectangle);
         if (_bg is not null)
         {
             double scale = Math.Max(Width / (double)_bg.Width, Height / (double)_bg.Height);
             int w = (int)(_bg.Width * scale), h = (int)(_bg.Height * scale);
             g.DrawImage(_bg, new Rectangle((Width - w) / 2, Height - h, w, h));
         }
-        using (var edge = new Pen(Color.FromArgb(22, 255, 255, 255))) g.DrawLine(edge, Width - 1, 0, Width - 1, Height);
+        using (var edge = new Pen(Theme.Border)) g.DrawLine(edge, Width - 1, 0, Width - 1, Height);
 
         // brand: mark and wordmark on the plain surface, a tracked product label underneath. No card, no glow:
         // the quiet background carries the logo by itself.
@@ -126,7 +126,7 @@ public sealed class SideNav : Control
             foreach (var ch in label)
             {
                 var text = ch.ToString();
-                TextRenderer.DrawText(g, text, f, new Point(lx, ly), Color.FromArgb(150, Theme.DarkTextMuted), TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                TextRenderer.DrawText(g, text, f, new Point(lx, ly), Theme.TextMuted, TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
                 lx += TextRenderer.MeasureText(g, text, f, Size.Empty, TextFormatFlags.NoPadding).Width + 3;
             }
         }
@@ -141,8 +141,22 @@ public sealed class SideNav : Control
             if (sel || hov)
             {
                 using var path = FancyButton.Rounded(r, 10);
-                using var fill = new SolidBrush(Color.FromArgb(sel ? 26 : 12, 255, 255, 255));
-                g.FillPath(fill, path);
+                if (sel)
+                {
+                    // a lifted white card with a whisper of shadow, then the brand accent
+                    using var shadow = FancyButton.Rounded(new Rectangle(r.X, r.Y + 2, r.Width, r.Height), 10);
+                    using var sb = new SolidBrush(Color.FromArgb(18, Theme.Purple));
+                    g.FillPath(sb, shadow);
+                    using var fill = new SolidBrush(Color.White);
+                    g.FillPath(fill, path);
+                    using var rim = new Pen(Theme.Border);
+                    g.DrawPath(rim, path);
+                }
+                else
+                {
+                    using var fill = new SolidBrush(Theme.SurfaceSoft);
+                    g.FillPath(fill, path);
+                }
                 if (sel)
                 {
                     using var accent = new LinearGradientBrush(new Rectangle(r.X, r.Y, 3, r.Height), Theme.CosmicBlue, Theme.Nebula, 90f);
@@ -157,29 +171,29 @@ public sealed class SideNav : Control
             int tx = badge.Right + 14;
             using var lf = Theme.HeadingFont(9.5f);
             using var hf = Theme.Body(7.5f);
-            var labelColor = sel ? Color.White : it.State == StepState.Pending ? Color.FromArgb(150, Theme.DarkTextSecondary) : Theme.DarkTextSecondary;
+            var labelColor = sel ? Theme.Heading : it.State == StepState.Pending ? Theme.TextMuted : Theme.TextSecondary;
             TextRenderer.DrawText(g, it.Label, lf, new Rectangle(tx, r.Y + 9, r.Right - tx - 12, 20), labelColor, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-            TextRenderer.DrawText(g, it.Hint, hf, new Rectangle(tx, r.Y + 29, r.Right - tx - 12, 16), Color.FromArgb(sel ? 200 : 130, Theme.DarkTextMuted), TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+            TextRenderer.DrawText(g, it.Hint, hf, new Rectangle(tx, r.Y + 29, r.Right - tx - 12, 16), Color.FromArgb(sel ? 255 : 190, Theme.TextMuted), TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         }
 
         // footer: Settings, drawn like an item, separated by a hairline
         var fr = FooterRect;
-        using (var sep = new Pen(Color.FromArgb(28, 255, 255, 255))) g.DrawLine(sep, Side + 8, fr.Y - 12, Width - Side - 8, fr.Y - 12);
+        using (var sep = new Pen(Theme.Border)) g.DrawLine(sep, Side + 8, fr.Y - 12, Width - Side - 8, fr.Y - 12);
         if (_hover == FooterIndex)
         {
             using var fpath = FancyButton.Rounded(fr, 10);
-            using var fill = new SolidBrush(Color.FromArgb(12, 255, 255, 255));
+            using var fill = new SolidBrush(Theme.SurfaceSoft);
             g.FillPath(fill, fpath);
         }
         var gear = new Rectangle(fr.X + 16, fr.Y + (fr.Height - 24) / 2, 24, 24);
-        using (var ring = new Pen(Color.FromArgb(_hover == FooterIndex ? 120 : 70, 255, 255, 255), 1f)) g.DrawEllipse(ring, gear);
+        using (var ring = new Pen(_hover == FooterIndex ? Theme.Purple : Theme.BorderStrong, 1f)) g.DrawEllipse(ring, gear);
         using (var gf = Theme.IconFont(9.5f))
-            TextRenderer.DrawText(g, "", gf, gear, _hover == FooterIndex ? Color.White : Theme.DarkTextSecondary, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            TextRenderer.DrawText(g, "", gf, gear, _hover == FooterIndex ? Theme.PurpleDeep : Theme.TextSecondary, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
         using (var sf = Theme.HeadingFont(9.5f))
             TextRenderer.DrawText(g, "Settings", sf, new Rectangle(gear.Right + 14, fr.Y, fr.Right - gear.Right - 24, fr.Height),
-                _hover == FooterIndex ? Color.White : Theme.DarkTextSecondary, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                _hover == FooterIndex ? Theme.PurpleDeep : Theme.TextSecondary, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         using (var ff = Theme.Body(7f))
-            TextRenderer.DrawText(g, "galiluna.com", ff, new Rectangle(0, Height - 22, Width, 16), Color.FromArgb(110, Theme.DarkTextMuted), TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
+            TextRenderer.DrawText(g, "galiluna.com", ff, new Rectangle(0, Height - 22, Width, 16), Theme.TextMuted, TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
     }
 
     /// <summary>Done: gradient disc with a check. Ready: thin violet ring. Pending: faint ring. Numbers stay small.</summary>
@@ -193,11 +207,11 @@ public sealed class SideNav : Control
             TextRenderer.DrawText(g, "", check, badge, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             return;
         }
-        var ringColor = state == StepState.Ready ? Color.FromArgb(selected ? 255 : 200, Theme.Nebula) : Color.FromArgb(selected ? 130 : 60, 255, 255, 255);
+        var ringColor = state == StepState.Ready ? Theme.Purple : selected ? Theme.BorderStrong : Theme.Border;
         using var ring = new Pen(ringColor, state == StepState.Ready ? 1.5f : 1f);
         g.DrawEllipse(ring, badge);
         using var nf = Theme.HeadingFont(8.5f);
-        var numColor = selected ? Color.White : state == StepState.Ready ? Theme.DarkTextSecondary : Color.FromArgb(130, Theme.DarkTextSecondary);
+        var numColor = selected ? Theme.Heading : state == StepState.Ready ? Theme.PurpleDeep : Theme.TextMuted;
         TextRenderer.DrawText(g, number, nf, badge, numColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }
 }

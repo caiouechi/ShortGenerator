@@ -47,14 +47,14 @@ public sealed class CaptionStyle
             Id = "bold-pop", Name = "Bold Pop",
             Description = "Huge uppercase words in the lower third with a thick outline and a pop-in animation. The MrBeast / Hormozi look.",
             FontName = "Impact", FontSize = 96, Bold = true, Uppercase = true, Outline = 6, Shadow = 2,
-            Alignment = 2, MarginV = 520, PrimaryColor = Color.White, OutlineColor = Color.Black, PopAnimation = true
+            Alignment = 2, MarginV = 680, PrimaryColor = Color.White, OutlineColor = Color.Black, PopAnimation = true
         },
         new()
         {
             Id = "karaoke", Name = "Karaoke Highlight",
             Description = "Whole phrase visible, the word being spoken lights up in yellow. Keeps viewers reading along.",
             FontName = "Arial Black", FontSize = 78, Bold = true, Uppercase = true, Outline = 5, Shadow = 0,
-            Alignment = 2, MarginV = 520, PrimaryColor = Color.White, HighlightColor = Color.FromArgb(255, 230, 0), Karaoke = true
+            Alignment = 2, MarginV = 680, PrimaryColor = Color.White, HighlightColor = Color.FromArgb(255, 230, 0), Karaoke = true
         },
         new()
         {
@@ -68,7 +68,7 @@ public sealed class CaptionStyle
             Id = "neon", Name = "Neon Glow",
             Description = "Cyan text with a soft glow. Gaming, tech and music content.",
             FontName = "Verdana", FontSize = 70, Bold = true, Outline = 3, Shadow = 0, Blur = 6,
-            PrimaryColor = Color.FromArgb(0, 255, 255), OutlineColor = Color.FromArgb(0, 120, 200), Alignment = 2, MarginV = 520
+            PrimaryColor = Color.FromArgb(0, 255, 255), OutlineColor = Color.FromArgb(0, 120, 200), Alignment = 2, MarginV = 680
         },
         new()
         {

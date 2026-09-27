@@ -157,6 +157,20 @@ public static class Theme
         protected override void OnPaint(PaintEventArgs e) { /* background only; the text box paints itself */ }
     }
 
+    /// <summary>Makes one column absorb the width the other columns leave, so lists fill their panel at any size.</summary>
+    public static void FillColumn(ListView list, int index)
+    {
+        void Fit()
+        {
+            if (list.Columns.Count <= index) return;
+            int others = 0;
+            for (int i = 0; i < list.Columns.Count; i++) if (i != index) others += list.Columns[i].Width;
+            list.Columns[index].Width = Math.Max(80, list.ClientSize.Width - others - 4);
+        }
+        list.Resize += (_, _) => Fit();
+        list.HandleCreated += (_, _) => Fit();
+    }
+
     public static void Primary(Button b) { if (b is FancyButton f) f.Kind = ButtonKind.Primary; }
     public static void Secondary(Button b) { if (b is FancyButton f) f.Kind = ButtonKind.Ghost; }
     public static void Subtle(Button b) { if (b is FancyButton f) f.Kind = ButtonKind.Subtle; }

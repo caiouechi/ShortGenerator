@@ -71,6 +71,7 @@ public sealed class PublishPanel : UserControl
         _list.Columns.Add("Short", 260);
         _list.Columns.Add("Rendered", 110);
         _list.Columns.Add("Published", 420);
+        Theme.FillColumn(_list, 2);
 
         var listHost = new Panel { Dock = DockStyle.Fill };
         listHost.Controls.Add(_list);
@@ -78,7 +79,7 @@ public sealed class PublishPanel : UserControl
         listHost.Controls.Add(new Label { Text = "Tick the shorts to publish (double-click to play)", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, Padding = new Padding(4, 0, 0, 0) });
         _empty.BringToFront();
 
-        var options = new TableLayoutPanel { Dock = DockStyle.Right, Width = 440, ColumnCount = 2, Padding = new Padding(10), AutoScroll = true };
+        var options = new TableLayoutPanel { Dock = DockStyle.Right, Width = 460, ColumnCount = 2, Padding = new Padding(10, 10, 14, 10), AutoScroll = true };
         options.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
         options.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         int row = 0;
@@ -88,6 +89,8 @@ public sealed class PublishPanel : UserControl
             options.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             options.Controls.Add(label, 0, row);
             c.Margin = new Padding(0, 5, 0, 3);
+            // inputs stretch with the column instead of running past the panel edge
+            if (c is TextBox or ComboBox or FancyButton { Width: >= 280 }) { c.Dock = DockStyle.Top; }
             options.Controls.Add(c, 1, row++);
         }
         var connRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
