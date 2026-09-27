@@ -1,4 +1,5 @@
 using ShortGenerator.Forms;
+using ShortGenerator.Services;
 
 namespace ShortGenerator;
 
@@ -25,6 +26,11 @@ internal static class Program
                 await form.ReopenLastVideoAsync(); // pick up where the user left off
             if (tabArg >= 0 && tabArg + 1 < args.Length && int.TryParse(args[tabArg + 1], out var tab))
                 form.SelectTab(tab);
+            // "--signin" opens the galiluna sign-in dialog (dev convenience for checking the layout)
+            if (Array.IndexOf(args, "--signin") >= 0)
+                using (var dlg = new GaliLunaSignInForm(SettingsStore.Load())) dlg.ShowDialog(form);
+            if (Array.IndexOf(args, "--settings") >= 0)
+                using (var dlg = new SettingsForm(SettingsStore.Load())) dlg.ShowDialog(form);
         };
         Application.Run(form);
     }

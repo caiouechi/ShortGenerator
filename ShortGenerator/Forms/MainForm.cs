@@ -333,6 +333,13 @@ public sealed class MainForm : Form
         _publishPanel.Saved = () => { SaveProject(); UpdateNavStates(); };
         _publishPanel.Log = Log;
         _publishPanel.OpenSettings = OpenSettings;
+        _publishPanel.OpenSignIn = () =>
+        {
+            using var dlg = new GaliLunaSignInForm(_settings);
+            bool ok = dlg.ShowDialog(this) == DialogResult.OK;
+            if (ok) Log("Signed in with galiluna.");
+            return ok;
+        };
         _tabPublish.Controls.Add(_publishPanel);
     }
 

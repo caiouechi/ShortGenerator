@@ -20,12 +20,11 @@ public sealed class SettingsForm : Form
     private readonly Label _toolStatus = new() { AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(520, 0) };
     private readonly FancyButton _downloadTools = new() { Text = "Download missing tools", AutoSize = true };
     private readonly FancyButton _updateYtDlp = new() { Text = "Update yt-dlp", AutoSize = true };
-    // galiluna (Shorts API): environment, personal API key, test
-    private readonly ComboBox _glEnv = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
-    private readonly TextBox _glUrl = new() { Width = 420 };
-    private readonly TextBox _glKey = new() { UseSystemPasswordChar = true, Width = 420, PlaceholderText = "glk_..." };
-    private readonly FancyButton _glTest = new() { Text = "Test connection", AutoSize = true };
+    // galiluna (Shorts API): signed-in status and sign in / refresh / sign out
     private readonly Label _glStatus = new() { AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(440, 0) };
+    private readonly FancyButton _glSignIn = new() { Text = "Sign in", Width = 120, Glyph = "" };
+    private readonly FancyButton _glRefresh = new() { Text = "Refresh", Width = 110, Glyph = "" };
+    private readonly FancyButton _glSignOut = new() { Text = "Sign out", Width = 110 };
 
     public SettingsForm(AppSettings settings)
     {
@@ -36,9 +35,11 @@ public sealed class SettingsForm : Form
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
         Padding = new Padding(12);
-        ClientSize = new Size(620, 760);
+        ClientSize = new Size(640, 780);
 
-        var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true };
+        // the table grows with its rows; the host scrolls when the screen is short
+        var host = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        var table = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
@@ -83,14 +84,13 @@ public sealed class SettingsForm : Form
 
         // ---- galiluna: publish shorts to the accounts connected on galiluna.com ----
         Add("", new Label { Text = "galiluna", AutoSize = true, Font = Theme.Body(10.5f), ForeColor = Theme.Heading, Margin = new Padding(0, 14, 0, 0) });
-        Add("", new Label { Text = "Publish shorts to the Instagram and TikTok accounts connected on galiluna. Sign in to galiluna in your browser, open the account menu, Connected apps, create a key and paste it here. No password is stored.", AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(440, 0) });
-        Add("Environment", _glEnv);
-        Add("Address", _glUrl);
-        Add("API key", _glKey);
+        Add("", new Label { Text = "Publish shorts to the Instagram, TikTok and YouTube accounts connected on galiluna. Sign in opens your browser; no password is typed into this app.", AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(440, 0) });
+        Add("Status", _glStatus);
         var glRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-        glRow.Controls.Add(_glTest);
+        glRow.Controls.Add(_glSignIn);
+        glRow.Controls.Add(_glRefresh);
+        glRow.Controls.Add(_glSignOut);
         Add("", glRow);
-        Add("", _glStatus);
 
         var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Bottom, Height = 40 };
         var ok = new FancyButton { Text = "Save", Width = 90, DialogResult = DialogResult.OK };
@@ -98,8 +98,11 @@ public sealed class SettingsForm : Form
         buttons.Controls.Add(ok); buttons.Controls.Add(cancel);
         AcceptButton = ok; CancelButton = cancel;
 
-        Controls.Add(table);
+        host.Controls.Add(table);
+        Controls.Add(host);
         Controls.Add(buttons);
+        buttons.Height = 52;
+        buttons.Padding = new Padding(0, 10, 0, 0);
 
         foreach (var m in Transcriber.ModelNames) _whisperModel.Items.Add(Transcriber.DescribeModel(m));
 
@@ -115,18 +118,15 @@ public sealed class SettingsForm : Form
         _outputFolder.Text = settings.OutputFolder;
         _toolsFolder.Text = settings.ToolsFolder;
 
-        _glEnv.Items.AddRange(new object[] { "Production (galiluna.com)", "Development (torontodeveloper.ca)", "Custom address" });
-        _glUrl.Text = string.IsNullOrWhiteSpace(settings.GaliLunaBaseUrl) ? GaliLunaClient.PrdBaseUrl : settings.GaliLunaBaseUrl;
-        _glEnv.SelectedIndex = _glUrl.Text.TrimEnd('/') == GaliLunaClient.PrdBaseUrl ? 0 : _glUrl.Text.TrimEnd('/') == GaliLunaClient.DevBaseUrl ? 1 : 2;
-        _glUrl.ReadOnly = _glEnv.SelectedIndex != 2;
-        _glEnv.SelectedIndexChanged += (_, _) =>
+        _glSignIn.Click += async (_, _) =>
         {
-            if (_glEnv.SelectedIndex == 0) _glUrl.Text = GaliLunaClient.PrdBaseUrl;
-            else if (_glEnv.SelectedIndex == 1) _glUrl.Text = GaliLunaClient.DevBaseUrl;
-            _glUrl.ReadOnly = _glEnv.SelectedIndex != 2;
+            using var dlg = new GaliLunaSignInForm(_settings);
+            if (dlg.ShowDialog(this) == DialogResult.OK && dlg.Accounts is { } a) ShowGaliLunaStatus(GaliLunaSignInForm.Summary(a) + $"  ({_settings.GaliLunaBaseUrl})", Theme.Success);
+            else await RefreshGaliLunaAsync();
         };
-        _glKey.Text = SettingsStore.GetGaliLunaKey(settings) ?? "";
-        _glTest.Click += async (_, _) => await TestGaliLunaAsync();
+        _glRefresh.Click += async (_, _) => await RefreshGaliLunaAsync();
+        _glSignOut.Click += async (_, _) => await SignOutGaliLunaAsync();
+        _ = RefreshGaliLunaAsync();
 
         _downloadTools.Click += async (_, _) => await RunToolActionAsync(async (loc, log) => await loc.DownloadMissingToolsAsync(log, CancellationToken.None));
         _updateYtDlp.Click += async (_, _) => await RunToolActionAsync(async (loc, log) => log.Report(await loc.UpdateYtDlpAsync(CancellationToken.None)));
@@ -134,16 +134,15 @@ public sealed class SettingsForm : Form
         ok.Click += (_, _) => ApplyToSettings();
         RefreshToolStatus();
         Theme.Primary(ok);
+        Theme.Primary(_glSignIn);
         Theme.Apply(this);
     }
 
     private void RefreshToolStatus()
     {
         var loc = new ToolLocator(_toolsFolder.Text);
-        _toolStatus.Text =
-            $"yt-dlp: {(loc.YtDlpPath ?? "NOT FOUND")}\n" +
-            $"ffmpeg: {(loc.FfmpegPath ?? "NOT FOUND")}\n" +
-            $"ffprobe: {(loc.FfprobePath ?? "NOT FOUND")}";
+        static string Short(string? p) => p is null ? "NOT FOUND" : Path.GetFileName(Path.GetDirectoryName(p) ?? "") + "\\" + Path.GetFileName(p);
+        _toolStatus.Text = $"yt-dlp: {Short(loc.YtDlpPath)}   ffmpeg: {Short(loc.FfmpegPath)}   ffprobe: {Short(loc.FfprobePath)}";
     }
 
     private async Task RunToolActionAsync(Func<ToolLocator, IProgress<string>, Task> action)
@@ -170,32 +169,65 @@ public sealed class SettingsForm : Form
         }
     }
 
-    private async Task TestGaliLunaAsync()
+    private void ShowGaliLunaStatus(string text, Color color)
     {
-        if (string.IsNullOrWhiteSpace(_glKey.Text)) { _glStatus.Text = "Paste the API key first."; _glStatus.ForeColor = Theme.Warning; return; }
-        _glTest.Enabled = false;
-        _glStatus.ForeColor = Color.DimGray;
-        _glStatus.Text = "Contacting galiluna...";
+        _glStatus.Text = text;
+        _glStatus.ForeColor = color;
+        bool signedIn = SettingsStore.GetGaliLunaKey(_settings) is not null;
+        _glRefresh.Enabled = signedIn;
+        _glSignOut.Enabled = signedIn;
+    }
+
+    /// <summary>Re-reads the accounts. A 401 means the key was revoked or replaced on galiluna: keep it and ask to sign in again.</summary>
+    private async Task RefreshGaliLunaAsync()
+    {
+        var client = SettingsStore.CreateGaliLunaClient(_settings);
+        if (client is null) { ShowGaliLunaStatus("Not signed in.", Theme.TextMuted); return; }
+        _glRefresh.Enabled = false;
+        ShowGaliLunaStatus("Contacting galiluna...", Theme.TextMuted);
         try
         {
-            using var client = new GaliLunaClient(_glUrl.Text.Trim(), _glKey.Text);
-            var accounts = await client.GetAccountsAsync(CancellationToken.None);
-            _glStatus.Text = accounts.Summary;
-            _glStatus.ForeColor = Theme.Success;
+            using (client)
+            {
+                var accounts = await client.GetAccountsAsync(CancellationToken.None);
+                ShowGaliLunaStatus(GaliLunaSignInForm.Summary(accounts) + $"  ({client.BaseUrl})", Theme.Success);
+            }
+        }
+        catch (GaliLunaClient.GaliLunaException ex) when (ex.StatusCode == 401)
+        {
+            ShowGaliLunaStatus("Your galiluna key was revoked or replaced. Sign in again.", Theme.Warning);
         }
         catch (Exception ex)
         {
-            _glStatus.Text = ex.Message;
-            _glStatus.ForeColor = Theme.Danger;
+            ShowGaliLunaStatus(ex.Message, Theme.Danger);
         }
-        finally { _glTest.Enabled = true; }
+    }
+
+    private async Task SignOutGaliLunaAsync()
+    {
+        var client = SettingsStore.CreateGaliLunaClient(_settings);
+        if (client is null) { ShowGaliLunaStatus("Not signed in.", Theme.TextMuted); return; }
+        _glSignOut.Enabled = false;
+        ShowGaliLunaStatus("Signing out...", Theme.TextMuted);
+        try
+        {
+            using (client) await client.SignOutAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // The key is forgotten locally either way; galiluna's Connected apps page can revoke it too.
+            ShowGaliLunaStatus("galiluna could not be reached to revoke the key (" + ex.Message + "). Signed out locally.", Theme.Warning);
+        }
+        SettingsStore.SetGaliLunaKey(_settings, null);
+        try { SettingsStore.Save(_settings); } catch { }
+        if (_glStatus.ForeColor != Theme.Warning) ShowGaliLunaStatus("Not signed in.", Theme.TextMuted);
+        else { _glRefresh.Enabled = false; _glSignOut.Enabled = false; }
     }
 
     private void ApplyToSettings()
     {
         SettingsStore.SetApiKey(_settings, _apiKey.Text);
-        SettingsStore.SetGaliLunaKey(_settings, _glKey.Text);
-        _settings.GaliLunaBaseUrl = _glUrl.Text.Trim().TrimEnd('/');
+        // The galiluna key and address are saved by the sign-in form itself; nothing to copy here.
         _settings.ClaudeModel = _model.Text.Trim();
         _settings.WhisperModel = Transcriber.ModelNames[Math.Max(0, _whisperModel.SelectedIndex)];
         _settings.WhisperLanguage = LanguageOptions.CodeAt(_language.SelectedIndex);

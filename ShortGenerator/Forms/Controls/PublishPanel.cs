@@ -23,11 +23,20 @@ public sealed class PublishPanel : UserControl
     public Action<string> Log { get; set; } = _ => { };
     [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Action OpenSettings { get; set; } = () => { };
+    /// <summary>Opens the "Sign in with galiluna" form; returns true when a key was stored.</summary>
+    [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Func<bool> OpenSignIn { get; set; } = () => false;
 
     private readonly ListView _list = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, CheckBoxes = true, HideSelection = false, MultiSelect = false };
     private readonly Label _connection = new() { Dock = DockStyle.Top, Height = 44, Padding = new Padding(10, 6, 10, 0), ForeColor = Color.DimGray };
+    private readonly LinkLabel _refreshLink = new() { Text = "Refresh", AutoSize = true, LinkColor = Theme.Link, ActiveLinkColor = Theme.PurpleDeep, VisitedLinkColor = Theme.Link, LinkBehavior = LinkBehavior.HoverUnderline };
     private readonly FancyButton _refresh = new() { Text = "Refresh accounts", Width = 150 };
     private readonly FancyButton _settings = new() { Text = "galiluna settings", Width = 150 };
+    // shown instead of the account lists until the user is signed in
+    private readonly Panel _gate = new() { Dock = DockStyle.Fill, Visible = false };
+    private readonly EmptyState _gateEmpty = new("empty-editor.png", "Sign in with galiluna to publish", "Your browser opens galiluna, you approve this app, and your connected Instagram, TikTok and YouTube accounts appear here. No password is typed into this app.");
+    private readonly FancyButton _gateSignIn = new() { Text = "Sign in with galiluna", Width = 240, Height = 40, Glyph = "" };
+    private Control? _content;
     private readonly FlowLayoutPanel _instagram = new() { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
     private readonly FlowLayoutPanel _youtube = new() { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
     private readonly ComboBox _youtubePrivacy = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
@@ -101,9 +110,26 @@ public sealed class PublishPanel : UserControl
         Add("", _publish);
         Add("", _outcome);
 
-        Controls.Add(listHost);
-        Controls.Add(options);
+        // signed-in content vs sign-in gate
+        var content = new Panel { Dock = DockStyle.Fill };
+        content.Controls.Add(listHost);
+        content.Controls.Add(options);
+        _content = content;
+        _gate.Controls.Add(_gateEmpty);
+        var gateButtons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 90, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 20, 0, 0) };
+        gateButtons.Controls.Add(_gateSignIn);
+        _gate.Controls.Add(gateButtons);
+        _gate.Resize += (_, _) => gateButtons.Padding = new Padding(Math.Max(0, (_gate.Width - _gateSignIn.Width) / 2), 20, 0, 0);
+        Controls.Add(content);
+        Controls.Add(_gate);
+        // header: status line + Refresh link
+        _connection.Controls.Add(_refreshLink);
+        _refreshLink.Location = new Point(10, 24);
+        _connection.Height = 48;
         Controls.Add(_connection);
+        Theme.Primary(_gateSignIn);
+        _gateSignIn.Click += async (_, _) => { if (OpenSignIn()) await LoadAccountsAsync(); };
+        _refreshLink.LinkClicked += async (_, _) => await LoadAccountsAsync();
 
         _tiktokMode.Items.AddRange(new object[] { "Do not post to TikTok", "Send to my TikTok drafts (finish in the app)", "Post directly to TikTok" });
         _tiktokMode.SelectedIndex = 1;
@@ -184,8 +210,7 @@ public sealed class PublishPanel : UserControl
         if (client is null)
         {
             _accounts = null;
-            _connection.Text = "galiluna is not connected. Open Settings, paste the API key from galiluna's Connected apps page, and press Test connection.";
-            _connection.ForeColor = Theme.Warning;
+            SetGate(true, "Not signed in.");
             UpdatePublishEnabled();
             return;
         }
@@ -195,7 +220,7 @@ public sealed class PublishPanel : UserControl
         try
         {
             _accounts = await client.GetAccountsAsync(CancellationToken.None);
-            _connection.Text = _accounts.Summary + $"  ({client.BaseUrl})";
+            SetGate(false, GaliLunaSignInForm.Summary(_accounts) + $"  ({client.BaseUrl})");
             _connection.ForeColor = Theme.Success;
             foreach (var a in _accounts.Instagram)
             {
@@ -228,10 +253,18 @@ public sealed class PublishPanel : UserControl
             if (_tiktokPrivacy.Items.Count > 0) _tiktokPrivacy.SelectedIndex = 0;
             UpdateHint();
         }
+        catch (GaliLunaClient.GaliLunaException ex) when (ex.StatusCode == 401)
+        {
+            // Key revoked or replaced on galiluna: keep it locally, but gate publishing until the user signs in again.
+            _accounts = null;
+            SetGate(true, "Your galiluna key was revoked or replaced. Sign in again.");
+            _gateEmpty.Set("Sign in with galiluna again", "The key this app holds was revoked or replaced on galiluna. Sign in again to reconnect your accounts.");
+            Log("galiluna: key rejected (401); sign in again.");
+        }
         catch (Exception ex)
         {
             _accounts = null;
-            _connection.Text = ex.Message;
+            SetGate(false, ex.Message);
             _connection.ForeColor = Theme.Danger;
             Log("galiluna: " + ex.Message);
         }
@@ -240,6 +273,17 @@ public sealed class PublishPanel : UserControl
             _refresh.Enabled = true;
             UpdatePublishEnabled();
         }
+    }
+
+    /// <summary>Shows either the sign-in gate or the account lists, with the status line above both.</summary>
+    private void SetGate(bool gated, string status)
+    {
+        _connection.Text = status;
+        _connection.ForeColor = gated ? Theme.Warning : Theme.TextMuted;
+        _gate.Visible = gated;
+        if (_content is not null) _content.Visible = !gated;
+        _refreshLink.Visible = !gated;
+        if (gated) _gate.BringToFront();
     }
 
     private void UpdateHint()

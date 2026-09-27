@@ -147,6 +147,19 @@ public sealed class GaliLunaClient : IDisposable
         return await ReadAsync<ShortInfo>(response, ct);
     }
 
+    /// <summary>POST /api/shorts/signout: revokes the key making the call (204). A 401 means it was already gone.</summary>
+    public async Task SignOutAsync(CancellationToken ct)
+    {
+        using var response = await _http.PostAsync("api/shorts/signout", new StringContent(""), ct);
+        if (response.IsSuccessStatusCode || (int)response.StatusCode == 401) return;
+        var body = await response.Content.ReadAsStringAsync(ct);
+        throw new GaliLunaException((int)response.StatusCode, Describe((int)response.StatusCode, body));
+    }
+
+    /// <summary>The browser page that starts the loopback sign-in for this app.</summary>
+    public static string AuthorizeUrl(string baseUrl, int port, string state) =>
+        $"{baseUrl.TrimEnd('/')}/ConnectedApps/Authorize?app=short-generator&port={port}&state={Uri.EscapeDataString(state)}&device={Uri.EscapeDataString(Environment.MachineName)}";
+
     /// <summary>GET /api/shorts/{id}: current state; TikTok rows still processing are re-checked by galiluna.</summary>
     public async Task<ShortInfo> GetShortAsync(int id, CancellationToken ct)
     {
