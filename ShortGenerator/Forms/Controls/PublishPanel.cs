@@ -172,6 +172,7 @@ public sealed class PublishPanel : UserControl
     public void RefreshList()
     {
         var selectedPath = _list.SelectedItems.Count == 1 ? (_list.SelectedItems[0].Tag as GeneratedFile)?.Path : null;
+        _populating = true;
         _list.BeginUpdate();
         _list.Items.Clear();
         foreach (var f in Files())
@@ -183,10 +184,13 @@ public sealed class PublishPanel : UserControl
             if (f.Path == selectedPath) item.Selected = true;
         }
         _list.EndUpdate();
+        _populating = false;
         _empty.Visible = _list.Items.Count == 0;
         if (_list.SelectedItems.Count == 0 && _list.Items.Count > 0) _list.Items[0].Selected = true;
         UpdatePublishEnabled();
     }
+
+    private bool _populating;
 
     private static string Describe(GeneratedFile f)
     {
@@ -369,7 +373,8 @@ public sealed class PublishPanel : UserControl
 
     private void UpdatePublishEnabled()
     {
-        var anyTicked = _list.Items.Cast<ListViewItem>().Any(i => i.Checked);
+        if (_populating) return; // ItemChecked fires mid-population, when the collection can still hand out nulls
+        var anyTicked = _list.Items.Cast<ListViewItem>().Any(i => i is { Checked: true });
         var anyTarget = _instagramBoxes.Keys.Any(b => b.Checked) || _youtubeBoxes.Keys.Any(b => b.Checked)
             || (_tiktokMode.SelectedIndex > 0 && _accounts?.Tiktok is not null);
         _publish.Enabled = _accounts is not null && anyTicked && anyTarget && !_busy;
@@ -381,7 +386,7 @@ public sealed class PublishPanel : UserControl
     {
         var client = ClientFactory();
         if (client is null || _accounts is null) return;
-        var files = _list.Items.Cast<ListViewItem>().Where(i => i.Checked).Select(i => (ListViewItem: i, File: (GeneratedFile)i.Tag!)).ToList();
+        var files = _list.Items.Cast<ListViewItem>().Where(i => i is { Checked: true }).Select(i => (ListViewItem: i, File: (GeneratedFile)i.Tag!)).ToList();
         var instagramIds = _instagramBoxes.Where(kv => kv.Key.Checked).Select(kv => kv.Value).ToList();
         var tiktokMode = _tiktokMode.SelectedIndex switch { 1 => "drafts", 2 => "direct", _ => "off" };
         var privacy = _tiktokPrivacy.SelectedItem as string;

@@ -31,7 +31,7 @@ public sealed class SideNav : Control
     /// <summary>Raised when the Settings entry in the footer is clicked.</summary>
     public event EventHandler? SettingsClicked;
 
-    private const int ItemH = 62, ListTop = 112, Side = 12;
+    private const int ItemH = 54, ListTop = 104, Side = 12;
 
     public SideNav()
     {
@@ -70,9 +70,9 @@ public sealed class SideNav : Control
         if (index >= 0 && index < _items.Count) { _items[index].State = state; Invalidate(); }
     }
 
-    private Rectangle ItemRect(int i) => new(Side, ListTop + i * (ItemH + 6), Width - Side * 2, ItemH);
+    private Rectangle ItemRect(int i) => new(Side, ListTop + i * (ItemH + 4), Width - Side * 2, ItemH);
     /// <summary>Footer entry (Settings): a utility, not a workflow step, so it sits apart at the bottom.</summary>
-    private Rectangle FooterRect => new(Side, Height - 78, Width - Side * 2, 44);
+    private Rectangle FooterRect => new(Side, Height - 74, Width - Side * 2, 44);
     private const int FooterIndex = -2;
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -100,137 +100,104 @@ public sealed class SideNav : Control
         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-        // artwork, cover-fit, with a darkening overlay so text stays readable
+        // artwork: a calm matte indigo with one aurora sweep at the foot; cover-fit, anchored to the bottom
         using (var bg = new SolidBrush(Theme.DarkBg)) g.FillRectangle(bg, ClientRectangle);
         if (_bg is not null)
         {
             double scale = Math.Max(Width / (double)_bg.Width, Height / (double)_bg.Height);
             int w = (int)(_bg.Width * scale), h = (int)(_bg.Height * scale);
             g.DrawImage(_bg, new Rectangle((Width - w) / 2, Height - h, w, h));
-            using var shade = new LinearGradientBrush(ClientRectangle, Color.FromArgb(120, Theme.DarkBg), Color.FromArgb(40, Theme.DarkBg), 90f);
-            g.FillRectangle(shade, ClientRectangle);
         }
-        using (var edge = new Pen(Color.FromArgb(40, 255, 255, 255))) g.DrawLine(edge, Width - 1, 0, Width - 1, Height);
+        using (var edge = new Pen(Color.FromArgb(22, 255, 255, 255))) g.DrawLine(edge, Width - 1, 0, Width - 1, Height);
 
-        // brand: a frosted glass card lifts the logo off the nebula so the purple "luna" keeps its contrast,
-        // with a soft glow behind the mark and a tracked product label beneath
-        var card = new Rectangle(Side, 14, Width - Side * 2, 66);
-        using (var cardPath = FancyButton.Rounded(card, 16))
-        {
-            using var glass = new SolidBrush(Color.FromArgb(28, 255, 255, 255));
-            g.FillPath(glass, cardPath);
-            using var sheen = new LinearGradientBrush(card, Color.FromArgb(34, 255, 255, 255), Color.FromArgb(0, 255, 255, 255), 90f);
-            g.FillPath(sheen, cardPath);
-            using var rim = new Pen(Color.FromArgb(56, 255, 255, 255));
-            g.DrawPath(rim, cardPath);
-        }
-        int x = card.X + 14, y = card.Y + 13;
-        if (_mark is not null)
-        {
-            var glow = new Rectangle(x - 10, y - 10, 60, 60);
-            using (var gp = new GraphicsPath())
-            {
-                gp.AddEllipse(glow);
-                using var gb = new PathGradientBrush(gp) { CenterColor = Color.FromArgb(110, Theme.Nebula), SurroundColors = new[] { Color.FromArgb(0, Theme.Nebula) } };
-                g.FillEllipse(gb, glow);
-            }
-            g.DrawImage(_mark, new Rectangle(x, y, 40, 40));
-            x += 52;
-        }
+        // brand: mark and wordmark on the plain surface, a tracked product label underneath. No card, no glow:
+        // the quiet background carries the logo by itself.
+        int bx = Side + 8, by = 22;
+        if (_mark is not null) { g.DrawImage(_mark, new Rectangle(bx, by, 34, 34)); bx += 42; }
         if (_logo is not null)
         {
-            int lh = 24, lw = (int)(_logo.Width * (lh / (double)_logo.Height));
-            g.DrawImage(_logo, new Rectangle(x, y + 8, Math.Min(lw, card.Right - x - 12), lh));
+            int lh = 22, lw = (int)(_logo.Width * (lh / (double)_logo.Height));
+            g.DrawImage(_logo, new Rectangle(bx, by + 6, Math.Min(lw, Width - bx - Side - 8), lh));
         }
-        using (var f = Theme.Body(7.5f))
+        using (var f = Theme.Body(7f))
         {
-            // tracked label: letters drawn one by one for a premium, spaced look
             const string label = "SHORT GENERATOR";
-            int lx = Side + 6, ly = card.Bottom + 8;
+            int lx = Side + 8, ly = by + 44;
             foreach (var ch in label)
             {
                 var text = ch.ToString();
-                TextRenderer.DrawText(g, text, f, new Point(lx, ly), Color.FromArgb(190, Theme.DarkTextMuted), TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
-                lx += TextRenderer.MeasureText(g, text, f, Size.Empty, TextFormatFlags.NoPadding).Width + 2;
+                TextRenderer.DrawText(g, text, f, new Point(lx, ly), Color.FromArgb(150, Theme.DarkTextMuted), TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                lx += TextRenderer.MeasureText(g, text, f, Size.Empty, TextFormatFlags.NoPadding).Width + 3;
             }
         }
 
-        // items
+        // items: a small step badge, the label and a hint. Selection is a soft tint with a thin gradient
+        // accent; nothing else competes with the text.
         for (int i = 0; i < _items.Count; i++)
         {
             var it = _items[i];
             var r = ItemRect(i);
             bool sel = i == _selected, hov = i == _hover;
-            using var path = FancyButton.Rounded(r, 12);
-            if (sel)
+            if (sel || hov)
             {
-                using var fill = new SolidBrush(Color.FromArgb(170, Theme.DarkSurfaceStrong));
+                using var path = FancyButton.Rounded(r, 10);
+                using var fill = new SolidBrush(Color.FromArgb(sel ? 26 : 12, 255, 255, 255));
                 g.FillPath(fill, path);
-                using var accent = new LinearGradientBrush(new Rectangle(r.X, r.Y, 4, r.Height), Theme.CosmicBlue, Theme.Nebula, 90f);
-                using var bar = FancyButton.Rounded(new Rectangle(r.X, r.Y + 12, 4, r.Height - 24), 2);
-                g.FillPath(accent, bar);
-                using var border = new Pen(Color.FromArgb(70, 255, 255, 255));
-                g.DrawPath(border, path);
-            }
-            else if (hov)
-            {
-                using var fill = new SolidBrush(Color.FromArgb(50, 255, 255, 255));
-                g.FillPath(fill, path);
+                if (sel)
+                {
+                    using var accent = new LinearGradientBrush(new Rectangle(r.X, r.Y, 3, r.Height), Theme.CosmicBlue, Theme.Nebula, 90f);
+                    using var bar = FancyButton.Rounded(new Rectangle(r.X, r.Y + 14, 3, r.Height - 28), 1);
+                    g.FillPath(accent, bar);
+                }
             }
 
-            // step circle
-            var circle = new Rectangle(r.X + 14, r.Y + (r.Height - 30) / 2, 30, 30);
-            if (it.State == StepState.Done)
-            {
-                using var cb = new LinearGradientBrush(circle, Theme.CosmicBlue, Theme.Nebula, 45f);
-                g.FillEllipse(cb, circle);
-                using var check = Theme.IconFont(11f);
-                TextRenderer.DrawText(g, "", check, circle, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-            }
-            else
-            {
-                using var cb = new SolidBrush(Color.FromArgb(sel ? 90 : 40, 255, 255, 255));
-                g.FillEllipse(cb, circle);
-                using var cp = new Pen(Color.FromArgb(sel ? 200 : 110, 255, 255, 255), 1.2f);
-                g.DrawEllipse(cp, circle);
-                using var nf = Theme.HeadingFont(10f);
-                TextRenderer.DrawText(g, (i + 1).ToString(), nf, circle, sel ? Color.White : Theme.DarkTextSecondary, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-            }
+            var badge = new Rectangle(r.X + 16, r.Y + (r.Height - 24) / 2, 24, 24);
+            DrawBadge(g, badge, it.State, sel, (i + 1).ToString());
 
-            // texts
-            int tx = circle.Right + 12;
-            using var lf = Theme.HeadingFont(10f);
-            using var hf = Theme.Body(8f);
-            TextRenderer.DrawText(g, it.Label, lf, new Rectangle(tx, r.Y + 12, r.Right - tx - 22, 20), sel ? Color.White : Theme.DarkTextSecondary, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-            TextRenderer.DrawText(g, it.Hint, hf, new Rectangle(tx, r.Y + 33, r.Right - tx - 22, 18), Color.FromArgb(sel ? 230 : 170, Theme.DarkTextMuted), TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-
-            // state dot
-            var dotColor = it.State switch { StepState.Done => ColorTranslator.FromHtml("#34D399"), StepState.Ready => Theme.Nebula, _ => Color.FromArgb(90, 255, 255, 255) };
-            using var dot = new SolidBrush(dotColor);
-            g.FillEllipse(dot, r.Right - 16, r.Y + r.Height / 2 - 4, 8, 8);
+            int tx = badge.Right + 14;
+            using var lf = Theme.HeadingFont(9.5f);
+            using var hf = Theme.Body(7.5f);
+            var labelColor = sel ? Color.White : it.State == StepState.Pending ? Color.FromArgb(150, Theme.DarkTextSecondary) : Theme.DarkTextSecondary;
+            TextRenderer.DrawText(g, it.Label, lf, new Rectangle(tx, r.Y + 9, r.Right - tx - 12, 20), labelColor, TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+            TextRenderer.DrawText(g, it.Hint, hf, new Rectangle(tx, r.Y + 29, r.Right - tx - 12, 16), Color.FromArgb(sel ? 200 : 130, Theme.DarkTextMuted), TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         }
 
-        // footer: Settings entry, separated from the steps by a hairline
+        // footer: Settings, drawn like an item, separated by a hairline
         var fr = FooterRect;
-        using (var sep = new Pen(Color.FromArgb(40, 255, 255, 255))) g.DrawLine(sep, Side + 6, fr.Y - 10, Width - Side - 6, fr.Y - 10);
-        using (var fpath = FancyButton.Rounded(fr, 12))
+        using (var sep = new Pen(Color.FromArgb(28, 255, 255, 255))) g.DrawLine(sep, Side + 8, fr.Y - 12, Width - Side - 8, fr.Y - 12);
+        if (_hover == FooterIndex)
         {
-            if (_hover == FooterIndex)
-            {
-                using var fill = new SolidBrush(Color.FromArgb(50, 255, 255, 255));
-                g.FillPath(fill, fpath);
-            }
-            var gear = new Rectangle(fr.X + 14, fr.Y + (fr.Height - 30) / 2, 30, 30);
-            using (var gb = new SolidBrush(Color.FromArgb(_hover == FooterIndex ? 70 : 40, 255, 255, 255))) g.FillEllipse(gb, gear);
-            using (var gf = Theme.IconFont(12f))
-                TextRenderer.DrawText(g, "", gf, gear, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-            using var sf = Theme.HeadingFont(10f);
-            TextRenderer.DrawText(g, "Settings", sf, new Rectangle(gear.Right + 12, fr.Y, fr.Right - gear.Right - 24, fr.Height),
-                _hover == FooterIndex ? Color.White : Theme.DarkTextSecondary, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            using var fpath = FancyButton.Rounded(fr, 10);
+            using var fill = new SolidBrush(Color.FromArgb(12, 255, 255, 255));
+            g.FillPath(fill, fpath);
         }
+        var gear = new Rectangle(fr.X + 16, fr.Y + (fr.Height - 24) / 2, 24, 24);
+        using (var ring = new Pen(Color.FromArgb(_hover == FooterIndex ? 120 : 70, 255, 255, 255), 1f)) g.DrawEllipse(ring, gear);
+        using (var gf = Theme.IconFont(9.5f))
+            TextRenderer.DrawText(g, "", gf, gear, _hover == FooterIndex ? Color.White : Theme.DarkTextSecondary, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+        using (var sf = Theme.HeadingFont(9.5f))
+            TextRenderer.DrawText(g, "Settings", sf, new Rectangle(gear.Right + 14, fr.Y, fr.Right - gear.Right - 24, fr.Height),
+                _hover == FooterIndex ? Color.White : Theme.DarkTextSecondary, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        using (var ff = Theme.Body(7f))
+            TextRenderer.DrawText(g, "galiluna.com", ff, new Rectangle(0, Height - 22, Width, 16), Color.FromArgb(110, Theme.DarkTextMuted), TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
+    }
 
-        // footer hint
-        using (var ff = Theme.Body(7.5f))
-            TextRenderer.DrawText(g, "galiluna.com", ff, new Rectangle(0, Height - 26, Width, 18), Color.FromArgb(150, Theme.DarkTextMuted), TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
+    /// <summary>Done: gradient disc with a check. Ready: thin violet ring. Pending: faint ring. Numbers stay small.</summary>
+    private static void DrawBadge(Graphics g, Rectangle badge, StepState state, bool selected, string number)
+    {
+        if (state == StepState.Done)
+        {
+            using var cb = new LinearGradientBrush(badge, Theme.CosmicBlue, Theme.Nebula, 45f);
+            g.FillEllipse(cb, badge);
+            using var check = Theme.IconFont(8.5f);
+            TextRenderer.DrawText(g, "", check, badge, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            return;
+        }
+        var ringColor = state == StepState.Ready ? Color.FromArgb(selected ? 255 : 200, Theme.Nebula) : Color.FromArgb(selected ? 130 : 60, 255, 255, 255);
+        using var ring = new Pen(ringColor, state == StepState.Ready ? 1.5f : 1f);
+        g.DrawEllipse(ring, badge);
+        using var nf = Theme.HeadingFont(8.5f);
+        var numColor = selected ? Color.White : state == StepState.Ready ? Theme.DarkTextSecondary : Color.FromArgb(130, Theme.DarkTextSecondary);
+        TextRenderer.DrawText(g, number, nf, badge, numColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }
 }
