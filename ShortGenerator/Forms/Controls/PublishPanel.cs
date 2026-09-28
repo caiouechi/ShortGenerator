@@ -27,6 +27,9 @@ public sealed class PublishPanel : UserControl
     /// <summary>Opens the "Sign in with galiluna" form; returns true when a key was stored.</summary>
     [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<bool> OpenSignIn { get; set; } = () => false;
+    /// <summary>Deletes a rendered short (file, cover, project entry); MainForm owns the list and the confirmation.</summary>
+    [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Func<GeneratedFile, bool> Delete { get; set; } = _ => false;
 
     // header
     private readonly Label _connection = new() { Dock = DockStyle.Top, Height = 48, Padding = new Padding(10, 6, 10, 0), ForeColor = Color.DimGray };
@@ -42,6 +45,10 @@ public sealed class PublishPanel : UserControl
     private readonly ListView _list = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, CheckBoxes = true, HideSelection = false, MultiSelect = false };
     private readonly EmptyState _empty = new("empty-shorts.png", "Nothing to publish yet", "Generate shorts first. They show up here, ready to send to the accounts you connected on galiluna.");
     private readonly Label _listTitle = new() { Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, Padding = new Padding(4, 0, 0, 0), Text = "Tick the shorts to publish (double-click to play)" };
+    private readonly FancyButton _deleteShort = new() { Text = "Delete short", Width = 120, Enabled = false, Glyph = "\uE74D" };
+    private readonly FancyButton _openFolder = new() { Text = "Open folder", Width = 120, Glyph = "\uE8B7" };
+    private readonly FancyButton _cancelPublish = new() { Text = "Cancel publishing", Width = 160, Height = 36, Visible = false, Glyph = "\uE711" };
+    private CancellationTokenSource? _publishCts;
 
     // right: destinations
     private readonly Panel _right = new() { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(12, 0, 4, 8) };
@@ -70,7 +77,11 @@ public sealed class PublishPanel : UserControl
         _list.Columns.Add("Published", 300);
         Theme.FillColumn(_list, 2);
         var listHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 6, 0) };
+        var listBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(0, 8, 0, 0), WrapContents = false };
+        listBar.Controls.Add(_deleteShort);
+        listBar.Controls.Add(_openFolder);
         listHost.Controls.Add(_list);
+        listHost.Controls.Add(listBar);
         listHost.Controls.Add(_empty);
         listHost.Controls.Add(_listTitle);
         _empty.BringToFront();
@@ -84,8 +95,12 @@ public sealed class PublishPanel : UserControl
         header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         header.Controls.Add(new Label { Text = "Destinations", AutoSize = true, Font = Theme.HeadingFont(10.5f), ForeColor = Theme.Heading, Margin = new Padding(0, 10, 0, 2) }, 0, 0);
+        var headerButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+        _cancelPublish.Margin = new Padding(0, 2, 8, 0); _cancelPublish.Kind = ButtonKind.Danger;
         _publishAll.Margin = new Padding(0, 2, 0, 0);
-        header.Controls.Add(_publishAll, 1, 0);
+        headerButtons.Controls.Add(_cancelPublish);
+        headerButtons.Controls.Add(_publishAll);
+        header.Controls.Add(headerButtons, 1, 0);
         _summary.Margin = new Padding(0, 2, 0, 0);
         header.Controls.Add(_summary, 0, 1);
         header.SetColumnSpan(_summary, 2);
@@ -145,6 +160,18 @@ public sealed class PublishPanel : UserControl
         _publishAll.Click += async (_, _) => await PublishAsync(_networkCards.Where(c => c.HasTarget).ToList());
         _list.ItemChecked += (_, _) => UpdateButtons();
         _list.SelectedIndexChanged += (_, _) => ShowSelected();
+        _deleteShort.Click += (_, _) =>
+        {
+            if (_list.SelectedItems.Count != 1 || _list.SelectedItems[0].Tag is not GeneratedFile f) return;
+            if (Delete(f)) RefreshList();
+        };
+        _openFolder.Click += (_, _) =>
+        {
+            var f = _list.SelectedItems.Count == 1 ? _list.SelectedItems[0].Tag as GeneratedFile : Files().FirstOrDefault();
+            var dir = f is null ? null : Path.GetDirectoryName(f.Path);
+            if (dir is not null && Directory.Exists(dir)) TryOpen(dir);
+        };
+        _cancelPublish.Click += (_, _) => { _publishCts?.Cancel(); _cancelPublish.Enabled = false; _cancelPublish.Text = "Cancelling..."; };
         _list.DoubleClick += (_, _) => { if (_list.SelectedItems.Count == 1 && _list.SelectedItems[0].Tag is GeneratedFile f && File.Exists(f.Path)) TryOpen(f.Path); };
     }
 
@@ -326,6 +353,10 @@ public sealed class PublishPanel : UserControl
         foreach (var c in _networkCards) c.SetEnabled(any && c.HasTarget, ticked);
         int destinations = _networkCards.Count(c => c.HasTarget);
         _publishAll.Enabled = any && destinations > 0;
+        _deleteShort.Enabled = !_busy && _list.SelectedItems.Count == 1;
+        _openFolder.Enabled = Files().Count > 0;
+        _cancelPublish.Visible = _busy;
+        _publishAll.Visible = !_busy;
         _publishAll.Text = destinations > 1 ? $"Publish to all ({destinations})" : "Publish to all";
         _summary.Text = _accounts is null ? "" : ticked == 0 ? "Tick at least one short on the left." :
             destinations == 0 ? "Pick an account in a card below." :
@@ -343,75 +374,115 @@ public sealed class PublishPanel : UserControl
         if (files.Count == 0) return;
 
         var where = string.Join(", ", targets.Select(t => t.Describe()));
+        int requests = files.Count * targets.Sum(t => t.Sends().Count);
         var again = files.Where(f => f.File.Publications.Any(p => targets.Any(t => t.Network == p.Network.ToLowerInvariant()) && p.Status is "published" or "drafted")).Select(f => f.File.Title).ToList();
-        var message = $"Publish {files.Count} short{(files.Count == 1 ? "" : "s")} to {where}?"
+        var message = $"Publish {files.Count} short{(files.Count == 1 ? "" : "s")} to {where}?" + (requests > 1 ? $"\n\nEach account is sent separately ({requests} uploads) so you see every result as it lands." : "")
             + (targets.Any(t => t.Network == "instagram") ? "\n\nInstagram posts go live immediately and are visible to followers." : "")
             + (again.Count > 0 ? $"\n\nAlready posted there before and will be posted AGAIN: {string.Join(", ", again)}." : "");
         if (MessageBox.Show(this, message, "Publish with galiluna", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
 
-        _busy = true; UpdateButtons();
-        int ok = 0, total = 0;
+        _busy = true;
+        _publishCts = new CancellationTokenSource();
+        var ct = _publishCts.Token;
+        _cancelPublish.Enabled = true; _cancelPublish.Text = "Cancel publishing";
+        UpdateButtons();
+        int ok = 0, total = 0; bool cancelled = false;
         try
         {
             foreach (var (item, file) in files)
             {
+                if (cancelled) break;
                 foreach (var card in targets)
                 {
-                    total++;
-                    item.SubItems[2].Text = $"{card.Title}: uploading...";
-                    card.SetOutcome($"Uploading {file.Title}...", Theme.TextMuted);
-                    var progress = new Progress<double>(p => item.SubItems[2].Text = p < 1 ? $"{card.Title}: uploading {(int)(p * 100)}%" : $"{card.Title}: publishing (this can take a few minutes)...");
-                    try
+                    if (cancelled) break;
+                    var sends = card.Sends();
+                    var done = new List<string>(); // per-account lines shown on the card as they arrive
+                    int index = 0;
+                    foreach (var (account, options) in sends)
                     {
-                        var text = file.PostFor(card.Network);
-                        var result = await client.SendAsync(file.Path, text.Title, text.Description, text.Tags, card.Options(), progress, CancellationToken.None, file.CoverPath);
-                        // Ask again while TikTok is still working, up to ~5 minutes.
-                        for (int attempt = 0; attempt < 20 && result.AnyProcessing; attempt++)
+                        if (ct.IsCancellationRequested) { cancelled = true; break; }
+                        total++; index++;
+                        string Progress(string state) => sends.Count > 1 ? $"{card.Title} {index}/{sends.Count} ({account}): {state}" : $"{card.Title}: {state}";
+                        item.SubItems[2].Text = Progress("uploading...");
+                        card.SetOutcome(string.Join("; ", done.Append($"{account}: uploading...")), Theme.TextMuted);
+                        var progress = new Progress<double>(p =>
                         {
-                            item.SubItems[2].Text = "TikTok still working...";
-                            await Task.Delay(TimeSpan.FromSeconds(15));
-                            result = await client.GetShortAsync(result.Id, CancellationToken.None);
+                            var state = p < 1 ? $"uploading {(int)(p * 100)}%" : "publishing (this can take a few minutes)...";
+                            item.SubItems[2].Text = Progress(state);
+                            card.SetOutcome(string.Join("; ", done.Append($"{account}: {state}")), Theme.TextMuted);
+                        });
+                        try
+                        {
+                            var text = file.PostFor(card.Network);
+                            var result = await client.SendAsync(file.Path, text.Title, text.Description, text.Tags, options, progress, ct, file.CoverPath);
+                            // Ask again while TikTok is still working, up to ~5 minutes.
+                            for (int attempt = 0; attempt < 20 && result.AnyProcessing; attempt++)
+                            {
+                                item.SubItems[2].Text = Progress("TikTok still working...");
+                                await Task.Delay(TimeSpan.FromSeconds(15), ct);
+                                result = await client.GetShortAsync(result.Id, ct);
+                            }
+                            Apply(file, card.Network, account, result.Id, result.Publications);
+                            bool good = result.Publications.Count > 0 && result.Publications.All(p => p.Status is "published" or "drafted");
+                            if (good) ok++;
+                            done.Add(string.Join("; ", result.Publications.Select(p => $"{p.Account ?? account}: {StatusText(p.Status)}{(p.Error is null ? "" : " - " + p.Error)}")));
+                            card.SetOutcome(string.Join("; ", done), good ? Theme.Success : Theme.Warning);
+                            item.SubItems[2].Text = Describe(file); // the list shows each account as soon as it lands
+                            Saved();
+                            Log($"galiluna #{result.Id} \"{text.Title}\" ({card.Title}, {account}): " + string.Join("; ", result.Publications.Select(p => $"{p.Account ?? p.Network} {p.Status}{(p.Error is null ? "" : " - " + p.Error)}")));
                         }
-                        Apply(file, card.Network, result.Id, result.Publications);
-                        bool good = result.Publications.Count > 0 && result.Publications.All(p => p.Status is "published" or "drafted");
-                        if (good) ok++;
-                        card.SetOutcome(string.Join("; ", result.Publications.Select(p => $"{p.Account ?? NetworkName(p.Network)}: {StatusText(p.Status)}{(p.Error is null ? "" : " - " + p.Error)}")), good ? Theme.Success : Theme.Warning);
-                        Log($"galiluna #{result.Id} \"{text.Title}\" ({card.Title}): " + string.Join("; ", result.Publications.Select(p => $"{p.Account ?? p.Network} {p.Status}{(p.Error is null ? "" : " - " + p.Error)}")));
-                    }
-                    catch (Exception ex)
-                    {
-                        Apply(file, card.Network, null, new[] { new GaliLunaClient.Publication { Network = card.Network, Status = "failed", Error = ex.Message } });
-                        card.SetOutcome(ex.Message, Theme.Danger);
-                        Log($"galiluna \"{file.Title}\" ({card.Title}): {ex.Message}");
+                        catch (OperationCanceledException)
+                        {
+                            // Stopped before galiluna answered. The upload may or may not have reached the network:
+                            // the Published column shows the truth after Refresh (galiluna keeps the outcome).
+                            cancelled = true;
+                            done.Add($"{account}: cancelled (if the upload had finished, galiluna may still have posted it; check the account)");
+                            card.SetOutcome(string.Join("; ", done), Theme.Warning);
+                            Log($"galiluna \"{file.Title}\" ({card.Title}, {account}): cancelled by the user.");
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            Apply(file, card.Network, account, null, new[] { new GaliLunaClient.Publication { Network = card.Network, Account = account, Status = "failed", Error = ex.Message } });
+                            done.Add($"{account}: failed - {ex.Message}");
+                            card.SetOutcome(string.Join("; ", done), Theme.Danger);
+                            Log($"galiluna \"{file.Title}\" ({card.Title}, {account}): {ex.Message}");
+                        }
                     }
                 }
                 item.SubItems[2].Text = Describe(file);
-                item.Checked = false;
+                if (!cancelled) item.Checked = false;
                 Saved();
             }
-            _summary.Text = $"{ok}/{total} publication{(total == 1 ? "" : "s")} succeeded. The Published column shows each account.";
-            _summary.ForeColor = ok == total ? Theme.Success : Theme.Warning;
+            _summary.Text = cancelled
+                ? $"Publishing cancelled after {ok} publication{(ok == 1 ? "" : "s")}."
+                : $"{ok}/{total} publication{(total == 1 ? "" : "s")} succeeded. The Published column shows each account.";
+            _summary.ForeColor = cancelled ? Theme.Warning : ok == total ? Theme.Success : Theme.Warning;
         }
         finally
         {
             _busy = false;
+            _publishCts?.Dispose(); _publishCts = null;
+            var keep = _summary.ForeColor;
             UpdateButtons();
             ShowSelected();
-            _summary.ForeColor = ok == total ? Theme.Success : Theme.Warning;
+            _summary.ForeColor = keep;
         }
     }
 
     private static string StatusText(string status) => status switch { "published" => "live", "drafted" => "in drafts", "processing" => "working...", _ => "failed" };
 
-    /// <summary>Records this network's outcome on the file, keeping what other networks reported earlier.</summary>
-    private static void Apply(GeneratedFile file, string network, int? shortId, IEnumerable<GaliLunaClient.Publication> publications)
+    /// <summary>Records one account's outcome on the file, keeping what other accounts and networks reported earlier.</summary>
+    private static void Apply(GeneratedFile file, string network, string account, int? shortId, IEnumerable<GaliLunaClient.Publication> publications)
     {
         if (shortId is not null) file.GaliLunaShortId ??= shortId;
         file.SentAt ??= DateTime.Now;
-        var kept = file.Publications.Where(p => !string.Equals(p.Network, network, StringComparison.OrdinalIgnoreCase)).ToList();
+        var incomingAccounts = publications.Select(p => p.Account ?? account).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var kept = file.Publications.Where(p => !(string.Equals(p.Network, network, StringComparison.OrdinalIgnoreCase)
+                                                  && incomingAccounts.Contains(p.Account ?? account))).ToList();
         kept.AddRange(publications.Select(p => new PublishOutcome
         {
-            Network = p.Network, Account = p.Account, Status = p.Status, Permalink = p.Permalink, Error = p.Error,
+            Network = p.Network, Account = p.Account ?? account, Status = p.Status, Permalink = p.Permalink, Error = p.Error,
         }));
         file.Publications = kept;
     }
@@ -557,15 +628,29 @@ public sealed class PublishPanel : UserControl
 
         public bool HasTarget => Network == "tiktok" || _boxes.Keys.Any(b => b.Checked);
 
-        public GaliLunaClient.SendOptions Options()
+        /// <summary>
+        /// One request per ticked account (or one for TikTok), each with only that account as target, so the
+        /// outcome of every account shows as soon as galiluna answers for it instead of after the whole batch.
+        /// </summary>
+        public List<(string Account, GaliLunaClient.SendOptions Options)> Sends()
         {
             var none = Array.Empty<int>();
-            return Network switch
+            var list = new List<(string, GaliLunaClient.SendOptions)>();
+            switch (Network)
             {
-                "instagram" => new GaliLunaClient.SendOptions(_boxes.Where(kv => kv.Key.Checked).Select(kv => kv.Value).ToList(), "off", null, false, none, "public"),
-                "youtube" => new GaliLunaClient.SendOptions(none, "off", null, false, _boxes.Where(kv => kv.Key.Checked).Select(kv => kv.Value).ToList(), _privacy.SelectedItem as string ?? "public"),
-                _ => new GaliLunaClient.SendOptions(none, _mode.SelectedIndex == 1 ? "direct" : "drafts", _privacy.SelectedItem as string, false, none, "public"),
-            };
+                case "instagram":
+                    foreach (var kv in _boxes.Where(kv => kv.Key.Checked))
+                        list.Add((kv.Key.Text, new GaliLunaClient.SendOptions(new[] { kv.Value }, "off", null, false, none, "public")));
+                    break;
+                case "youtube":
+                    foreach (var kv in _boxes.Where(kv => kv.Key.Checked))
+                        list.Add((kv.Key.Text, new GaliLunaClient.SendOptions(none, "off", null, false, new[] { kv.Value }, _privacy.SelectedItem as string ?? "public")));
+                    break;
+                default:
+                    list.Add((_accounts.Tiktok?.Label ?? "TikTok", new GaliLunaClient.SendOptions(none, _mode.SelectedIndex == 1 ? "direct" : "drafts", _privacy.SelectedItem as string, false, none, "public")));
+                    break;
+            }
+            return list;
         }
 
         public string Describe() => Network switch

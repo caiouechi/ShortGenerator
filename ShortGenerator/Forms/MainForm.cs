@@ -351,6 +351,7 @@ public sealed class MainForm : Form
         _publishPanel.Saved = () => { SaveProject(); UpdateNavStates(); };
         _publishPanel.Log = Log;
         _publishPanel.OpenSettings = OpenSettings;
+        _publishPanel.Delete = DeleteGenerated;
         _publishPanel.OpenSignIn = () =>
         {
             using var dlg = new GaliLunaSignInForm(_settings);
@@ -1236,18 +1237,28 @@ public sealed class MainForm : Form
         var item = _results.SelectedItems[0];
         var path = item.Tag as string;
         var file = _generated.LastOrDefault(g => g.Path == path);
-        var title = file?.Title ?? item.Text;
-        if (MessageBox.Show(this, $"Delete the short \"{title}\" and its cover image?\n\nThis cannot be undone.", "Delete short",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
-        TryDelete(path);
-        TryDelete(file?.CoverPath);
-        if (file is not null) _generated.Remove(file);
-        _results.Items.Remove(item);
+        if (file is null) { TryDelete(path); _results.Items.Remove(item); return; }
+        if (DeleteGenerated(file)) _results.Items.Remove(item);
+    }
+
+    /// <summary>Asks, then deletes a rendered short with its cover and forgets it in the project. Used by the results list and the Publish page.</summary>
+    private bool DeleteGenerated(GeneratedFile file)
+    {
+        var published = file.Publications.Any(p => p.Status is "published" or "drafted");
+        var msg = $"Delete the short \"{file.Title}\" and its cover image?" +
+                  (published ? "\n\nIt was already published: the post stays online on the networks, only the local file and its record are removed." : "") +
+                  "\n\nThis cannot be undone.";
+        if (MessageBox.Show(this, msg, "Delete short", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return false;
+        TryDelete(file.Path);
+        TryDelete(file.CoverPath);
+        _generated.Remove(file);
+        foreach (ListViewItem it in _results.Items) if (it.Tag as string == file.Path) { _results.Items.Remove(it); break; }
         SaveProject();
         _publishPanel.RefreshList();
         RefreshQueue();
         UpdateNavStates();
-        Log($"Deleted short \"{title}\".");
+        Log($"Deleted short \"{file.Title}\".");
+        return true;
     }
 
     private bool TryDelete(string? path)
