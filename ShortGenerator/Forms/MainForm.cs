@@ -1738,8 +1738,9 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
-    /// Moves the camera of the cut under the playhead to the next best place to look (another person, both,
-    /// the wide shot), cycling on each click. Only that cut changes; the rest of the short keeps its framing.
+    /// Moves the camera to the next best place to look (another person, both, the wide shot), cycling on each
+    /// click. With Camera mode off the whole cut under the playhead changes; with Camera mode on a new cut starts
+    /// at the playhead, so only the scene from here to the next cut changes.
     /// </summary>
     private async Task ChangeCameraAsync()
     {
@@ -1762,6 +1763,15 @@ public sealed class MainForm : Form
         {
             current = new CameraKeyframe { Time = 0, X = 50, Y = 50, Zoom = 1, Source = "auto" };
             s.Camera.Add(current);
+            cuts = s.Camera.OrderBy(k => k.Time).ToList();
+        }
+        // Camera mode on: the change starts here and leaves everything before the playhead untouched, so a new
+        // cut is inserted at the current time. Camera mode off: the whole cut under the playhead changes.
+        if (_cameraMode.Checked && rel > current.Time + 0.3)
+        {
+            var split = new CameraKeyframe { Time = Math.Round(rel, 2), X = current.X, Y = current.Y, Zoom = current.Zoom, Source = current.Source };
+            s.Camera.Add(split);
+            current = split;
             cuts = s.Camera.OrderBy(k => k.Time).ToList();
         }
         var next = cuts.FirstOrDefault(k => k.Time > current.Time);
