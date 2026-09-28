@@ -55,7 +55,6 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _clipStart = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
     private readonly NumericUpDown _clipEnd = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
     private readonly FancyButton _renderPreview = new() { Text = "Render preview", Width = 160 };
-    private readonly FancyButton _generateOne = new() { Text = "Generate this short", Width = 190 };
     // cover / thumbnail for the short
     private readonly PictureBox _coverPreview = new() { Width = 96, Height = 170, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(19, 24, 52), BorderStyle = BorderStyle.None };
     private readonly FancyButton _setCover = new() { Text = "Use this frame", Width = 170, Glyph = "" };
@@ -364,7 +363,7 @@ public sealed class MainForm : Form
 
     private void ApplyTheme()
     {
-        foreach (var b in new[] { _download, _downloadTranscribe, _transcribe, _analyze, _generate, _continueToGenerate, _libraryTranscribe, _gptBuild, _gptCopy, _gptImport, _playPause, _generateOne }) Theme.Primary(b);
+        foreach (var b in new[] { _download, _downloadTranscribe, _transcribe, _analyze, _generate, _continueToGenerate, _libraryTranscribe, _gptBuild, _gptCopy, _gptImport, _playPause, _renderPreview }) Theme.Primary(b);
         Theme.Apply(this);
         _videoInfo.Font = Theme.Body(10f);
         _videoInfo.ForeColor = Theme.TextSecondary;
@@ -386,7 +385,7 @@ public sealed class MainForm : Form
         _generate.Font = Theme.Body(10f, FontStyle.Bold);
         _generate.Height = 36; _generate.Width = 210; _generate.Glyph = "";
         _continueToGenerate.Glyph = ""; _continueToGenerate.Font = Theme.Body(10f, FontStyle.Bold);
-        _generateOne.Glyph = "";
+        _renderPreview.Glyph = "";
         _renderPreview.Glyph = "";
         _transcribe.Glyph = "";
         _analyze.Glyph = "";
@@ -617,19 +616,16 @@ public sealed class MainForm : Form
             actions.Controls.Add(c, 0, r);
             if (span) actions.SetColumnSpan(c, 2);
         }
-        _generateOne.Height = 38; _generateOne.Dock = DockStyle.Fill; _generateOne.Margin = new Padding(0, 0, 0, 8);
-        _renderPreview.Dock = DockStyle.Fill; _renderPreview.Margin = new Padding(0, 0, 4, 8);
-        _autoCamera.Text = "Auto camera"; _autoCamera.Dock = DockStyle.Fill; _autoCamera.Margin = new Padding(4, 0, 0, 8);
-        _changeCamera.Dock = DockStyle.Fill; _changeCamera.Margin = new Padding(0, 0, 4, 12);
-        _cameraMode.Dock = DockStyle.Fill; _cameraMode.Height = 32; _cameraMode.Margin = new Padding(4, 0, 0, 12);
+        _renderPreview.Height = 38; _renderPreview.Dock = DockStyle.Fill; _renderPreview.Margin = new Padding(0, 0, 0, 8);
+        _autoCamera.Text = "Auto camera"; _autoCamera.Dock = DockStyle.Fill; _autoCamera.Margin = new Padding(0, 0, 4, 8);
+        _changeCamera.Dock = DockStyle.Fill; _changeCamera.Margin = new Padding(4, 0, 0, 8);
+        _cameraMode.Dock = DockStyle.Fill; _cameraMode.Height = 32; _cameraMode.Margin = new Padding(0, 0, 0, 12);
         actions.RowCount = 0;
-        Row(_generateOne, true);
+        Row(_renderPreview, true);
         actions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        actions.Controls.Add(_renderPreview, 0, actions.RowCount);
-        actions.Controls.Add(_autoCamera, 1, actions.RowCount++);
-        actions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        actions.Controls.Add(_changeCamera, 0, actions.RowCount);
-        actions.Controls.Add(_cameraMode, 1, actions.RowCount++);
+        actions.Controls.Add(_autoCamera, 0, actions.RowCount);
+        actions.Controls.Add(_changeCamera, 1, actions.RowCount++);
+        Row(_cameraMode, true);
         Row(new Label { Text = "Cover / thumbnail", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 0, 0, 4) }, true);
         var cover = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Dock = DockStyle.Fill, Margin = Padding.Empty };
         cover.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -1007,13 +1003,6 @@ public sealed class MainForm : Form
             foreach (ListViewItem it in _suggestList.Items) if (ReferenceEquals(it.Tag, s)) it.Checked = s.Selected;
             _populatingSuggestions = false;
             UpdateGenerateEnabled();
-        };
-        _generateOne.Click += async (_, _) =>
-        {
-            if (_editing is null) { MessageBox.Show(this, "Pick a short first.", "Generate"); return; }
-            await _player.PauseAsync();
-            var s = _editing;
-            await GenerateAsync(new[] { s });
         };
         _results.DoubleClick += (_, _) => { if (_results.SelectedItems.Count > 0 && _results.SelectedItems[0].Tag is string p && File.Exists(p)) OpenPath(p); };
     }
@@ -2196,7 +2185,7 @@ public sealed class MainForm : Form
         _populatingQueue = false;
     }
 
-    /// <param name="only">Render just these shorts (from the editor's "Generate this short"); null = all ticked shorts.</param>
+    /// <param name="only">Render just these shorts; null = all ticked shorts.</param>
     private async Task GenerateAsync(IReadOnlyList<ShortSuggestion>? only = null)
     {
         if (_video is null || _suggestions is null) return;
@@ -2222,6 +2211,14 @@ public sealed class MainForm : Form
                 _busyTitle = $"Generating {i}/{selected.Count}: {s.Title}";
                 _status.Text = _busyTitle + "...";
                 var item = _results.Items.Add(new ListViewItem(new[] { s.Title, "rendering...", "" }));
+                // an earlier render of this short that was never published is replaced, so the folder holds one
+                // file per short and the cover on disk is always the current one
+                foreach (var old in _generated.Where(g => g.Title == s.Title && !g.Sent).ToList())
+                {
+                    TryDelete(old.Path);
+                    TryDelete(old.CoverPath);
+                    _generated.Remove(old);
+                }
                 if (options.CropMode == CropMode.VerticalCrop && options.AutoCamera && s.Camera.Count == 0 && FaceFramer.IsSupported)
                 {
                     item.SubItems[1].Text = "faces...";
