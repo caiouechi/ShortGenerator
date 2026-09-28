@@ -62,6 +62,10 @@ public sealed class MainForm : Form
     private readonly FancyButton _pickCoverImage = new() { Text = "Choose image...", Width = 170 };
     private readonly FancyButton _clearCover = new() { Text = "Reset to default", Width = 170 };
     private readonly Label _coverInfo = new() { AutoSize = true, MaximumSize = new Size(170, 0), ForeColor = Color.DimGray };
+    // cover helpers: copy the frame for ChatGPT, copy a thumbnail brief, or (developer only) let Higgsfield redraw it
+    private readonly FancyButton _copyCover = new() { Text = "Copy image", Width = 150, Glyph = "\uE8C8" };
+    private readonly FancyButton _copyCoverPrompt = new() { Text = "Copy thumbnail prompt", Width = 150 };
+    private readonly FancyButton _generateCover = new() { Text = "Higgsfield cover", Width = 150, Glyph = "\uE8A9", Visible = HiggsfieldClient.IsConfigured || System.Diagnostics.Debugger.IsAttached };
     private readonly CheckBox _cameraMode = new() { Text = "Camera mode", AutoSize = false, Appearance = Appearance.Button, TextAlign = ContentAlignment.MiddleCenter, Width = 110, Height = 28 };
     private readonly FancyButton _autoCamera = new() { Text = "Auto camera (faces)", Width = 185 };
     private readonly FancyButton _changeCamera = new() { Text = "Change camera", Width = 135 };
@@ -634,7 +638,7 @@ public sealed class MainForm : Form
         cover.Controls.Add(_coverPreview, 0, 0);
         var coverButtons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
         _setCover.Width = _pickCoverImage.Width = _clearCover.Width = 150;
-        _setCover.Margin = _pickCoverImage.Margin = _clearCover.Margin = new Padding(0, 0, 0, 6);
+        _setCover.Margin = _pickCoverImage.Margin = _clearCover.Margin = _copyCover.Margin = _copyCoverPrompt.Margin = _generateCover.Margin = new Padding(0, 0, 0, 6);
         _coverInfo.MaximumSize = new Size(150, 0);
         coverButtons.Controls.Add(_setCover);
         coverButtons.Controls.Add(_pickCoverImage);
@@ -642,6 +646,17 @@ public sealed class MainForm : Form
         coverButtons.Controls.Add(_coverInfo);
         cover.Controls.Add(coverButtons, 1, 0);
         Row(cover, true);
+        // make it viral: copy the frame and a brief for ChatGPT, or (developer only) let Higgsfield redraw it
+        Row(new Label { Text = "Make it viral", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 8, 0, 2) }, true);
+        var viral = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true, Margin = Padding.Empty };
+        _copyCover.Text = "Copy image"; _copyCover.Width = 118;
+        _copyCoverPrompt.Text = "Copy prompt"; _copyCoverPrompt.Width = 118; _copyCoverPrompt.Glyph = "";
+        _generateCover.Text = "Higgsfield"; _generateCover.Width = 118;
+        _copyCover.Margin = _copyCoverPrompt.Margin = _generateCover.Margin = new Padding(0, 0, 6, 6);
+        viral.Controls.Add(_copyCover);
+        viral.Controls.Add(_copyCoverPrompt);
+        viral.Controls.Add(_generateCover);
+        Row(viral, true);
 
         var kfHost = new Panel { Dock = DockStyle.Fill };
         var kfBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(0, 10, 0, 0), WrapContents = false };
@@ -651,9 +666,9 @@ public sealed class MainForm : Form
         kfHost.Controls.Add(kfBar);
         kfHost.Controls.Add(new Label { Text = "Camera cuts and caption positions", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, UseMnemonic = false });
         // the actions scroll with the column when the window is short, so nothing is ever clipped
-        var actionsScroll = new Panel { Dock = DockStyle.Top, AutoScroll = true, Height = 340 };
+        var actionsScroll = new Panel { Dock = DockStyle.Top, AutoScroll = true, Height = 420 };
         actionsScroll.Controls.Add(actions);
-        actions.SizeChanged += (_, _) => actionsScroll.Height = Math.Min(actions.Height + 4, 360);
+        actions.SizeChanged += (_, _) => actionsScroll.Height = Math.Min(actions.Height + 4, 430);
         kfHost.Controls.Add(actionsScroll);
         leftSplit.Panel1.Controls.Add(clipsHost);
         leftSplit.Panel2.Controls.Add(kfHost);
@@ -888,6 +903,19 @@ public sealed class MainForm : Form
             SaveProject();
             await UpdateCoverPreviewAsync();
         };
+        _copyCover.Click += (_, _) =>
+        {
+            if (_coverPreview.Image is null) { _status.Text = "No cover to copy yet."; return; }
+            try { Clipboard.SetImage(_coverPreview.Image); _status.Text = "Cover image copied. Paste it into ChatGPT together with the thumbnail prompt."; }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Copy failed"); }
+        };
+        _copyCoverPrompt.Click += (_, _) =>
+        {
+            if (_editing is null) return;
+            try { Clipboard.SetText(ThumbnailPrompt(_editing, forHuman: true)); _status.Text = "Thumbnail prompt copied. Paste it into ChatGPT with the cover image and fill in the last line."; }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Copy failed"); }
+        };
+        _generateCover.Click += async (_, _) => await GenerateCoverWithHiggsfieldAsync();
         _clearCover.Click += async (_, _) =>
         {
             if (_editing is null) return;
@@ -1648,6 +1676,58 @@ public sealed class MainForm : Form
             try { File.Delete(path); } catch { }
         }
         catch (Exception ex) { Log("Cover preview failed: " + ex.Message); }
+    }
+
+    /// <summary>
+    /// The brief for redrawing the cover as a viral 9:16 thumbnail. For a human it ends with a blank to fill in;
+    /// for Higgsfield the blank is filled from the suggestion's reasoning.
+    /// </summary>
+    private string ThumbnailPrompt(ShortSuggestion s, bool forHuman)
+    {
+        var language = _language.SelectedIndex > 0 && !string.IsNullOrWhiteSpace(_language.Text) ? _language.Text : "the language spoken in the video";
+        var ideal = forHuman
+            ? "The ideal thumbnail will be: [describe here what you want: the expression, the headline words, the colours, what to exaggerate]"
+            : $"The ideal thumbnail will be: the person's expression pushed to match the emotion \"{s.Emotion}\", a 2 to 4 word headline taken from the hook, and the drama of this idea: {s.WhyViral}";
+        return
+            "Act as a viral TikTok / Instagram Reels / YouTube Shorts creator and thumbnail designer with millions of views.\n" +
+            "Using the attached frame as the base (keep the same person, face and outfit recognizable), redesign it into a scroll-stopping 9:16 (1080x1920) cover for a short.\n\n" +
+            $"Short title: \"{s.Title}\"\n" +
+            $"Hook (first words): \"{s.Hook}\"\n" +
+            $"Emotion: {s.Emotion}\n" +
+            $"Why it could go viral: {s.WhyViral}\n\n" +
+            "Rules: one clear focal point on the face, exaggerated but natural expression, high contrast and saturated but clean colours, simplified background, " +
+            $"a big bold headline of 2 to 5 words in {language} with a thick outline placed in the upper third, leave the bottom 20% free for the platform UI, " +
+            "no logos, no watermarks, no extra text, photorealistic, sharp, vertical.\n\n" + ideal;
+    }
+
+    /// <summary>Developer-only: uploads the current cover to Higgsfield, asks the image model to redraw it, and uses the result as the cover.</summary>
+    private async Task GenerateCoverWithHiggsfieldAsync()
+    {
+        if (_video is null || _editing is null) return;
+        using var client = HiggsfieldClient.FromEnvironment();
+        if (client is null)
+        {
+            MessageBox.Show(this, "Set HF_API_KEY (and HF_API_SECRET if your key has one) in the environment, then restart the app.", "Higgsfield");
+            return;
+        }
+        var s = _editing;
+        await RunBusyAsync("Higgsfield cover", async ct =>
+        {
+            var tmp = Path.Combine(Path.GetTempPath(), "shortgen_covers", $"{Guid.NewGuid():N}.mp4");
+            Directory.CreateDirectory(Path.GetDirectoryName(tmp)!);
+            var frame = await _renderer.ExportCoverAsync(_video, s, ReadOptions(), tmp, ct) ?? throw new InvalidOperationException("The cover frame could not be exported.");
+            _status.Text = "Uploading the frame to Higgsfield...";
+            var reference = await client.UploadAsync(frame, ct);
+            _status.Text = $"Higgsfield ({client.Model}) is drawing the cover...";
+            var url = await client.GenerateImageAsync(ThumbnailPrompt(s, forHuman: false), reference, new Progress<string>(m => { Log(m); _status.Text = m; }), ct);
+            var outPath = Path.Combine(Path.GetDirectoryName(_video.FilePath)!, "covers", SafeFolder(s.Title) + ".higgsfield.jpg");
+            await client.DownloadAsync(url, outPath, ct);
+            try { File.Delete(frame); } catch { }
+            s.CoverImage = outPath;
+            SaveProject();
+            Log($"Higgsfield cover saved to {outPath}");
+            if (ReferenceEquals(_editing, s)) await UpdateCoverPreviewAsync();
+        });
     }
 
     /// <summary>Current position relative to the clip start, rounded to 0.1 s.</summary>

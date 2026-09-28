@@ -56,7 +56,6 @@ public sealed class PublishPanel : UserControl
 
     private GaliLunaClient.Accounts? _accounts;
     private GeneratedFile? _editing;
-    private bool _loading;
     private bool _populating;
     private bool _busy;
     private Control? _content;
@@ -285,7 +284,6 @@ public sealed class PublishPanel : UserControl
     private void ShowSelected()
     {
         _editing = _list.SelectedItems.Count == 1 ? _list.SelectedItems[0].Tag as GeneratedFile : null;
-        _loading = true;
         if (_editing is null)
         {
             _editingTitle.Text = "";
@@ -301,7 +299,6 @@ public sealed class PublishPanel : UserControl
         }
         LoadCover(_editing?.CoverPath);
         foreach (var c in _networkCards) c.Show(_editing);
-        _loading = false;
         UpdateButtons();
     }
 
