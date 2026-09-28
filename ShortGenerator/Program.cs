@@ -29,6 +29,8 @@ internal static class Program
             // "--signin" opens the galiluna sign-in dialog (dev convenience for checking the layout)
             if (Array.IndexOf(args, "--signin") >= 0)
                 using (var dlg = new GaliLunaSignInForm(SettingsStore.Load())) dlg.ShowDialog(form);
+            // "--hfdialog" opens the Higgsfield cover dialog for the current short (dev convenience for checking the layout)
+            if (Array.IndexOf(args, "--hfdialog") >= 0) form.ShowHiggsfieldDialogPreview();
             if (Array.IndexOf(args, "--settings") >= 0)
                 using (var dlg = new SettingsForm(SettingsStore.Load())) dlg.ShowDialog(form);
         };

@@ -912,7 +912,7 @@ public sealed class MainForm : Form
         _copyCoverPrompt.Click += (_, _) =>
         {
             if (_editing is null) return;
-            try { Clipboard.SetText(ThumbnailPrompt(_editing, forHuman: true)); _status.Text = "Thumbnail prompt copied. Paste it into ChatGPT with the cover image and fill in the last line."; }
+            try { Clipboard.SetText(ThumbnailBrief.Build(_editing, ThumbnailLanguage, ThumbnailBrief.HumanPlaceholder)); _status.Text = "Thumbnail prompt copied. Paste it into ChatGPT with the cover image and fill in the last line."; }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "Copy failed"); }
         };
         _generateCover.Click += async (_, _) => await GenerateCoverWithHiggsfieldAsync();
@@ -1678,29 +1678,19 @@ public sealed class MainForm : Form
         catch (Exception ex) { Log("Cover preview failed: " + ex.Message); }
     }
 
-    /// <summary>
-    /// The brief for redrawing the cover as a viral 9:16 thumbnail. For a human it ends with a blank to fill in;
-    /// for Higgsfield the blank is filled from the suggestion's reasoning.
-    /// </summary>
-    private string ThumbnailPrompt(ShortSuggestion s, bool forHuman)
+    /// <summary>Dev convenience: shows the Higgsfield cover dialog for the short open in the editor without calling the API.</summary>
+    public void ShowHiggsfieldDialogPreview()
     {
-        var language = _language.SelectedIndex > 0 && !string.IsNullOrWhiteSpace(_language.Text) ? _language.Text : "the language spoken in the video";
-        var ideal = forHuman
-            ? "The ideal thumbnail will be: [describe here what you want: the expression, the headline words, the colours, what to exaggerate]"
-            : $"The ideal thumbnail will be: the person's expression pushed to match the emotion \"{s.Emotion}\", a 2 to 4 word headline taken from the hook, and the drama of this idea: {s.WhyViral}";
-        return
-            "Act as a viral TikTok / Instagram Reels / YouTube Shorts creator and thumbnail designer with millions of views.\n" +
-            "Using the attached frame as the base (keep the same person, face and outfit recognizable), redesign it into a scroll-stopping 9:16 (1080x1920) cover for a short.\n\n" +
-            $"Short title: \"{s.Title}\"\n" +
-            $"Hook (first words): \"{s.Hook}\"\n" +
-            $"Emotion: {s.Emotion}\n" +
-            $"Why it could go viral: {s.WhyViral}\n\n" +
-            "Rules: one clear focal point on the face, exaggerated but natural expression, high contrast and saturated but clean colours, simplified background, " +
-            $"a big bold headline of 2 to 5 words in {language} with a thick outline placed in the upper third, leave the bottom 20% free for the platform UI, " +
-            "no logos, no watermarks, no extra text, photorealistic, sharp, vertical.\n\n" + ideal;
+        var s = _editing ?? _suggestions?.Shorts.FirstOrDefault();
+        if (s is null) return;
+        using var dlg = new HiggsfieldCoverDialog(s, ThumbnailLanguage, _coverPreview.Image is { } img ? (Image)img.Clone() : null, "xai/grok-imagine-image-2.0");
+        dlg.ShowDialog(this);
     }
 
-    /// <summary>Developer-only: uploads the current cover to Higgsfield, asks the image model to redraw it, and uses the result as the cover.</summary>
+    /// <summary>Language for the thumbnail headline: the transcript language when chosen, otherwise a neutral phrase.</summary>
+    private string ThumbnailLanguage => _language.SelectedIndex > 0 && !string.IsNullOrWhiteSpace(_language.Text) ? _language.Text : "the language spoken in the video";
+
+    /// <summary>Developer-only: asks what the thumbnail should be, then has Higgsfield redraw the cover (with or without the frame as reference).</summary>
     private async Task GenerateCoverWithHiggsfieldAsync()
     {
         if (_video is null || _editing is null) return;
@@ -1711,18 +1701,28 @@ public sealed class MainForm : Form
             return;
         }
         var s = _editing;
+        string prompt; bool useReference;
+        using (var dlg = new HiggsfieldCoverDialog(s, ThumbnailLanguage, _coverPreview.Image is { } img ? (Image)img.Clone() : null, client.Model))
+        {
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            prompt = dlg.Prompt; useReference = dlg.UseReference;
+        }
         await RunBusyAsync("Higgsfield cover", async ct =>
         {
-            var tmp = Path.Combine(Path.GetTempPath(), "shortgen_covers", $"{Guid.NewGuid():N}.mp4");
-            Directory.CreateDirectory(Path.GetDirectoryName(tmp)!);
-            var frame = await _renderer.ExportCoverAsync(_video, s, ReadOptions(), tmp, ct) ?? throw new InvalidOperationException("The cover frame could not be exported.");
-            _status.Text = "Uploading the frame to Higgsfield...";
-            var reference = await client.UploadAsync(frame, ct);
+            string? reference = null, frame = null;
+            if (useReference)
+            {
+                var tmp = Path.Combine(Path.GetTempPath(), "shortgen_covers", $"{Guid.NewGuid():N}.mp4");
+                Directory.CreateDirectory(Path.GetDirectoryName(tmp)!);
+                frame = await _renderer.ExportCoverAsync(_video, s, ReadOptions(), tmp, ct) ?? throw new InvalidOperationException("The cover frame could not be exported.");
+                _status.Text = "Uploading the frame to Higgsfield...";
+                reference = await client.UploadAsync(frame, ct);
+            }
             _status.Text = $"Higgsfield ({client.Model}) is drawing the cover...";
-            var url = await client.GenerateImageAsync(ThumbnailPrompt(s, forHuman: false), reference, new Progress<string>(m => { Log(m); _status.Text = m; }), ct);
+            var url = await client.GenerateImageAsync(prompt, reference, new Progress<string>(m => { Log(m); _status.Text = m; }), ct);
             var outPath = Path.Combine(Path.GetDirectoryName(_video.FilePath)!, "covers", SafeFolder(s.Title) + ".higgsfield.jpg");
             await client.DownloadAsync(url, outPath, ct);
-            try { File.Delete(frame); } catch { }
+            if (frame is not null) { try { File.Delete(frame); } catch { } }
             s.CoverImage = outPath;
             SaveProject();
             Log($"Higgsfield cover saved to {outPath}");
