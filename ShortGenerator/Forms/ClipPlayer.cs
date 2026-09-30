@@ -23,10 +23,14 @@ public sealed class ClipPlayer : UserControl
     public event Action<bool>? PlayingChanged;
     /// <summary>Diagnostics from the page: "loaded WxH" or a decode error message.</summary>
     public event Action<string>? Status;
-    /// <summary>User dragged the caption: new anchor as percent of the output frame (x from left, y from top).</summary>
-    public event Action<double, double>? CaptionMoved;
-    /// <summary>User moved / zoomed the camera box: center as percent of the source frame, and zoom.</summary>
-    public event Action<double, double, double>? CameraMoved;
+    /// <summary>User dragged the caption: new anchor as percent of the output frame (x from left, y from top), and the exact video time.</summary>
+    public event Action<double, double, double>? CaptionMoved;
+    /// <summary>User moved / zoomed the camera box: center as percent of the source frame, zoom, and the exact video time.</summary>
+    public event Action<double, double, double, double>? CameraMoved;
+    /// <summary>User double-clicked the caption at this video time: the host answers with <see cref="BeginEditAsync"/>.</summary>
+    public event Action<double>? EditRequested;
+    /// <summary>User finished editing the caption line that was shown at this video time.</summary>
+    public event Action<double, string>? TextEdited;
 
     public bool IsReady => _ready;
 
@@ -86,8 +90,11 @@ public sealed class ClipPlayer : UserControl
             if (root.TryGetProperty("t", out var t)) TimeChanged?.Invoke(t.GetDouble());
             if (root.TryGetProperty("playing", out var p)) PlayingChanged?.Invoke(p.GetBoolean());
             if (root.TryGetProperty("status", out var s)) Status?.Invoke(s.GetString() ?? "");
-            if (root.TryGetProperty("pos", out var pos)) CaptionMoved?.Invoke(pos.GetProperty("x").GetDouble(), pos.GetProperty("y").GetDouble());
-            if (root.TryGetProperty("camera", out var cam)) CameraMoved?.Invoke(cam.GetProperty("x").GetDouble(), cam.GetProperty("y").GetDouble(), cam.GetProperty("zoom").GetDouble());        }
+            if (root.TryGetProperty("pos", out var pos)) CaptionMoved?.Invoke(pos.GetProperty("x").GetDouble(), pos.GetProperty("y").GetDouble(), pos.GetProperty("t").GetDouble());
+            if (root.TryGetProperty("camera", out var cam)) CameraMoved?.Invoke(cam.GetProperty("x").GetDouble(), cam.GetProperty("y").GetDouble(), cam.GetProperty("zoom").GetDouble(), cam.GetProperty("t").GetDouble());
+            if (root.TryGetProperty("editAt", out var ea)) EditRequested?.Invoke(ea.GetDouble());
+            if (root.TryGetProperty("edited", out var ed)) TextEdited?.Invoke(ed.GetProperty("t").GetDouble(), ed.GetProperty("text").GetString() ?? "");
+        }
         catch { }
     }
 
@@ -116,6 +123,9 @@ public sealed class ClipPlayer : UserControl
 
     /// <summary>Camera edit mode: shows the whole source frame with a draggable 9:16 box (scroll to zoom).</summary>
     public Task SetCameraModeAsync(bool on) => Exec($"setCameraMode({(on ? "true" : "false")})");
+    /// <summary>Opens the inline editor over the caption with the full transcript line shown at that moment.</summary>
+    public Task BeginEditAsync(string text) => Exec($"beginEdit({JsonSerializer.Serialize(text)})");
+
     /// <summary>Approximates the render's colour treatment with a CSS filter on the preview video.</summary>
     public Task SetLookAsync(string css) => Exec($"setLook({System.Text.Json.JsonSerializer.Serialize(css)})");
 
@@ -165,12 +175,15 @@ public sealed class ClipPlayer : UserControl
   #cap:empty{pointer-events:none}
   #cam{position:absolute;display:none;border:2px solid #A855F7;box-shadow:0 0 0 9999px rgba(0,0,0,.55);cursor:move;touch-action:none;box-sizing:border-box}
   #cam .lbl{position:absolute;left:0;top:-22px;background:#6A38FF;color:#fff;font:12px Arial;padding:2px 6px;border-radius:4px;white-space:nowrap}
+  #edit{position:absolute;left:4%;right:4%;bottom:18%;display:none;z-index:5;background:rgba(10,14,40,.92);border:2px solid #A855F7;border-radius:12px;padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+  #edit textarea{width:100%;box-sizing:border-box;min-height:70px;background:transparent;border:0;outline:0;resize:none;color:#fff;font:600 16px Arial;line-height:1.35}
+  #edit .hint{color:#C7CBE0;font:12px Arial;margin-top:6px}
   #camhint{position:absolute;left:8px;bottom:8px;color:#fff;font:12px Arial;background:rgba(0,0,0,.6);padding:4px 8px;border-radius:4px;display:none}
   @keyframes pop{from{transform:scale(.8)}to{transform:scale(1)}}
   .pop{animation:pop 110ms ease-out}
 </style></head>
 <body>
-<div id="wrap"><div id="frame"><video id="bg" muted></video><video id="v" playsinline></video><div id="cap"></div><div id="cam"><span class="lbl"></span></div><div id="camhint">Drag the box to move the camera, scroll to zoom. Each change creates a camera cut at the current time.</div></div></div>
+<div id="wrap"><div id="frame"><video id="bg" muted></video><video id="v" playsinline></video><div id="cap"></div><div id="cam"><span class="lbl"></span></div><div id="edit"><textarea spellcheck="true"></textarea><div class="hint">Enter to save, Shift+Enter for a new line, Esc to cancel. Edits the whole transcript line.</div></div><div id="camhint">Drag the box to move the camera, scroll to zoom. Each change creates a camera cut at the current time.</div></div></div>
 <script>
 const v=document.getElementById('v'),bg=document.getElementById('bg'),frame=document.getElementById('frame'),cap=document.getElementById('cap'),cam=document.getElementById('cam'),camHint=document.getElementById('camhint');
 let range={s:0,e:0},chunks=[],st=null,lastIdx=-1,lastPost=0,drag=null;
@@ -195,6 +208,7 @@ v.addEventListener('loadedmetadata',()=>{layout();post({status:`loaded ${v.video
 v.addEventListener('error',()=>{const e=v.error;const msg='error: '+(e?('code '+e.code+' '+(e.message||'')):'unknown');
   fetch(v.currentSrc||v.src,{method:'HEAD'}).then(r=>post({status:msg+` | HEAD ${r.status}`})).catch(x=>post({status:msg+' | fetch failed: '+x}));});
 window.addEventListener('resize',layout);
+window.addEventListener('keydown',e=>{if(e.code==='Space'&&editT===null&&document.activeElement!==editText){e.preventDefault();toggle();}});
 
 function vertical(){return st&&st.crop!=='Original'&&!cameraMode;}
 function layout(){
@@ -257,7 +271,7 @@ function drawCam(){
   cam.style.left=(cx-bw/2)+'px';cam.style.top=(cy-bh/2)+'px';cam.style.width=bw+'px';cam.style.height=bh+'px';
   cam.querySelector('.lbl').textContent=`camera ${k.x.toFixed(0)}% / ${k.y.toFixed(0)}%  zoom ${k.zoom.toFixed(2)}x`;
 }
-function commitCam(){if(!liveCam)return;post({camera:{x:+liveCam.x.toFixed(1),y:+liveCam.y.toFixed(1),zoom:+liveCam.zoom.toFixed(2)}});}
+function commitCam(){if(!liveCam)return;post({camera:{x:+liveCam.x.toFixed(1),y:+liveCam.y.toFixed(1),zoom:+liveCam.zoom.toFixed(2),t:v.currentTime}});}
 cam.addEventListener('pointerdown',e=>{if(!cameraMode)return;const k=camBox();camDrag={x0:e.clientX,y0:e.clientY,cx:k.x,cy:k.y};liveCam={...k};cam.setPointerCapture(e.pointerId);e.preventDefault();});
 cam.addEventListener('pointermove',e=>{if(!camDrag)return;const fw=frame.clientWidth,fh=frame.clientHeight;
   liveCam.x=Math.max(0,Math.min(100,camDrag.cx+(e.clientX-camDrag.x0)/fw*100));liveCam.y=Math.max(0,Math.min(100,camDrag.cy+(e.clientY-camDrag.y0)/fh*100));drawCam();});
@@ -282,7 +296,18 @@ cap.addEventListener('pointerdown',e=>{
 cap.addEventListener('pointermove',e=>{if(!drag)return;
   dragPos={x:Math.min(95,Math.max(5,drag.cx+(e.clientX-drag.x0)/drag.w*100)),y:Math.min(97,Math.max(3,drag.cy+(e.clientY-drag.y0)/drag.h*100))};
   cap.classList.add('custom');cap.style.left=dragPos.x+'%';cap.style.top=dragPos.y+'%';cap.style.bottom='';cap.style.transform='translate(-50%,-50%)';});
-cap.addEventListener('pointerup',e=>{if(!drag)return;drag=null;cap.classList.remove('dragging');if(dragPos)post({pos:{x:+dragPos.x.toFixed(1),y:+dragPos.y.toFixed(1)}});});
+cap.addEventListener('pointerup',e=>{if(!drag)return;const moved=Math.hypot(e.clientX-drag.x0,e.clientY-drag.y0)>4;drag=null;cap.classList.remove('dragging');
+  // a click without movement is not a drag: it must not create a caption position (it may be half of a double-click)
+  if(moved&&dragPos)post({pos:{x:+dragPos.x.toFixed(1),y:+dragPos.y.toFixed(1),t:v.currentTime}});else render(true);});
+
+// ---- click the picture to play / pause; double-click the caption to edit its words ----
+const editBox=document.getElementById('edit'),editText=editBox.querySelector('textarea');let editT=null;
+frame.addEventListener('click',e=>{if(cameraMode||editT!==null)return;if(cap.contains(e.target)||editBox.contains(e.target))return;toggle();});
+cap.addEventListener('dblclick',e=>{if(cameraMode)return;e.stopPropagation();pause();editT=v.currentTime;post({editAt:editT});});
+function beginEdit(text){if(editT===null)editT=v.currentTime;editText.value=text;editBox.style.display='block';cap.style.visibility='hidden';editText.focus();editText.select();}
+function endEdit(save){if(editT===null)return;const t=editT,text=editText.value.trim();editT=null;editBox.style.display='none';cap.style.visibility='visible';if(save)post({edited:{t,text}});render(true);}
+editText.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();endEdit(true);}else if(e.key==='Escape'){e.preventDefault();endEdit(false);}});
+editText.addEventListener('blur',()=>endEdit(true));
 
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;');}
 function render(force){

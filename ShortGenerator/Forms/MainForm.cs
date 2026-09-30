@@ -68,6 +68,7 @@ public sealed class MainForm : Form
     private readonly CheckBox _cameraMode = new() { Text = "Camera mode", AutoSize = false, Appearance = Appearance.Button, TextAlign = ContentAlignment.MiddleCenter, Width = 110, Height = 28 };
     private readonly FancyButton _autoCamera = new() { Text = "Auto camera (faces)", Width = 185 };
     private readonly FancyButton _changeCamera = new() { Text = "Change camera", Width = 135 };
+    private readonly FancyButton _removeFromSelection = new() { Text = "Remove from selected", Width = 180, Glyph = "\uE738" };
     // face analysis per short, kept for the session so "Change camera" can offer other framings instantly
     private readonly Dictionary<ShortSuggestion, FaceFramer.Analysis> _faces = new(ReferenceEqualityComparer.Instance);
     private readonly Label _keyframeHint = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 7, 0, 0) };
@@ -586,7 +587,7 @@ public sealed class MainForm : Form
 
     private void BuildEditorTab()
     {
-        _editorHint.Text = "Drag the caption on the video to place it from the current time on. Camera mode: drag the 9:16 box, scroll to zoom, and a camera cut is added at the current time. " +
+        _editorHint.Text = "Click the video to play or pause. Drag the caption to place it, double-click it to fix the words. Camera mode: drag the 9:16 box or scroll to zoom; auto framing resumes 4 s later. " +
                            "Edit the Text column to fix words. Style and framing come from Generate shorts.";
 
         // Three resizable columns: shorts + actions | player | transcript. Inside the left column the
@@ -594,7 +595,8 @@ public sealed class MainForm : Form
         // because a long list of shorts or of camera cuts needs room the fixed heights never gave it.
         var left = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 4, 6) };
         _editClips.Columns.Add("Short", 190);
-        _editClips.Columns.Add("Range", 118);
+        _editClips.Columns.Add("Length", 66);
+        _editClips.Columns.Add("Score", 56);
         Theme.FillColumn(_editClips, 0);
         _keyframes.Columns.Add("At", 50);
         _keyframes.Columns.Add("What", 64);
@@ -603,7 +605,10 @@ public sealed class MainForm : Form
         var leftSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
         SplitWhenSized(leftSplit, 170);
         var clipsHost = new Panel { Dock = DockStyle.Fill };
+        var clipsBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(2, 8, 0, 0), WrapContents = false };
+        clipsBar.Controls.Add(_removeFromSelection);
         clipsHost.Controls.Add(_editClips);
+        clipsHost.Controls.Add(clipsBar);
         clipsHost.Controls.Add(new Label { Text = "Selected shorts", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
 
         // actions for the current short: one primary, a row of two, the mode toggle, then the cover
@@ -860,8 +865,12 @@ public sealed class MainForm : Form
         _player.PlayingChanged += playing => _playPause.Text = playing ? "Pause" : "Play";
         _player.TimeChanged += OnPlayerTime;
         _player.Status += s => Log("Player: " + s);
-        _player.CaptionMoved += (x, y) => BeginInvoke(() => OnCaptionMoved(x, y));
-        _player.CameraMoved += (x, y, z) => BeginInvoke(() => OnCameraMoved(x, y, z));
+        _player.CaptionMoved += (x, y, t) => BeginInvoke(() => OnCaptionMoved(x, y, t));
+        _player.CameraMoved += (x, y, z, t) => BeginInvoke(() => OnCameraMoved(x, y, z, t));
+        _player.EditRequested += t => BeginInvoke(async () => { if (SegmentAt(t) is { } seg) await _player.BeginEditAsync(seg.Text); });
+        _player.TextEdited += (t, text) => BeginInvoke(() => OnCaptionTextEdited(t, text));
+        _removeFromSelection.Click += (_, _) => RemoveEditingFromSelection();
+        _editClips.KeyDown += (_, e) => { if (e.KeyCode == Keys.Delete) { e.Handled = true; RemoveEditingFromSelection(); } };
         _cameraMode.CheckedChanged += async (_, _) =>
         {
             _cameraMode.BackColor = _cameraMode.Checked ? Theme.Nebula : Theme.Elevated;
@@ -1608,7 +1617,7 @@ public sealed class MainForm : Form
         {
             foreach (var s in _suggestions.Shorts.Where(s => s.Selected))
             {
-                var item = new ListViewItem(new[] { s.Title, $"{Fmt(s.StartSeconds)} - {Fmt(s.EndSeconds)}" }) { Tag = s };
+                var item = new ListViewItem(new[] { s.Title, $"{s.Duration:F0}s", s.ViralityScore > 0 ? $"{s.ViralityScore}/10" : "-" }) { Tag = s };
                 if (ReferenceEquals(s, current)) item.Selected = true;
                 _editClips.Items.Add(item);
             }
@@ -1733,18 +1742,83 @@ public sealed class MainForm : Form
     /// <summary>Current position relative to the clip start, rounded to 0.1 s.</summary>
     private double RelativeTime => _editing is null ? 0 : Math.Round(Math.Max(0, _playerTime - _editing.StartSeconds), 1);
 
-    private void OnCaptionMoved(double x, double y)
+    /// <summary>
+    /// Clip-relative time of an edit made at this absolute video time. Floored (not rounded) to 0.01 s so the new
+    /// keyframe starts at or before the frame on screen: a rounded-up time left the previous cut active until the
+    /// playhead caught up, which looked like the change only applied "on the next frame".
+    /// </summary>
+    private double EditTime(double absolute) => _editing is null ? 0 : Math.Max(0, Math.Floor((absolute - _editing.StartSeconds) * 100) / 100);
+
+    /// <summary>How long a manual camera change holds before the automatic framing takes over again.</summary>
+    private const double ManualCameraHold = 4.0;
+
+    private void OnCaptionMoved(double x, double y, double t)
     {
         if (_editing is null) return;
-        Keyframes.Upsert(_editing.CaptionPositions, new CaptionKeyframe { Time = RelativeTime, X = x, Y = y });
+        Keyframes.Upsert(_editing.CaptionPositions, new CaptionKeyframe { Time = EditTime(t), X = x, Y = y });
         _ = PushKeyframesAsync();
     }
 
-    private void OnCameraMoved(double x, double y, double zoom)
+    private void OnCameraMoved(double x, double y, double zoom, double t)
     {
         if (_editing is null) return;
-        Keyframes.Upsert(_editing.Camera, new CameraKeyframe { Time = RelativeTime, X = x, Y = y, Zoom = zoom, Source = "manual" });
+        var s = _editing;
+        double at = EditTime(t);
+        // the automatic framing that was in charge here, to hand back to after the manual change
+        var auto = s.Camera.Where(k => k.Source is "auto" or "resume" && k.Time <= at + 0.001).OrderBy(k => k.Time).LastOrDefault();
+        // an earlier "resume" inside this hold window belonged to a previous drag and would cut back too early
+        s.Camera.RemoveAll(k => k.Source == "resume" && k.Time > at && k.Time <= at + ManualCameraHold + 0.01);
+        Keyframes.Upsert(s.Camera, new CameraKeyframe { Time = at, X = x, Y = y, Zoom = zoom, Source = "manual" });
+        double back = Math.Round(at + ManualCameraHold, 2);
+        bool nextCutSoon = s.Camera.Any(k => k.Time > at + 0.001 && k.Time <= back);
+        if (auto is not null && !nextCutSoon && back < s.Duration - 1)
+            s.Camera.Add(new CameraKeyframe { Time = back, X = auto.X, Y = auto.Y, Zoom = auto.Zoom, Source = "resume" });
+        s.Camera.Sort((a, b) => a.Time.CompareTo(b.Time));
         _ = PushKeyframesAsync();
+    }
+
+    /// <summary>The transcript line shown at this absolute video time (or the last one that started before it).</summary>
+    private TranscriptSegment? SegmentAt(double t)
+    {
+        if (_editing is null) return null;
+        var segs = SegmentsOf(_editing);
+        return segs.FirstOrDefault(x => t >= x.Start && t < x.End) ?? segs.LastOrDefault(x => x.Start <= t);
+    }
+
+    /// <summary>The caption was edited on the video: update that transcript line everywhere.</summary>
+    private void OnCaptionTextEdited(double t, string text)
+    {
+        var seg = SegmentAt(t);
+        if (seg is null || string.IsNullOrWhiteSpace(text) || text == seg.Text) return;
+        seg.Text = text;
+        foreach (DataGridViewRow row in _editSegments.Rows)
+            if (ReferenceEquals(row.Tag, seg)) row.Cells["Text"].Value = text;
+        ShowTranscript();
+        SaveProject();
+        _ = PushCaptionsAsync();
+        Log("Caption line updated from the video.");
+    }
+
+    /// <summary>Unticks the short open in the editor; it goes back to the Suggestions list, not to the bin.</summary>
+    private void RemoveEditingFromSelection()
+    {
+        if (_editClips.SelectedItems.Count == 0 || _editClips.SelectedItems[0].Tag is not ShortSuggestion s) return;
+        int index = _editClips.SelectedIndices[0];
+        _ = _player.PauseAsync();
+        s.Selected = false;
+        _populatingSuggestions = true;
+        foreach (ListViewItem it in _suggestList.Items) if (ReferenceEquals(it.Tag, s)) it.Checked = false;
+        _populatingSuggestions = false;
+        SaveProject();
+        UpdateGenerateEnabled();
+        if (ReferenceEquals(_editing, s)) _editing = null;
+        RefreshEditorClipList();
+        if (_editClips.Items.Count > 0)
+        {
+            foreach (ListViewItem it in _editClips.SelectedItems) it.Selected = false;
+            _editClips.Items[Math.Min(index, _editClips.Items.Count - 1)].Selected = true;
+        }
+        _status.Text = $"\"{s.Title}\" removed from the selected shorts. Tick it again in Suggestions to bring it back.";
     }
 
     /// <summary>Sends camera cuts and caption positions to the player, refreshes the list, saves.</summary>
