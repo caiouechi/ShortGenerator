@@ -587,7 +587,7 @@ public sealed class MainForm : Form
 
     private void BuildEditorTab()
     {
-        _editorHint.Text = "Click the video to play or pause. Drag the caption to place it, double-click it to fix the words. Camera mode: drag the 9:16 box or scroll to zoom; auto framing resumes 4 s later. " +
+        _editorHint.Text = "Click the video to play or pause. Drag the caption to place it, double-click it to fix the words, right-click it to edit its line in the table. Camera mode: drag the 9:16 box or scroll to zoom; auto framing resumes 4 s later. " +
                            "Edit the Text column to fix words. Style and framing come from Generate shorts.";
 
         // Three resizable columns: shorts + actions | player | transcript. Inside the left column the
@@ -869,6 +869,7 @@ public sealed class MainForm : Form
         _player.CameraMoved += (x, y, z, t) => BeginInvoke(() => OnCameraMoved(x, y, z, t));
         _player.EditRequested += t => BeginInvoke(async () => { if (SegmentAt(t) is { } seg) await _player.BeginEditAsync(seg.Text); });
         _player.TextEdited += (t, text) => BeginInvoke(() => OnCaptionTextEdited(t, text));
+        _player.LineRequested += t => BeginInvoke(() => EditLineInGrid(t));
         _removeFromSelection.Click += (_, _) => RemoveEditingFromSelection();
         _editClips.KeyDown += (_, e) => { if (e.KeyCode == Keys.Delete) { e.Handled = true; RemoveEditingFromSelection(); } };
         _cameraMode.CheckedChanged += async (_, _) =>
@@ -1783,6 +1784,24 @@ public sealed class MainForm : Form
         if (_editing is null) return null;
         var segs = SegmentsOf(_editing);
         return segs.FirstOrDefault(x => t >= x.Start && t < x.End) ?? segs.LastOrDefault(x => x.Start <= t);
+    }
+
+    /// <summary>Right-click on the caption: select its line in the transcript table and open the Text cell for typing.</summary>
+    private void EditLineInGrid(double t)
+    {
+        var seg = SegmentAt(t);
+        if (seg is null) return;
+        foreach (DataGridViewRow row in _editSegments.Rows)
+        {
+            if (!ReferenceEquals(row.Tag, seg)) continue;
+            _editSegments.ClearSelection();
+            row.Selected = true;
+            _editSegments.FirstDisplayedScrollingRowIndex = Math.Max(0, row.Index - 2);
+            _editSegments.CurrentCell = row.Cells["Text"];
+            _editSegments.Focus();
+            _editSegments.BeginEdit(false); // caret at the end, nothing selected, so typing does not wipe the line
+            break;
+        }
     }
 
     /// <summary>The caption was edited on the video: update that transcript line everywhere.</summary>

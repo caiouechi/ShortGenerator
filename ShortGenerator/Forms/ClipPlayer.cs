@@ -31,6 +31,8 @@ public sealed class ClipPlayer : UserControl
     public event Action<double>? EditRequested;
     /// <summary>User finished editing the caption line that was shown at this video time.</summary>
     public event Action<double, string>? TextEdited;
+    /// <summary>User right-clicked the caption at this video time: the host selects that line in its transcript grid.</summary>
+    public event Action<double>? LineRequested;
 
     public bool IsReady => _ready;
 
@@ -93,6 +95,7 @@ public sealed class ClipPlayer : UserControl
             if (root.TryGetProperty("pos", out var pos)) CaptionMoved?.Invoke(pos.GetProperty("x").GetDouble(), pos.GetProperty("y").GetDouble(), pos.GetProperty("t").GetDouble());
             if (root.TryGetProperty("camera", out var cam)) CameraMoved?.Invoke(cam.GetProperty("x").GetDouble(), cam.GetProperty("y").GetDouble(), cam.GetProperty("zoom").GetDouble(), cam.GetProperty("t").GetDouble());
             if (root.TryGetProperty("editAt", out var ea)) EditRequested?.Invoke(ea.GetDouble());
+            if (root.TryGetProperty("lineAt", out var la)) LineRequested?.Invoke(la.GetDouble());
             if (root.TryGetProperty("edited", out var ed)) TextEdited?.Invoke(ed.GetProperty("t").GetDouble(), ed.GetProperty("text").GetString() ?? "");
         }
         catch { }
@@ -302,7 +305,9 @@ cap.addEventListener('pointerup',e=>{if(!drag)return;const moved=Math.hypot(e.cl
 
 // ---- click the picture to play / pause; double-click the caption to edit its words ----
 const editBox=document.getElementById('edit'),editText=editBox.querySelector('textarea');let editT=null;
-frame.addEventListener('click',e=>{if(cameraMode||editT!==null)return;if(cap.contains(e.target)||editBox.contains(e.target))return;toggle();});
+document.getElementById('wrap').addEventListener('click',e=>{if(cameraMode||editT!==null)return;if(cap.contains(e.target)||editBox.contains(e.target)||cam.contains(e.target))return;toggle();});
+// right-click the caption: the host selects that line in its transcript table, ready to edit
+cap.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();if(cameraMode)return;pause();post({lineAt:v.currentTime});});
 cap.addEventListener('dblclick',e=>{if(cameraMode)return;e.stopPropagation();pause();editT=v.currentTime;post({editAt:editT});});
 function beginEdit(text){if(editT===null)editT=v.currentTime;editText.value=text;editBox.style.display='block';cap.style.visibility='hidden';editText.focus();editText.select();}
 function endEdit(save){if(editT===null)return;const t=editT,text=editText.value.trim();editT=null;editBox.style.display='none';cap.style.visibility='visible';if(save)post({edited:{t,text}});render(true);}
