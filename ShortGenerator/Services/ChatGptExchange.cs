@@ -68,7 +68,7 @@ public static class ChatGptExchange
                           "Use it as a sensor for emotional intensity and pacing: clusters of high-energy lines are candidate climaxes, and a clip should usually end shortly after its energy peak.");
         sb.AppendLine();
         sb.AppendLine("# Output format");
-        sb.AppendLine("Reply with ONLY a JSON object, no markdown, no commentary before or after, exactly in this shape:");
+        sb.AppendLine("Reply with ONLY a JSON object, no markdown, no commentary before or after, no citation or source markers inside the strings, exactly in this shape:");
         sb.AppendLine(OutputShape(targets));
         sb.AppendLine();
         sb.AppendLine(hasLoudness ? "# Transcript (start - end in seconds, then audio energy above normal speech)" : "# Transcript (start - end in seconds)");
@@ -125,6 +125,20 @@ public static class ChatGptExchange
     }
 
     /// <summary>
+    /// ChatGPT sometimes leaves source markers inside string values, e.g. <c>:chatgpt-content-reference{index="0"}</c>,
+    /// <c>:contentReference[oaicite:0]{index=0}</c> or <c>【4†source】</c>. Their unescaped quotes and braces break the
+    /// JSON, and they are never wanted in a caption, so they are removed before parsing.
+    /// </summary>
+    public static string StripCitations(string text)
+    {
+        text = Regex.Replace(text, @"\s*:chatgpt-content-reference\{[^{}]*\}", "");
+        text = Regex.Replace(text, @"\s*:contentReference\[[^\]]*\](\{[^{}]*\})?", "");
+        text = Regex.Replace(text, @"\s*\[oaicite:\d+\]", "");
+        text = Regex.Replace(text, @"\s*【[^】]*】", "");
+        return text;
+    }
+
+    /// <summary>
     /// Parses the assistant's reply. Tolerates markdown code fences, text around the JSON,
     /// times given as "mm:ss" / "hh:mm:ss" strings, and hashtags with a leading '#'.
     /// </summary>
@@ -132,7 +146,7 @@ public static class ChatGptExchange
     {
         if (string.IsNullOrWhiteSpace(raw)) throw new FormatException("The pasted text is empty.");
 
-        var text = raw.Trim();
+        var text = StripCitations(raw).Trim();
         // strip ```json fences
         text = Regex.Replace(text, @"^```[a-zA-Z]*\s*", "", RegexOptions.Multiline);
         text = text.Replace("```", "");
