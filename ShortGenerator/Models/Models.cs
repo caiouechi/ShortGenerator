@@ -117,6 +117,8 @@ public sealed class ShortSuggestion
 
     /// <summary>Camera cuts for the vertical crop (times relative to the clip start). Empty = centered.</summary>
     [JsonPropertyName("camera")] public List<CameraKeyframe> Camera { get; set; } = new();
+    /// <summary>Illustrations shown over the short (people, objects, places being talked about).</summary>
+    [JsonPropertyName("overlays")] public List<ImageOverlay> Overlays { get; set; } = new();
 
     /// <summary>Moves the legacy single caption position into the keyframe list.</summary>
     public void MigrateLegacyCaptionPosition()

@@ -78,10 +78,6 @@ public sealed class ShortRenderer
                 ? cameraGraph + (filters.Count > 0 ? "," + string.Join(",", filters) : "")
                 : "[0:v]" + (filters.Count > 0 ? string.Join(",", filters) : "null");
 
-            // Captions are burned last so they stay on top. The relative subtitle path avoids Windows
-            // drive-letter escaping problems inside the filter graph.
-            var graph = main + (hasCaptions ? ",subtitles=captions.ass" : "");
-
             var args = new List<string>
             {
                 "-y",
@@ -89,6 +85,34 @@ public sealed class ShortRenderer
                 "-to", s.EndSeconds.ToString("F3", CultureInfo.InvariantCulture),
                 "-i", video.FilePath,
             };
+
+            // Image layers: each one is pre-drawn once (style + rotation baked in) and added as a short looping
+            // still input, composited only inside its window. Captions are burned last so they stay on top;
+            // the relative subtitle path avoids Windows drive-letter escaping problems inside the filter graph.
+            string graph;
+            var layers = s.Overlays.Where(o => File.Exists(o.Path) && o.End > o.Start + 0.1 && o.Start < s.Duration).OrderBy(o => o.Start).ToList();
+            if (layers.Count == 0)
+                graph = main + (hasCaptions ? ",subtitles=captions.ass" : "");
+            else
+            {
+                var sb = new System.Text.StringBuilder(main + "[base]");
+                string prev = "base";
+                for (int i = 0; i < layers.Count; i++)
+                {
+                    var o = layers[i];
+                    double a = Math.Max(0, o.Start), b = Math.Min(s.Duration, o.End);
+                    var png = Path.Combine(workDir, $"layer{i}.png");
+                    OverlayBaker.Bake(o, outW, png);
+                    args.AddRange(new[] { "-loop", "1", "-framerate", "30", "-t", F(b + 0.3), "-i", png });
+                    sb.Append($";[{i + 1}:v]format=rgba{LayerAnimation(o, a, b)}[o{i}]");
+                    double cx = o.X / 100.0 * outW, cy = o.Y / 100.0 * outH;
+                    var y = $"{F(cy)}-h/2" + (o.Animation == "slide" ? $"+{F(outH * 0.08)}*max(0,1-(t-{F(a)})/0.35)" : "");
+                    sb.Append($";[{prev}][o{i}]overlay=x='{F(cx)}-w/2':y='{y}':enable='between(t,{F(a)},{F(b)})':eof_action=pass[b{i}]");
+                    prev = $"b{i}";
+                }
+                sb.Append($";[{prev}]" + (hasCaptions ? "subtitles=captions.ass" : "null"));
+                graph = sb.ToString();
+            }
             args.AddRange(new[]
             {
                 "-filter_complex", graph + "[vout]",
@@ -124,6 +148,25 @@ public sealed class ShortRenderer
     /// set, otherwise the frame at <see cref="ShortSuggestion.CoverTime"/> (default 1 s in), framed with the
     /// camera cut active at that moment so it matches the rendered video. Returns the JPEG path or null.
     /// </summary>
+    private static string F(double d) => d.ToString("F3", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Filters applied to a layer's still image: the entrance (pop grows it from 55 %, fade and slide raise its
+    /// opacity) and a short fade-out at the end. All are per-frame expressions on a small image: cheap.
+    /// </summary>
+    private static string LayerAnimation(ImageOverlay o, double a, double b)
+    {
+        var f = "";
+        switch (o.Animation)
+        {
+            case "pop": f += $",scale=w='iw*clip(0.55+0.45*(t-{F(a)})/0.22,0.05,1)':h=-1:eval=frame"; break;
+            case "fade":
+            case "slide": f += $",fade=t=in:st={F(a)}:d=0.3:alpha=1"; break;
+        }
+        if (o.Animation != "none" && b - a > 0.8) f += $",fade=t=out:st={F(b - 0.25)}:d=0.25:alpha=1";
+        return f;
+    }
+
     public async Task<string?> ExportCoverAsync(VideoInfo video, ShortSuggestion s, GenerateOptions options, string videoOutPath, CancellationToken ct)
     {
         var coverPath = Path.ChangeExtension(videoOutPath, ".cover.jpg");

@@ -69,6 +69,18 @@ public sealed class MainForm : Form
     private readonly FancyButton _autoCamera = new() { Text = "Auto camera (faces)", Width = 185 };
     private readonly FancyButton _changeCamera = new() { Text = "Change camera", Width = 135 };
     private readonly FancyButton _removeFromSelection = new() { Text = "Remove from selected", Width = 180, Glyph = "\uE738" };
+    // image layers of the short open in the editor
+    private readonly ListView _layers = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
+    private readonly FancyButton _addLayer = new() { Text = "Add image...", Width = 120, Glyph = "\uE710" };
+    private readonly FancyButton _removeLayer = new() { Text = "Remove", Width = 96, Enabled = false, Glyph = "\uE74D" };
+    private readonly NumericUpDown _layerFrom = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 64, Maximum = 100000 };
+    private readonly NumericUpDown _layerTo = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 64, Maximum = 100000 };
+    private readonly NumericUpDown _layerSize = new() { Minimum = 8, Maximum = 100, Width = 64 };
+    private readonly NumericUpDown _layerRot = new() { Minimum = -180, Maximum = 180, Width = 64 };
+    private readonly ComboBox _layerStyle = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
+    private readonly ComboBox _layerAnim = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
+    private readonly ContextMenuStrip _segMenu = new();
+    private bool _loadingLayer;
     // face analysis per short, kept for the session so "Change camera" can offer other framings instantly
     private readonly Dictionary<ShortSuggestion, FaceFramer.Analysis> _faces = new(ReferenceEqualityComparer.Instance);
     private readonly Label _keyframeHint = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 7, 0, 0) };
@@ -688,7 +700,51 @@ public sealed class MainForm : Form
         segBar.Controls.Add(_segDelete);
         right.Controls.Add(_editSegments);
         right.Controls.Add(segBar);
-        right.Controls.Add(new Label { Text = "Transcript of this short", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
+        right.Controls.Add(new Label { Text = "Transcript of this short", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, UseMnemonic = false });
+
+        // image layers: one row per illustration, its window, look and entrance
+        var layersHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 6, 0, 6) };
+        _layers.Columns.Add("From", 58);
+        _layers.Columns.Add("To", 58);
+        _layers.Columns.Add("Image", 120);
+        _layers.Columns.Add("Style", 72);
+        Theme.FillColumn(_layers, 2);
+        foreach (var st in ImageOverlay.Styles) _layerStyle.Items.Add(st.Name);
+        foreach (var an in ImageOverlay.Animations) _layerAnim.Items.Add(an.Name);
+        var props = new TableLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, ColumnCount = 4, Padding = new Padding(0, 8, 0, 0) };
+        props.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        props.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        props.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        props.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        void Prop(int row, int col, string label, Control c)
+        {
+            props.Controls.Add(new Label { Text = label, AutoSize = true, ForeColor = Theme.TextSecondary, Margin = new Padding(col == 0 ? 0 : 10, 8, 6, 0) }, col * 2, row);
+            c.Margin = new Padding(0, 4, 0, 2);
+            if (c is ComboBox) c.Dock = DockStyle.Fill;
+            props.Controls.Add(c, col * 2 + 1, row);
+        }
+        Prop(0, 0, "From (s)", _layerFrom); Prop(0, 1, "To (s)", _layerTo);
+        Prop(1, 0, "Style", _layerStyle); Prop(1, 1, "Entrance", _layerAnim);
+        Prop(2, 0, "Size %", _layerSize); Prop(2, 1, "Rotate", _layerRot);
+        var layerBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(2, 8, 0, 0), WrapContents = false };
+        layerBar.Controls.Add(_addLayer);
+        layerBar.Controls.Add(_removeLayer);
+        layersHost.Controls.Add(_layers);
+        layersHost.Controls.Add(props);
+        layersHost.Controls.Add(layerBar);
+        // AutoSize off + fixed height lets the hint wrap onto a second line instead of being cut off
+        layersHost.Controls.Add(new Label { Text = "Images. Right-click a transcript line to add one. On the video: drag to move, scroll to resize, Shift+scroll to rotate.", Dock = DockStyle.Top, Height = 58, AutoSize = false, ForeColor = Color.DimGray, UseMnemonic = false });
+        var rightSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
+        bool rightSet = false;
+        rightSplit.SizeChanged += (_, _) =>
+        {
+            if (rightSet || rightSplit.Height < 500) return;
+            rightSet = true;
+            rightSplit.Panel1MinSize = 160; rightSplit.Panel2MinSize = 220;
+            rightSplit.SplitterDistance = (int)(rightSplit.Height * 0.52);
+        };
+        rightSplit.Panel1.Controls.Add(right);
+        rightSplit.Panel2.Controls.Add(layersHost);
 
         // center: player + controls
         var center = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6) };
@@ -729,7 +785,7 @@ public sealed class MainForm : Form
             inner.SplitterDistance = inner.Width - 340;
         };
         inner.Panel1.Controls.Add(center);
-        inner.Panel2.Controls.Add(right);
+        inner.Panel2.Controls.Add(rightSplit);
         columns.Panel2.Controls.Add(inner);
 
         _tabEditor.Controls.Add(columns);
@@ -870,6 +926,22 @@ public sealed class MainForm : Form
         _player.EditRequested += t => BeginInvoke(async () => { if (SegmentAt(t) is { } seg) await _player.BeginEditAsync(seg.Text); });
         _player.TextEdited += (t, text) => BeginInvoke(() => OnCaptionTextEdited(t, text));
         _player.LineRequested += t => BeginInvoke(() => EditLineInGrid(t));
+        _player.LayerSelected += id => BeginInvoke(() => SelectLayerRow(id));
+        _player.LayerChanged += (id, x, y, size, rot) => BeginInvoke(() => OnLayerMovedOnVideo(id, x, y, size, rot));
+        _addLayer.Click += async (_, _) => await AddLayerAsync(_editSegments.CurrentRow?.Tag as TranscriptSegment);
+        _removeLayer.Click += async (_, _) => await RemoveLayerAsync();
+        _layers.KeyDown += async (_, e) => { if (e.KeyCode == Keys.Delete) { e.Handled = true; await RemoveLayerAsync(); } };
+        _layers.SelectedIndexChanged += async (_, _) => await OnLayerRowSelectedAsync();
+        _layerFrom.ValueChanged += async (_, _) => await OnLayerPropsChangedAsync();
+        _layerTo.ValueChanged += async (_, _) => await OnLayerPropsChangedAsync();
+        _layerSize.ValueChanged += async (_, _) => await OnLayerPropsChangedAsync();
+        _layerRot.ValueChanged += async (_, _) => await OnLayerPropsChangedAsync();
+        _layerStyle.SelectedIndexChanged += async (_, _) => await OnLayerPropsChangedAsync();
+        _layerAnim.SelectedIndexChanged += async (_, _) => await OnLayerPropsChangedAsync();
+        // right-click a transcript line: add an image for exactly that moment
+        _segMenu.Items.Add("Add image for this line...", null, async (_, _) => await AddLayerAsync(_editSegments.CurrentRow?.Tag as TranscriptSegment));
+        _editSegments.ContextMenuStrip = _segMenu;
+        _editSegments.CellMouseDown += (_, e) => { if (e.Button == MouseButtons.Right && e.RowIndex >= 0) _editSegments.CurrentCell = _editSegments.Rows[e.RowIndex].Cells[Math.Max(0, e.ColumnIndex)]; };
         _removeFromSelection.Click += (_, _) => RemoveEditingFromSelection();
         _editClips.KeyDown += (_, e) => { if (e.KeyCode == Keys.Delete) { e.Handled = true; RemoveEditingFromSelection(); } };
         _cameraMode.CheckedChanged += async (_, _) =>
@@ -1659,6 +1731,8 @@ public sealed class MainForm : Form
         }
         await PushKeyframesAsync();
         if (_player.IsReady) await _player.SetLookAsync(VisualLook.All[Math.Max(0, _look.SelectedIndex)].Css);
+        RefreshLayerList(null);
+        await PushLayersAsync();
         UpdateTimeLabel(s.StartSeconds);
         _ = UpdateCoverPreviewAsync();
         // Auto camera is the default: a short that was never framed gets face framing as soon as it opens.
@@ -1786,6 +1860,116 @@ public sealed class MainForm : Form
         return segs.FirstOrDefault(x => t >= x.Start && t < x.End) ?? segs.LastOrDefault(x => x.Start <= t);
     }
 
+    // ------------------------------------------------------------------ image layers
+
+    private ImageOverlay? SelectedLayer => _layers.SelectedItems.Count == 1 ? _layers.SelectedItems[0].Tag as ImageOverlay : null;
+
+    private void RefreshLayerList(string? selectId)
+    {
+        selectId ??= SelectedLayer?.Id;
+        _layers.BeginUpdate();
+        _layers.Items.Clear();
+        if (_editing is not null)
+            foreach (var o in _editing.Overlays.OrderBy(o => o.Start))
+            {
+                var item = new ListViewItem(new[] { $"{o.Start:F1}s", $"{o.End:F1}s", Path.GetFileName(o.Path), ImageOverlay.StyleName(o.Style) }) { Tag = o };
+                if (!File.Exists(o.Path)) item.ForeColor = Theme.Danger;
+                if (o.Id == selectId) item.Selected = true;
+                _layers.Items.Add(item);
+            }
+        _layers.EndUpdate();
+        ShowLayerProps(SelectedLayer);
+        RefreshKeyframeList(); // image marks on the scrub bar
+    }
+
+    private void ShowLayerProps(ImageOverlay? o)
+    {
+        _loadingLayer = true;
+        foreach (Control c in new Control[] { _layerFrom, _layerTo, _layerSize, _layerRot, _layerStyle, _layerAnim, _removeLayer }) c.Enabled = o is not null;
+        if (o is not null)
+        {
+            _layerFrom.Value = (decimal)Math.Round(Math.Max(0, o.Start), 1);
+            _layerTo.Value = (decimal)Math.Round(Math.Max(0, o.End), 1);
+            _layerSize.Value = (decimal)Math.Clamp(Math.Round(o.Size), 8, 100);
+            _layerRot.Value = (decimal)Math.Clamp(Math.Round(o.Rotation), -180, 180);
+            _layerStyle.SelectedIndex = Math.Max(0, Array.FindIndex(ImageOverlay.Styles, x => x.Id == o.Style));
+            _layerAnim.SelectedIndex = Math.Max(0, Array.FindIndex(ImageOverlay.Animations, x => x.Id == o.Animation));
+        }
+        _loadingLayer = false;
+    }
+
+    private async Task PushLayersAsync()
+    {
+        if (_editing is null || !_player.IsReady) return;
+        await _player.SetLayersAsync(_editing.Overlays, SelectedLayer?.Id);
+    }
+
+    /// <summary>Adds an image shown during the given transcript line (or 3 s from the playhead), in the upper part of the frame.</summary>
+    private async Task AddLayerAsync(TranscriptSegment? line)
+    {
+        if (_editing is null) return;
+        var s = _editing;
+        using var d = new OpenFileDialog { Title = "Choose an image to show on the short", Filter = "Images|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif|All files|*.*" };
+        if (d.ShowDialog(this) != DialogResult.OK) return;
+        await _player.PauseAsync();
+        double start = line is not null ? Math.Max(0, line.Start - s.StartSeconds) : RelativeTime;
+        double end = line is not null ? Math.Min(s.Duration, line.End - s.StartSeconds) : start + 3;
+        if (end - start < 2.5) end = Math.Min(s.Duration, start + 2.5);
+        var o = new ImageOverlay { Path = d.FileName, Start = Math.Round(start, 2), End = Math.Round(Math.Max(end, start + 0.5), 2) };
+        s.Overlays.Add(o);
+        SaveProject();
+        RefreshLayerList(o.Id);
+        await PushLayersAsync();
+        await _player.SeekAsync(s.StartSeconds + o.Start + 0.3);
+        _status.Text = $"Image added from {Fmt(o.Start)} to {Fmt(o.End)}. Drag it on the video to place it, scroll to resize.";
+    }
+
+    private async Task RemoveLayerAsync()
+    {
+        if (_editing is null || SelectedLayer is not { } o) return;
+        _editing.Overlays.Remove(o);
+        SaveProject();
+        RefreshLayerList(null);
+        await PushLayersAsync();
+    }
+
+    private async Task OnLayerRowSelectedAsync()
+    {
+        ShowLayerProps(SelectedLayer);
+        await PushLayersAsync();
+        if (_editing is not null && SelectedLayer is { } o && (RelativeTime < o.Start || RelativeTime >= o.End))
+            await _player.SeekAsync(_editing.StartSeconds + o.Start + 0.3); // show it
+    }
+
+    private async Task OnLayerPropsChangedAsync()
+    {
+        if (_loadingLayer || _editing is null || SelectedLayer is not { } o) return;
+        o.Start = (double)_layerFrom.Value;
+        o.End = Math.Max(o.Start + 0.5, (double)_layerTo.Value);
+        o.Size = (double)_layerSize.Value;
+        o.Rotation = (double)_layerRot.Value;
+        o.Style = ImageOverlay.Styles[Math.Max(0, _layerStyle.SelectedIndex)].Id;
+        o.Animation = ImageOverlay.Animations[Math.Max(0, _layerAnim.SelectedIndex)].Id;
+        SaveProject();
+        RefreshLayerList(o.Id);
+        await PushLayersAsync();
+    }
+
+    private void SelectLayerRow(string id)
+    {
+        foreach (ListViewItem it in _layers.Items) it.Selected = it.Tag is ImageOverlay o && o.Id == id;
+    }
+
+    private void OnLayerMovedOnVideo(string id, double x, double y, double size, double rot)
+    {
+        var o = _editing?.Overlays.FirstOrDefault(l => l.Id == id);
+        if (o is null) return;
+        o.X = x; o.Y = y; o.Size = size; o.Rotation = rot;
+        SaveProject();
+        RefreshLayerList(o.Id);
+        _ = PushLayersAsync();
+    }
+
     /// <summary>Right-click on the caption: select its line in the transcript table and open the Text cell for typing.</summary>
     private void EditLineInGrid(double t)
     {
@@ -1875,7 +2059,8 @@ public sealed class MainForm : Form
         // edits show on the scrub bar: camera cuts in violet, caption positions in blue
         if (_editing is not null && _editing.Duration > 0)
             _timeline.SetMarks(_editing.Camera.Where(k => k.Time > 0.05).Select(k => new TimelineBar.Mark(k.Time / _editing.Duration, Theme.Nebula, $"Camera cut at {Fmt(k.Time)} ({k.Source})"))
-                .Concat(_editing.CaptionPositions.Select(k => new TimelineBar.Mark(k.Time / _editing.Duration, Theme.CosmicBlue, $"Caption moved at {Fmt(k.Time)}"))));
+                .Concat(_editing.CaptionPositions.Select(k => new TimelineBar.Mark(k.Time / _editing.Duration, Theme.CosmicBlue, $"Caption moved at {Fmt(k.Time)}")))
+                .Concat(_editing.Overlays.Select(o => new TimelineBar.Mark(Math.Clamp(o.Start / _editing.Duration, 0, 1), Theme.Success, $"Image {Path.GetFileName(o.Path)} {Fmt(o.Start)} - {Fmt(o.End)}"))));
         else _timeline.SetMarks(Array.Empty<TimelineBar.Mark>());
     }
 

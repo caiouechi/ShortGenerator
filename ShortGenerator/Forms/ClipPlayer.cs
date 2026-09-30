@@ -33,6 +33,10 @@ public sealed class ClipPlayer : UserControl
     public event Action<double, string>? TextEdited;
     /// <summary>User right-clicked the caption at this video time: the host selects that line in its transcript grid.</summary>
     public event Action<double>? LineRequested;
+    /// <summary>User clicked an image layer on the video.</summary>
+    public event Action<string>? LayerSelected;
+    /// <summary>User moved (percent centre), resized (percent width) or rotated (degrees) an image layer.</summary>
+    public event Action<string, double, double, double, double>? LayerChanged;
 
     public bool IsReady => _ready;
 
@@ -96,6 +100,9 @@ public sealed class ClipPlayer : UserControl
             if (root.TryGetProperty("camera", out var cam)) CameraMoved?.Invoke(cam.GetProperty("x").GetDouble(), cam.GetProperty("y").GetDouble(), cam.GetProperty("zoom").GetDouble(), cam.GetProperty("t").GetDouble());
             if (root.TryGetProperty("editAt", out var ea)) EditRequested?.Invoke(ea.GetDouble());
             if (root.TryGetProperty("lineAt", out var la)) LineRequested?.Invoke(la.GetDouble());
+            if (root.TryGetProperty("ovSel", out var os)) LayerSelected?.Invoke(os.GetString() ?? "");
+            if (root.TryGetProperty("ov", out var ov))
+                LayerChanged?.Invoke(ov.GetProperty("id").GetString() ?? "", ov.GetProperty("x").GetDouble(), ov.GetProperty("y").GetDouble(), ov.GetProperty("size").GetDouble(), ov.GetProperty("rot").GetDouble());
             if (root.TryGetProperty("edited", out var ed)) TextEdited?.Invoke(ed.GetProperty("t").GetDouble(), ed.GetProperty("text").GetString() ?? "");
         }
         catch { }
@@ -126,6 +133,10 @@ public sealed class ClipPlayer : UserControl
 
     /// <summary>Camera edit mode: shows the whole source frame with a draggable 9:16 box (scroll to zoom).</summary>
     public Task SetCameraModeAsync(bool on) => Exec($"setCameraMode({(on ? "true" : "false")})");
+    /// <summary>Image layers of the clip (times relative to the clip start); <paramref name="selectedId"/> gets a dashed outline.</summary>
+    public Task SetLayersAsync(IEnumerable<ImageOverlay> layers, string? selectedId) =>
+        Exec($"setLayers({JsonSerializer.Serialize(layers.Where(o => File.Exists(o.Path)).Select(o => new { id = o.Id, src = new Uri(Path.GetFullPath(o.Path)).AbsoluteUri, t = o.Start, end = o.End, x = o.X, y = o.Y, size = o.Size, rot = o.Rotation, style = o.Style, anim = o.Animation }))},{JsonSerializer.Serialize(selectedId)})");
+
     /// <summary>Opens the inline editor over the caption with the full transcript line shown at that moment.</summary>
     public Task BeginEditAsync(string text) => Exec($"beginEdit({JsonSerializer.Serialize(text)})");
 
@@ -178,6 +189,14 @@ public sealed class ClipPlayer : UserControl
   #cap:empty{pointer-events:none}
   #cam{position:absolute;display:none;border:2px solid #A855F7;box-shadow:0 0 0 9999px rgba(0,0,0,.55);cursor:move;touch-action:none;box-sizing:border-box}
   #cam .lbl{position:absolute;left:0;top:-22px;background:#6A38FF;color:#fff;font:12px Arial;padding:2px 6px;border-radius:4px;white-space:nowrap}
+  #ovl{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+  #ovl .ov{position:absolute;pointer-events:auto;cursor:move;touch-action:none;box-sizing:border-box;user-select:none}
+  #ovl .ov img{display:block;width:100%;height:auto;pointer-events:none;-webkit-user-drag:none}
+  #ovl .ov.frame{background:#fff;box-shadow:0 10px 26px rgba(0,0,0,.45)}
+  #ovl .ov.card{border-style:solid;border-color:#fff;box-shadow:0 10px 26px rgba(0,0,0,.45);overflow:hidden}
+  #ovl .ov.circle{border-style:solid;border-color:#fff;border-radius:50%;overflow:hidden;box-shadow:0 10px 26px rgba(0,0,0,.45)}
+  #ovl .ov.circle img{aspect-ratio:1/1;object-fit:cover;object-position:50% 33%}
+  #ovl .ov.sel{outline:2px dashed #A855F7;outline-offset:6px}
   #edit{position:absolute;left:4%;right:4%;bottom:18%;display:none;z-index:5;background:rgba(10,14,40,.92);border:2px solid #A855F7;border-radius:12px;padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.5)}
   #edit textarea{width:100%;box-sizing:border-box;min-height:70px;background:transparent;border:0;outline:0;resize:none;color:#fff;font:600 16px Arial;line-height:1.35}
   #edit .hint{color:#C7CBE0;font:12px Arial;margin-top:6px}
@@ -186,7 +205,7 @@ public sealed class ClipPlayer : UserControl
   .pop{animation:pop 110ms ease-out}
 </style></head>
 <body>
-<div id="wrap"><div id="frame"><video id="bg" muted></video><video id="v" playsinline></video><div id="cap"></div><div id="cam"><span class="lbl"></span></div><div id="edit"><textarea spellcheck="true"></textarea><div class="hint">Enter to save, Shift+Enter for a new line, Esc to cancel. Edits the whole transcript line.</div></div><div id="camhint">Drag the box to move the camera, scroll to zoom. Each change creates a camera cut at the current time.</div></div></div>
+<div id="wrap"><div id="frame"><video id="bg" muted></video><video id="v" playsinline></video><div id="ovl"></div><div id="cap"></div><div id="cam"><span class="lbl"></span></div><div id="edit"><textarea spellcheck="true"></textarea><div class="hint">Enter to save, Shift+Enter for a new line, Esc to cancel. Edits the whole transcript line.</div></div><div id="camhint">Drag the box to move the camera, scroll to zoom. Each change creates a camera cut at the current time.</div></div></div>
 <script>
 const v=document.getElementById('v'),bg=document.getElementById('bg'),frame=document.getElementById('frame'),cap=document.getElementById('cap'),cam=document.getElementById('cam'),camHint=document.getElementById('camhint');
 let range={s:0,e:0},chunks=[],st=null,lastIdx=-1,lastPost=0,drag=null;
@@ -303,9 +322,40 @@ cap.addEventListener('pointerup',e=>{if(!drag)return;const moved=Math.hypot(e.cl
   // a click without movement is not a drag: it must not create a caption position (it may be half of a double-click)
   if(moved&&dragPos)post({pos:{x:+dragPos.x.toFixed(1),y:+dragPos.y.toFixed(1),t:v.currentTime}});else render(true);});
 
+// ---- image layers: shown inside their window, drag to move, wheel to resize, shift+wheel to rotate ----
+const ovl=document.getElementById('ovl');let layers=[],layerSel=null,shown={},ovDrag=null,ovWheel=null;
+function setLayers(list,sel){layers=list||[];layerSel=sel||null;ovl.innerHTML='';
+  for(const o of layers){const d=document.createElement('div');d.className='ov '+(o.style||'frame');d.dataset.id=o.id;const im=document.createElement('img');im.src=o.src;d.appendChild(im);ovl.appendChild(d);
+    d.addEventListener('pointerdown',e=>{e.stopPropagation();e.preventDefault();layerSel=o.id;post({ovSel:o.id});ovDrag={o,x0:e.clientX,y0:e.clientY,ox:o.x,oy:o.y,moved:false};d.setPointerCapture(e.pointerId);styleLayers();});
+    d.addEventListener('pointermove',e=>{if(!ovDrag||ovDrag.o!==o)return;const r=frame.getBoundingClientRect();if(r.width<=0||r.height<=0)return;
+      if(Math.hypot(e.clientX-ovDrag.x0,e.clientY-ovDrag.y0)>3)ovDrag.moved=true;if(!ovDrag.moved)return;
+      o.x=Math.max(0,Math.min(100,ovDrag.ox+(e.clientX-ovDrag.x0)/r.width*100));o.y=Math.max(0,Math.min(100,ovDrag.oy+(e.clientY-ovDrag.y0)/r.height*100));styleLayers();});
+    d.addEventListener('pointerup',e=>{if(!ovDrag||ovDrag.o!==o)return;const m=ovDrag.moved;ovDrag=null;if(m)commitLayer(o);});
+    d.addEventListener('click',e=>e.stopPropagation());
+    d.addEventListener('wheel',e=>{e.preventDefault();e.stopPropagation();if(e.shiftKey)o.rot=Math.max(-180,Math.min(180,(o.rot||0)+(e.deltaY<0?3:-3)));else o.size=Math.max(8,Math.min(100,o.size+(e.deltaY<0?2:-2)));
+      layerSel=o.id;styleLayers();clearTimeout(ovWheel);ovWheel=setTimeout(()=>commitLayer(o),300);},{passive:false});}
+  styleLayers();}
+function commitLayer(o){if(!isFinite(o.x)||!isFinite(o.y))return;post({ov:{id:o.id,x:+o.x.toFixed(1),y:+o.y.toFixed(1),size:+o.size.toFixed(1),rot:+(o.rot||0).toFixed(1)}});}
+function styleLayers(){const fw=frame.clientWidth;
+  for(const d of ovl.children){const o=layers.find(l=>l.id===d.dataset.id);if(!o)continue;const w=fw*o.size/100;
+    d.style.width=w+'px';d.style.left=o.x+'%';d.style.top=o.y+'%';d.style.transform=`translate(-50%,-50%) rotate(${o.rot||0}deg)`;
+    if(o.style==='frame'){d.style.padding=`${w*0.045}px ${w*0.045}px ${w*0.14}px ${w*0.045}px`;}
+    else if(o.style==='card'){d.style.borderWidth=Math.max(2,w*0.012)+'px';d.style.borderRadius=(w*0.07)+'px';}
+    else if(o.style==='circle'){d.style.borderWidth=Math.max(3,w*0.03)+'px';}
+    d.classList.toggle('sel',o.id===layerSel);}}
+function applyLayers(t){const rel=t-range.s;
+  for(const d of ovl.children){const o=layers.find(l=>l.id===d.dataset.id);if(!o)continue;const on=!cameraMode&&rel>=o.t&&rel<o.end;
+    d.style.display=on?'block':'none';
+    if(on&&!shown[o.id]&&!ovDrag){const base=`translate(-50%,-50%) rotate(${o.rot||0}deg)`;
+      if(o.anim==='pop')d.animate([{transform:base+' scale(.55)'},{transform:base+' scale(1)'}],{duration:220,easing:'cubic-bezier(.2,1.4,.4,1)'});
+      else if(o.anim==='fade')d.animate([{opacity:0},{opacity:1}],{duration:300});
+      else if(o.anim==='slide')d.animate([{opacity:0,transform:base+' translateY(8vh)'},{opacity:1,transform:base}],{duration:350,easing:'ease-out'});}
+    shown[o.id]=on;}}
+window.addEventListener('resize',styleLayers);
+
 // ---- click the picture to play / pause; double-click the caption to edit its words ----
 const editBox=document.getElementById('edit'),editText=editBox.querySelector('textarea');let editT=null;
-document.getElementById('wrap').addEventListener('click',e=>{if(cameraMode||editT!==null)return;if(cap.contains(e.target)||editBox.contains(e.target)||cam.contains(e.target))return;toggle();});
+document.getElementById('wrap').addEventListener('click',e=>{if(cameraMode||editT!==null)return;if(cap.contains(e.target)||editBox.contains(e.target)||cam.contains(e.target)||ovl.contains(e.target))return;toggle();});
 // right-click the caption: the host selects that line in its transcript table, ready to edit
 cap.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();if(cameraMode)return;pause();post({lineAt:v.currentTime});});
 cap.addEventListener('dblclick',e=>{if(cameraMode)return;e.stopPropagation();pause();editT=v.currentTime;post({editAt:editT});});
@@ -319,6 +369,7 @@ function render(force){
   const t=v.currentTime;
   if(v.paused===false&&t>=range.e){pause();v.currentTime=range.s;post({t:range.s});return;}
   applyCamera(t);
+  applyLayers(t);
   if(cameraMode){drawCam();}
   let idx=-1;
   for(let i=0;i<chunks.length;i++){if(t>=chunks[i].s&&t<chunks[i].e){idx=i;break;}}
