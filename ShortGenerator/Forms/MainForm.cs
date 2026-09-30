@@ -72,6 +72,10 @@ public sealed class MainForm : Form
     // image layers of the short open in the editor
     private readonly ListView _layers = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
     private readonly FancyButton _addLayer = new() { Text = "Add image...", Width = 120, Glyph = "\uE710" };
+    private readonly FancyButton _pasteLayer = new() { Text = "Paste image", Width = 120, Glyph = "\uE77F" };
+    // under the player: one click adds an image at the playhead; the label follows the time
+    private readonly FancyButton _addLayerHere = new() { Text = "Image at 00:00.0", Width = 150, Glyph = "\uE91B" };
+    private const double DefaultLayerSeconds = 5;
     private readonly FancyButton _removeLayer = new() { Text = "Remove", Width = 96, Enabled = false, Glyph = "\uE74D" };
     private readonly NumericUpDown _layerFrom = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 64, Maximum = 100000 };
     private readonly NumericUpDown _layerTo = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 64, Maximum = 100000 };
@@ -728,7 +732,15 @@ public sealed class MainForm : Form
         Prop(2, 0, "Size %", _layerSize); Prop(2, 1, "Rotate", _layerRot);
         var layerBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(2, 8, 0, 0), WrapContents = false };
         layerBar.Controls.Add(_addLayer);
+        layerBar.Controls.Add(_pasteLayer);
         layerBar.Controls.Add(_removeLayer);
+        _addLayer.Text = "Add"; _pasteLayer.Text = "Paste"; _addLayer.Width = 84; _pasteLayer.Width = 90; _removeLayer.Width = 100;
+        foreach (Control c in new Control[] { layersHost, _layers })
+        {
+            c.AllowDrop = true;
+            c.DragEnter += (_, e) => e.Effect = DroppedImages(e.Data).Count > 0 ? DragDropEffects.Copy : DragDropEffects.None;
+            c.DragDrop += async (_, e) => await AddLayersAsync(DroppedImages(e.Data), CurrentClipTime());
+        }
         layersHost.Controls.Add(_layers);
         layersHost.Controls.Add(props);
         layersHost.Controls.Add(layerBar);
@@ -748,25 +760,32 @@ public sealed class MainForm : Form
 
         // center: player + controls
         var center = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6) };
-        var controls = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 80, ColumnCount = 3, RowCount = 2 };
-        controls.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        // row 1: the scrub bar gets the full width; row 2: Play, "Image at <time>", Start / End (wraps when narrow)
+        var controls = new TableLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, ColumnCount = 2, RowCount = 2 };
         controls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         controls.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        controls.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-        controls.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-        _playPause.Width = 84; _playPause.Margin = new Padding(0, 3, 6, 3);
-        controls.Controls.Add(_playPause, 0, 0);
-        controls.Controls.Add(_timeline, 1, 0);
-        controls.Controls.Add(_timeLabel, 2, 0);
-        var trim = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 4, 0, 0) };
+        controls.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        controls.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _timeline.Margin = new Padding(0, 2, 8, 0);
+        _timeLabel.Margin = new Padding(0, 8, 0, 0);
+        controls.Controls.Add(_timeline, 0, 0);
+        controls.Controls.Add(_timeLabel, 1, 0);
+        var actionsRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Padding = new Padding(0, 2, 0, 0), Margin = Padding.Empty };
+        _playPause.Width = 84; _playPause.Margin = new Padding(0, 3, 8, 3);
+        // adding an illustration is one click from wherever the video is
+        _addLayerHere.Margin = new Padding(0, 3, 16, 3); _addLayerHere.Height = _playPause.Height;
+        actionsRow.Controls.Add(_playPause);
+        actionsRow.Controls.Add(_addLayerHere);
+        var trim = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 3, 0, 3) };
         trim.Controls.Add(new Label { Text = "Start (s):", AutoSize = true, Margin = new Padding(0, 7, 4, 0) });
         trim.Controls.Add(_clipStart);
         trim.Controls.Add(new Label { Text = "End (s):", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         trim.Controls.Add(_clipEnd);
-        _keyframeHint.Margin = new Padding(16, 7, 0, 0);
-        trim.Controls.Add(_keyframeHint);
-        controls.Controls.Add(trim, 0, 1);
-        controls.SetColumnSpan(trim, 3);
+        actionsRow.Controls.Add(trim);
+        _keyframeHint.Margin = new Padding(12, 10, 0, 0);
+        actionsRow.Controls.Add(_keyframeHint);
+        controls.Controls.Add(actionsRow, 0, 1);
+        controls.SetColumnSpan(actionsRow, 2);
         center.Controls.Add(_player);
         center.Controls.Add(controls);
 
@@ -928,7 +947,9 @@ public sealed class MainForm : Form
         _player.LineRequested += t => BeginInvoke(() => EditLineInGrid(t));
         _player.LayerSelected += id => BeginInvoke(() => SelectLayerRow(id));
         _player.LayerChanged += (id, x, y, size, rot) => BeginInvoke(() => OnLayerMovedOnVideo(id, x, y, size, rot));
-        _addLayer.Click += async (_, _) => await AddLayerAsync(_editSegments.CurrentRow?.Tag as TranscriptSegment);
+        _addLayer.Click += async (_, _) => await PickAndAddLayerAsync(CurrentClipTime());
+        _addLayerHere.Click += async (_, _) => await PickAndAddLayerAsync(CurrentClipTime());
+        _pasteLayer.Click += async (_, _) => await PasteLayerAsync();
         _removeLayer.Click += async (_, _) => await RemoveLayerAsync();
         _layers.KeyDown += async (_, e) => { if (e.KeyCode == Keys.Delete) { e.Handled = true; await RemoveLayerAsync(); } };
         _layers.SelectedIndexChanged += async (_, _) => await OnLayerRowSelectedAsync();
@@ -939,7 +960,11 @@ public sealed class MainForm : Form
         _layerStyle.SelectedIndexChanged += async (_, _) => await OnLayerPropsChangedAsync();
         _layerAnim.SelectedIndexChanged += async (_, _) => await OnLayerPropsChangedAsync();
         // right-click a transcript line: add an image for exactly that moment
-        _segMenu.Items.Add("Add image for this line...", null, async (_, _) => await AddLayerAsync(_editSegments.CurrentRow?.Tag as TranscriptSegment));
+        _segMenu.Items.Add("Add image for this line...", null, async (_, _) =>
+        {
+            if (_editing is not null && _editSegments.CurrentRow?.Tag is TranscriptSegment line)
+                await PickAndAddLayerAsync(Math.Max(0, line.Start - _editing.StartSeconds));
+        });
         _editSegments.ContextMenuStrip = _segMenu;
         _editSegments.CellMouseDown += (_, e) => { if (e.Button == MouseButtons.Right && e.RowIndex >= 0) _editSegments.CurrentCell = _editSegments.Rows[e.RowIndex].Cells[Math.Max(0, e.ColumnIndex)]; };
         _removeFromSelection.Click += (_, _) => RemoveEditingFromSelection();
@@ -1860,6 +1885,17 @@ public sealed class MainForm : Form
         return segs.FirstOrDefault(x => t >= x.Start && t < x.End) ?? segs.LastOrDefault(x => x.Start <= t);
     }
 
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == (Keys.Control | Keys.V) && _tabs.SelectedTab == _tabEditor && _editing is not null
+            && ActiveControl is not TextBoxBase && !_editSegments.IsCurrentCellInEditMode && ClipboardHasImage())
+        {
+            _ = PasteLayerAsync();
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
     // ------------------------------------------------------------------ image layers
 
     private ImageOverlay? SelectedLayer => _layers.SelectedItems.Count == 1 ? _layers.SelectedItems[0].Tag as ImageOverlay : null;
@@ -1904,24 +1940,82 @@ public sealed class MainForm : Form
         await _player.SetLayersAsync(_editing.Overlays, SelectedLayer?.Id);
     }
 
-    /// <summary>Adds an image shown during the given transcript line (or 3 s from the playhead), in the upper part of the frame.</summary>
-    private async Task AddLayerAsync(TranscriptSegment? line)
+    /// <summary>The playhead inside the clip, unrounded (the frame on screen).</summary>
+    private double CurrentClipTime() => _editing is null ? 0 : Math.Clamp(_playerTime - _editing.StartSeconds, 0, _editing.Duration);
+
+    private static readonly string[] ImageExtensions = { ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif" };
+
+    private static List<string> DroppedImages(IDataObject? data) =>
+        data?.GetData(DataFormats.FileDrop) is string[] files
+            ? files.Where(f => ImageExtensions.Contains(Path.GetExtension(f).ToLowerInvariant())).ToList()
+            : new List<string>();
+
+    private static bool ClipboardHasImage()
+    {
+        try { return Clipboard.ContainsImage() || (Clipboard.ContainsFileDropList() && Clipboard.GetFileDropList().Cast<string>().Any(f => ImageExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()))); }
+        catch { return false; }
+    }
+
+    private async Task PickAndAddLayerAsync(double start)
     {
         if (_editing is null) return;
-        var s = _editing;
-        using var d = new OpenFileDialog { Title = "Choose an image to show on the short", Filter = "Images|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif|All files|*.*" };
-        if (d.ShowDialog(this) != DialogResult.OK) return;
         await _player.PauseAsync();
-        double start = line is not null ? Math.Max(0, line.Start - s.StartSeconds) : RelativeTime;
-        double end = line is not null ? Math.Min(s.Duration, line.End - s.StartSeconds) : start + 3;
-        if (end - start < 2.5) end = Math.Min(s.Duration, start + 2.5);
-        var o = new ImageOverlay { Path = d.FileName, Start = Math.Round(start, 2), End = Math.Round(Math.Max(end, start + 0.5), 2) };
-        s.Overlays.Add(o);
+        using var d = new OpenFileDialog { Title = "Choose an image to show on the short", Filter = "Images|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif|All files|*.*", Multiselect = true };
+        if (d.ShowDialog(this) != DialogResult.OK) return;
+        await AddLayersAsync(d.FileNames, start);
+    }
+
+    /// <summary>
+    /// Adds images starting at <paramref name="start"/> (clip time), 5 s each; several images play one after the
+    /// other. Near the end of the clip the window slides back so the image still gets its full 5 s.
+    /// </summary>
+    private async Task AddLayersAsync(IReadOnlyList<string> paths, double start)
+    {
+        if (_editing is null || paths.Count == 0) return;
+        var s = _editing;
+        await _player.PauseAsync();
+        ImageOverlay? first = null;
+        double at = start;
+        foreach (var path in paths)
+        {
+            double len = Math.Min(DefaultLayerSeconds, s.Duration);
+            double a = Math.Min(at, Math.Max(0, s.Duration - len));
+            var o = new ImageOverlay { Path = path, Start = Math.Round(a, 2), End = Math.Round(Math.Min(s.Duration, a + len), 2) };
+            s.Overlays.Add(o);
+            first ??= o;
+            at = o.End;
+        }
         SaveProject();
-        RefreshLayerList(o.Id);
+        RefreshLayerList(first!.Id);
         await PushLayersAsync();
-        await _player.SeekAsync(s.StartSeconds + o.Start + 0.3);
-        _status.Text = $"Image added from {Fmt(o.Start)} to {Fmt(o.End)}. Drag it on the video to place it, scroll to resize.";
+        await _player.SeekAsync(s.StartSeconds + first.Start + 0.05);
+        _status.Text = paths.Count == 1
+            ? $"Image shown {Fmt(first.Start)} to {Fmt(first.End)}. Drag it on the video to place it; change From / To to adjust the timing."
+            : $"{paths.Count} images added, 5 s each, from {Fmt(first.Start)}.";
+    }
+
+    /// <summary>Pastes an image copied from a browser or an app (or a copied image file) at the playhead.</summary>
+    private async Task PasteLayerAsync()
+    {
+        if (_editing is null || _video is null) return;
+        try
+        {
+            if (Clipboard.ContainsFileDropList())
+            {
+                var files = Clipboard.GetFileDropList().Cast<string>().Where(f => ImageExtensions.Contains(Path.GetExtension(f).ToLowerInvariant())).ToList();
+                if (files.Count > 0) { await AddLayersAsync(files, CurrentClipTime()); return; }
+            }
+            if (!Clipboard.ContainsImage()) { _status.Text = "The clipboard has no image. Copy a picture (right-click > Copy image in a browser) and paste again."; return; }
+            using var img = Clipboard.GetImage();
+            if (img is null) return;
+            // pasted pictures live next to the video so the project keeps working after a restart
+            var dir = Path.Combine(Path.GetDirectoryName(_video.FilePath)!, "images");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, $"{SafeFolder(_editing.Title)} {DateTime.Now:yyyyMMdd-HHmmss}.png");
+            img.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            await AddLayersAsync(new[] { path }, CurrentClipTime());
+        }
+        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Paste image"); }
     }
 
     private async Task RemoveLayerAsync()
@@ -2171,6 +2265,8 @@ public sealed class MainForm : Form
         if (InvokeRequired) { BeginInvoke(() => OnPlayerTime(t)); return; }
         _playerTime = t;
         UpdateTimeLabel(t);
+        var label = $"Image at {Fmt(CurrentClipTime())}";
+        if (_addLayerHere.Text != label) _addLayerHere.Text = label;
         if (!_timelineDragging)
         {
             _syncingTimeline = true;

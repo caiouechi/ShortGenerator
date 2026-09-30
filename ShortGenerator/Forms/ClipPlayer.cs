@@ -62,6 +62,7 @@ public sealed class ClipPlayer : UserControl
             s.IsStatusBarEnabled = false;
             s.IsZoomControlEnabled = false;
             _web.CoreWebView2.WebMessageReceived += OnMessage;
+            _web.AllowExternalDrop = false; // dropping a file on the player would otherwise replace the player with that file
 
             // Serve the page from disk (file://) so the <video> element can load the source video by file URI.
             // A page loaded via NavigateToString has an opaque origin and cannot fetch local media.
