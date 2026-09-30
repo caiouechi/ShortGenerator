@@ -958,7 +958,11 @@ public sealed class MainForm : Form
         _layerSize.ValueChanged += async (_, _) => await OnLayerPropsChangedAsync();
         _layerRot.ValueChanged += async (_, _) => await OnLayerPropsChangedAsync();
         _layerStyle.SelectedIndexChanged += async (_, _) => await OnLayerPropsChangedAsync();
-        _layerAnim.SelectedIndexChanged += async (_, _) => await OnLayerPropsChangedAsync();
+        _layerAnim.SelectedIndexChanged += async (_, _) =>
+        {
+            await OnLayerPropsChangedAsync();
+            if (!_loadingLayer && SelectedLayer is { } o) await ShowLayerEntranceAsync(o); // show the chosen effect once
+        };
         // right-click a transcript line: add an image for exactly that moment
         _segMenu.Items.Add("Add image for this line...", null, async (_, _) =>
         {
@@ -1903,6 +1907,7 @@ public sealed class MainForm : Form
     private void RefreshLayerList(string? selectId)
     {
         selectId ??= SelectedLayer?.Id;
+        _refreshingLayers = true; // re-selecting the row here must not seek or replay the entrance
         _layers.BeginUpdate();
         _layers.Items.Clear();
         if (_editing is not null)
@@ -1914,6 +1919,7 @@ public sealed class MainForm : Form
                 _layers.Items.Add(item);
             }
         _layers.EndUpdate();
+        _refreshingLayers = false;
         ShowLayerProps(SelectedLayer);
         RefreshKeyframeList(); // image marks on the scrub bar
     }
@@ -1988,7 +1994,7 @@ public sealed class MainForm : Form
         SaveProject();
         RefreshLayerList(first!.Id);
         await PushLayersAsync();
-        await _player.SeekAsync(s.StartSeconds + first.Start + 0.05);
+        await ShowLayerEntranceAsync(first);
         _status.Text = paths.Count == 1
             ? $"Image shown {Fmt(first.Start)} to {Fmt(first.End)}. Drag it on the video to place it; change From / To to adjust the timing."
             : $"{paths.Count} images added, 5 s each, from {Fmt(first.Start)}.";
@@ -2027,12 +2033,24 @@ public sealed class MainForm : Form
         await PushLayersAsync();
     }
 
+    /// <summary>True while the selection is being mirrored from a click on the video (the page already knows it).</summary>
+    private bool _layerSelectFromVideo, _refreshingLayers;
+
     private async Task OnLayerRowSelectedAsync()
     {
         ShowLayerProps(SelectedLayer);
+        if (_layerSelectFromVideo || _refreshingLayers) return; // pushing now would rebuild the layer under the user's pointer
         await PushLayersAsync();
-        if (_editing is not null && SelectedLayer is { } o && (RelativeTime < o.Start || RelativeTime >= o.End))
-            await _player.SeekAsync(_editing.StartSeconds + o.Start + 0.3); // show it
+        if (_editing is not null && SelectedLayer is { } o) await ShowLayerEntranceAsync(o);
+    }
+
+    /// <summary>Jumps to the layer's start and plays its entrance once, so its timing and effect can be judged.</summary>
+    private async Task ShowLayerEntranceAsync(ImageOverlay o)
+    {
+        if (_editing is null || !_player.IsReady) return;
+        await _player.PauseAsync();
+        await _player.SeekAsync(_editing.StartSeconds + o.Start + 0.05);
+        await _player.PreviewLayerAsync(o.Id);
     }
 
     private async Task OnLayerPropsChangedAsync()
@@ -2051,7 +2069,9 @@ public sealed class MainForm : Form
 
     private void SelectLayerRow(string id)
     {
-        foreach (ListViewItem it in _layers.Items) it.Selected = it.Tag is ImageOverlay o && o.Id == id;
+        _layerSelectFromVideo = true;
+        try { foreach (ListViewItem it in _layers.Items) it.Selected = it.Tag is ImageOverlay o && o.Id == id; }
+        finally { _layerSelectFromVideo = false; }
     }
 
     private void OnLayerMovedOnVideo(string id, double x, double y, double size, double rot)

@@ -138,6 +138,9 @@ public sealed class ClipPlayer : UserControl
     public Task SetLayersAsync(IEnumerable<ImageOverlay> layers, string? selectedId) =>
         Exec($"setLayers({JsonSerializer.Serialize(layers.Where(o => File.Exists(o.Path)).Select(o => new { id = o.Id, src = new Uri(Path.GetFullPath(o.Path)).AbsoluteUri, t = o.Start, end = o.End, x = o.X, y = o.Y, size = o.Size, rot = o.Rotation, style = o.Style, anim = o.Animation }))},{JsonSerializer.Serialize(selectedId)})");
 
+    /// <summary>Replays the entrance of an image layer once (the layer must be inside its window).</summary>
+    public Task PreviewLayerAsync(string id) => Exec($"previewLayer({JsonSerializer.Serialize(id)})");
+
     /// <summary>Opens the inline editor over the caption with the full transcript line shown at that moment.</summary>
     public Task BeginEditAsync(string text) => Exec($"beginEdit({JsonSerializer.Serialize(text)})");
 
@@ -190,14 +193,23 @@ public sealed class ClipPlayer : UserControl
   #cap:empty{pointer-events:none}
   #cam{position:absolute;display:none;border:2px solid #A855F7;box-shadow:0 0 0 9999px rgba(0,0,0,.55);cursor:move;touch-action:none;box-sizing:border-box}
   #cam .lbl{position:absolute;left:0;top:-22px;background:#6A38FF;color:#fff;font:12px Arial;padding:2px 6px;border-radius:4px;white-space:nowrap}
-  #ovl{position:absolute;inset:0;pointer-events:none;overflow:hidden}
-  #ovl .ov{position:absolute;pointer-events:auto;cursor:move;touch-action:none;box-sizing:border-box;user-select:none}
+  #ovl{position:absolute;inset:0;pointer-events:none}
+  #ovl .ov{position:absolute;pointer-events:auto;cursor:move;touch-action:none;user-select:none}
+  #ovl .ov .pic{box-sizing:border-box;width:100%}
   #ovl .ov img{display:block;width:100%;height:auto;pointer-events:none;-webkit-user-drag:none}
-  #ovl .ov.frame{background:#fff;box-shadow:0 10px 26px rgba(0,0,0,.45)}
-  #ovl .ov.card{border-style:solid;border-color:#fff;box-shadow:0 10px 26px rgba(0,0,0,.45);overflow:hidden}
-  #ovl .ov.circle{border-style:solid;border-color:#fff;border-radius:50%;overflow:hidden;box-shadow:0 10px 26px rgba(0,0,0,.45)}
-  #ovl .ov.circle img{aspect-ratio:1/1;object-fit:cover;object-position:50% 33%}
-  #ovl .ov.sel{outline:2px dashed #A855F7;outline-offset:6px}
+  #ovl .ov .pic.frame{background:#fff;box-shadow:0 10px 26px rgba(0,0,0,.45)}
+  #ovl .ov .pic.card{border-style:solid;border-color:#fff;box-shadow:0 10px 26px rgba(0,0,0,.45);overflow:hidden}
+  #ovl .ov .pic.circle{border-style:solid;border-color:#fff;border-radius:50%;overflow:hidden;box-shadow:0 10px 26px rgba(0,0,0,.45)}
+  #ovl .ov .pic.circle img{aspect-ratio:1/1;object-fit:cover;object-position:50% 33%}
+  #ovl .ov.sel{outline:2px dashed #A855F7;outline-offset:4px}
+  #ovl .ov .h{position:absolute;display:none;box-sizing:border-box;z-index:3}
+  #ovl .ov.sel .h{display:block}
+  #ovl .ov .h.c{width:14px;height:14px;background:#fff;border:2px solid #6A38FF;border-radius:3px}
+  #ovl .ov .h.nw{left:-11px;top:-11px;cursor:nwse-resize} #ovl .ov .h.se{right:-11px;bottom:-11px;cursor:nwse-resize}
+  #ovl .ov .h.ne{right:-11px;top:-11px;cursor:nesw-resize} #ovl .ov .h.sw{left:-11px;bottom:-11px;cursor:nesw-resize}
+  #ovl .ov .h.r{width:14px;height:14px;background:#6A38FF;border:2px solid #fff;border-radius:50%;cursor:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'><path d='M13 4a9 9 0 1 1-8.3 5.5' fill='none' stroke='white' stroke-width='4.5' stroke-linecap='round'/><path d='M13 4a9 9 0 1 1-8.3 5.5' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'/><path d='M1.5 5.5l3.5 6 5-4.5z' fill='black' stroke='white' stroke-width='1.2'/></svg>") 13 13, grab}
+  #ovl .ov .h.rt{left:50%;top:-26px;margin-left:-7px} #ovl .ov .h.rb{left:50%;bottom:-26px;margin-left:-7px}
+  #ovl .ov .h.rl{top:50%;left:-26px;margin-top:-7px} #ovl .ov .h.rr{top:50%;right:-26px;margin-top:-7px}
   #edit{position:absolute;left:4%;right:4%;bottom:18%;display:none;z-index:5;background:rgba(10,14,40,.92);border:2px solid #A855F7;border-radius:12px;padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.5)}
   #edit textarea{width:100%;box-sizing:border-box;min-height:70px;background:transparent;border:0;outline:0;resize:none;color:#fff;font:600 16px Arial;line-height:1.35}
   #edit .hint{color:#C7CBE0;font:12px Arial;margin-top:6px}
@@ -323,34 +335,66 @@ cap.addEventListener('pointerup',e=>{if(!drag)return;const moved=Math.hypot(e.cl
   // a click without movement is not a drag: it must not create a caption position (it may be half of a double-click)
   if(moved&&dragPos)post({pos:{x:+dragPos.x.toFixed(1),y:+dragPos.y.toFixed(1),t:v.currentTime}});else render(true);});
 
-// ---- image layers: shown inside their window, drag to move, wheel to resize, shift+wheel to rotate ----
-const ovl=document.getElementById('ovl');let layers=[],layerSel=null,shown={},ovDrag=null,ovWheel=null;
-function setLayers(list,sel){layers=list||[];layerSel=sel||null;ovl.innerHTML='';
-  for(const o of layers){const d=document.createElement('div');d.className='ov '+(o.style||'frame');d.dataset.id=o.id;const im=document.createElement('img');im.src=o.src;d.appendChild(im);ovl.appendChild(d);
-    d.addEventListener('pointerdown',e=>{e.stopPropagation();e.preventDefault();layerSel=o.id;post({ovSel:o.id});ovDrag={o,x0:e.clientX,y0:e.clientY,ox:o.x,oy:o.y,moved:false};d.setPointerCapture(e.pointerId);styleLayers();});
-    d.addEventListener('pointermove',e=>{if(!ovDrag||ovDrag.o!==o)return;const r=frame.getBoundingClientRect();if(r.width<=0||r.height<=0)return;
-      if(Math.hypot(e.clientX-ovDrag.x0,e.clientY-ovDrag.y0)>3)ovDrag.moved=true;if(!ovDrag.moved)return;
-      o.x=Math.max(0,Math.min(100,ovDrag.ox+(e.clientX-ovDrag.x0)/r.width*100));o.y=Math.max(0,Math.min(100,ovDrag.oy+(e.clientY-ovDrag.y0)/r.height*100));styleLayers();});
-    d.addEventListener('pointerup',e=>{if(!ovDrag||ovDrag.o!==o)return;const m=ovDrag.moved;ovDrag=null;if(m)commitLayer(o);});
-    d.addEventListener('click',e=>e.stopPropagation());
-    d.addEventListener('wheel',e=>{e.preventDefault();e.stopPropagation();if(e.shiftKey)o.rot=Math.max(-180,Math.min(180,(o.rot||0)+(e.deltaY<0?3:-3)));else o.size=Math.max(8,Math.min(100,o.size+(e.deltaY<0?2:-2)));
-      layerSel=o.id;styleLayers();clearTimeout(ovWheel);ovWheel=setTimeout(()=>commitLayer(o),300);},{passive:false});}
+// ---- image layers: shown inside their window. Drag the picture to move it, a corner to resize, an edge dot
+// to rotate (Shift snaps to 15 degrees); the wheel resizes and Shift+wheel rotates. Elements are updated in
+// place, and updates arriving during a drag wait for the drag to end, so a selection never breaks a drag.
+const ovl=document.getElementById('ovl');let layers=[],layerSel=null,shown={},ovDrag=null,ovWheel=null,pendingLayers=null;
+function layerEl(id){for(const d of ovl.children)if(d.dataset.id===id)return d;return null;}
+function makeLayer(o){
+  const d=document.createElement('div');d.className='ov';d.dataset.id=o.id;
+  const pic=document.createElement('div');pic.className='pic';const im=document.createElement('img');pic.appendChild(im);d.appendChild(pic);
+  for(const h of ['nw','ne','sw','se'])d.appendChild(Object.assign(document.createElement('div'),{className:'h c '+h}));
+  for(const h of ['rt','rb','rl','rr'])d.appendChild(Object.assign(document.createElement('div'),{className:'h r '+h}));
+  d.addEventListener('pointerdown',e=>{
+    e.stopPropagation();e.preventDefault();const o=d._o;if(!o)return;
+    layerSel=o.id;post({ovSel:o.id});
+    const r=d.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
+    const h=e.target.classList;const mode=h.contains('c')?'size':h.contains('r')?'rot':'move';
+    ovDrag={o,mode,x0:e.clientX,y0:e.clientY,ox:o.x,oy:o.y,size0:o.size,rot0:o.rot||0,cx,cy,
+      dist0:Math.max(8,Math.hypot(e.clientX-cx,e.clientY-cy)),ang0:Math.atan2(e.clientY-cy,e.clientX-cx),moved:false};
+    d.setPointerCapture(e.pointerId);styleLayers();});
+  d.addEventListener('pointermove',e=>{
+    const g=ovDrag;if(!g||g.o!==d._o)return;const fr=frame.getBoundingClientRect();if(fr.width<=0||fr.height<=0)return;
+    if(Math.hypot(e.clientX-g.x0,e.clientY-g.y0)>3)g.moved=true;if(!g.moved)return;const o=g.o;
+    if(g.mode==='move'){o.x=Math.max(0,Math.min(100,g.ox+(e.clientX-g.x0)/fr.width*100));o.y=Math.max(0,Math.min(100,g.oy+(e.clientY-g.y0)/fr.height*100));}
+    else if(g.mode==='size'){o.size=Math.max(8,Math.min(100,g.size0*Math.hypot(e.clientX-g.cx,e.clientY-g.cy)/g.dist0));}
+    else{let a=g.rot0+(Math.atan2(e.clientY-g.cy,e.clientX-g.cx)-g.ang0)*180/Math.PI;a=((a+540)%360)-180;
+      if(e.shiftKey)a=Math.round(a/15)*15;else if(Math.abs(a)<3)a=0;o.rot=a;}
+    styleLayers();});
+  const end=()=>{const g=ovDrag;if(!g||g.o!==d._o)return;ovDrag=null;if(g.moved)commitLayer(g.o);
+    if(pendingLayers){const [l,sl]=pendingLayers;pendingLayers=null;setLayers(l,sl);}};
+  d.addEventListener('pointerup',end);d.addEventListener('pointercancel',end);
+  d.addEventListener('click',e=>e.stopPropagation());
+  d.addEventListener('wheel',e=>{e.preventDefault();e.stopPropagation();const o=d._o;if(!o)return;
+    if(e.shiftKey)o.rot=Math.max(-180,Math.min(180,(o.rot||0)+(e.deltaY<0?3:-3)));else o.size=Math.max(8,Math.min(100,o.size+(e.deltaY<0?2:-2)));
+    layerSel=o.id;styleLayers();clearTimeout(ovWheel);ovWheel=setTimeout(()=>commitLayer(o),300);},{passive:false});
+  ovl.appendChild(d);return d;}
+function setLayers(list,sel){
+  if(ovDrag){pendingLayers=[list,sel];return;}
+  layers=list||[];layerSel=sel||null;
+  for(const d of [...ovl.children])if(!layers.some(l=>l.id===d.dataset.id))d.remove();
+  for(const o of layers){const d=layerEl(o.id)||makeLayer(o);d._o=o;const pic=d.firstChild,im=pic.firstChild;
+    pic.className='pic '+(o.style||'frame');if(im.getAttribute('src')!==o.src)im.src=o.src;}
   styleLayers();}
-function commitLayer(o){if(!isFinite(o.x)||!isFinite(o.y))return;post({ov:{id:o.id,x:+o.x.toFixed(1),y:+o.y.toFixed(1),size:+o.size.toFixed(1),rot:+(o.rot||0).toFixed(1)}});}
+function commitLayer(o){if(!isFinite(o.x)||!isFinite(o.y)||!isFinite(o.size))return;post({ov:{id:o.id,x:+o.x.toFixed(1),y:+o.y.toFixed(1),size:+o.size.toFixed(1),rot:+(o.rot||0).toFixed(1)}});}
 function styleLayers(){const fw=frame.clientWidth;
-  for(const d of ovl.children){const o=layers.find(l=>l.id===d.dataset.id);if(!o)continue;const w=fw*o.size/100;
+  for(const d of ovl.children){const o=d._o;if(!o)continue;const w=fw*o.size/100,pic=d.firstChild;
     d.style.width=w+'px';d.style.left=o.x+'%';d.style.top=o.y+'%';d.style.transform=`translate(-50%,-50%) rotate(${o.rot||0}deg)`;
-    if(o.style==='frame'){d.style.padding=`${w*0.045}px ${w*0.045}px ${w*0.14}px ${w*0.045}px`;}
-    else if(o.style==='card'){d.style.borderWidth=Math.max(2,w*0.012)+'px';d.style.borderRadius=(w*0.07)+'px';}
-    else if(o.style==='circle'){d.style.borderWidth=Math.max(3,w*0.03)+'px';}
+    pic.style.padding='';pic.style.borderWidth='';pic.style.borderRadius='';
+    if(o.style==='frame'){pic.style.padding=`${w*0.045}px ${w*0.045}px ${w*0.14}px ${w*0.045}px`;}
+    else if(o.style==='card'){pic.style.borderWidth=Math.max(2,w*0.012)+'px';pic.style.borderRadius=(w*0.07)+'px';}
+    else if(o.style==='circle'){pic.style.borderWidth=Math.max(3,w*0.03)+'px';}
     d.classList.toggle('sel',o.id===layerSel);}}
+function playEntrance(d,o){const base=`translate(-50%,-50%) rotate(${o.rot||0}deg)`;
+  if(o.anim==='pop')d.animate([{transform:base+' scale(.55)'},{transform:base+' scale(1)'}],{duration:220,easing:'cubic-bezier(.2,1.4,.4,1)'});
+  else if(o.anim==='fade')d.animate([{opacity:0},{opacity:1}],{duration:300});
+  else if(o.anim==='slide')d.animate([{opacity:0,transform:base+' translateY(8vh)'},{opacity:1,transform:base}],{duration:350,easing:'ease-out'});}
+/** Replays a layer's entrance once so the chosen effect can be judged. */
+function previewLayer(id){const d=layerEl(id);if(!d||!d._o)return;d.style.display='block';shown[id]=true;playEntrance(d,d._o);}
 function applyLayers(t){const rel=t-range.s;
-  for(const d of ovl.children){const o=layers.find(l=>l.id===d.dataset.id);if(!o)continue;const on=!cameraMode&&rel>=o.t&&rel<o.end;
+  for(const d of ovl.children){const o=d._o;if(!o)continue;const on=!cameraMode&&((rel>=o.t&&rel<o.end)||(ovDrag&&ovDrag.o===o));
     d.style.display=on?'block':'none';
-    if(on&&!shown[o.id]&&!ovDrag){const base=`translate(-50%,-50%) rotate(${o.rot||0}deg)`;
-      if(o.anim==='pop')d.animate([{transform:base+' scale(.55)'},{transform:base+' scale(1)'}],{duration:220,easing:'cubic-bezier(.2,1.4,.4,1)'});
-      else if(o.anim==='fade')d.animate([{opacity:0},{opacity:1}],{duration:300});
-      else if(o.anim==='slide')d.animate([{opacity:0,transform:base+' translateY(8vh)'},{opacity:1,transform:base}],{duration:350,easing:'ease-out'});}
+    if(on&&!shown[o.id]&&!ovDrag)playEntrance(d,o);
     shown[o.id]=on;}}
 window.addEventListener('resize',styleLayers);
 
