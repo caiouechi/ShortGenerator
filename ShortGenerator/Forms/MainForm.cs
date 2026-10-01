@@ -59,6 +59,9 @@ public sealed class MainForm : Form
     private readonly PictureBox _coverPreview = new() { Width = 96, Height = 170, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(19, 24, 52), BorderStyle = BorderStyle.None };
     private readonly FancyButton _setCover = new() { Text = "Use this frame", Width = 170, Glyph = "" };
     private readonly FancyButton _pickCoverImage = new() { Text = "Choose image...", Width = 170 };
+    // which language's cover the cover buttons work on (shown for shorts ticked for English)
+    private readonly ComboBox _coverLang = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 100 };
+    private string? CoverLanguage => _editing?.TranslateEnglish == true && _coverLang.SelectedIndex == 1 ? "en" : null;
     private readonly FancyButton _clearCover = new() { Text = "Reset to default", Width = 170 };
     private readonly Label _coverInfo = new() { AutoSize = true, MaximumSize = new Size(170, 0), ForeColor = Color.DimGray };
     // cover helpers: copy the frame for ChatGPT, copy a thumbnail brief, or (developer only) let Higgsfield redraw it
@@ -377,6 +380,8 @@ public sealed class MainForm : Form
         _publishPanel.Log = Log;
         _publishPanel.OpenSettings = OpenSettings;
         _publishPanel.Delete = DeleteGenerated;
+        _publishPanel.GetAccountLanguage = key => _settings.AccountLanguages.TryGetValue(key, out var v) ? v : "both";
+        _publishPanel.SetAccountLanguage = (key, value) => { _settings.AccountLanguages[key] = value; try { SettingsStore.Save(_settings); } catch { } };
         _publishPanel.OpenSignIn = () =>
         {
             using var dlg = new GaliLunaSignInForm(_settings);
@@ -655,7 +660,13 @@ public sealed class MainForm : Form
         actions.Controls.Add(_autoCamera, 0, actions.RowCount);
         actions.Controls.Add(_changeCamera, 1, actions.RowCount++);
         Row(_cameraMode, true);
-        Row(new Label { Text = "Cover / thumbnail", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 0, 0, 4) }, true);
+        var coverHead = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 4) };
+        coverHead.Controls.Add(new Label { Text = "Cover / thumbnail", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 6, 8, 0) });
+        _coverLang.Items.AddRange(new object[] { "Original", "English" });
+        _coverLang.SelectedIndex = 0;
+        _coverLang.Margin = new Padding(0, 2, 0, 0);
+        coverHead.Controls.Add(_coverLang);
+        Row(coverHead, true);
         var cover = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Dock = DockStyle.Fill, Margin = Padding.Empty };
         cover.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         cover.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -1035,11 +1046,11 @@ public sealed class MainForm : Form
             if (_editing is not null && _keyframes.SelectedItems.Count > 0 && _keyframes.SelectedItems[0].Tag is IKeyframe k)
                 await _player.SeekAsync(_editing.StartSeconds + k.Time);
         };
+        _coverLang.SelectedIndexChanged += async (_, _) => await UpdateCoverPreviewAsync();
         _setCover.Click += async (_, _) =>
         {
             if (_editing is null) return;
-            _editing.CoverTime = RelativeTime;
-            _editing.CoverImage = null;
+            _editing.SetCover(CoverLanguage, RelativeTime, null);
             SaveProject();
             await UpdateCoverPreviewAsync();
         };
@@ -1048,7 +1059,7 @@ public sealed class MainForm : Form
             if (_editing is null) return;
             using var d = new OpenFileDialog { Title = "Choose a cover image", Filter = "Images|*.png;*.jpg;*.jpeg;*.webp|All files|*.*" };
             if (d.ShowDialog(this) != DialogResult.OK) return;
-            _editing.CoverImage = d.FileName;
+            _editing.SetCover(CoverLanguage, null, d.FileName);
             SaveProject();
             await UpdateCoverPreviewAsync();
         };
@@ -1061,14 +1072,14 @@ public sealed class MainForm : Form
         _copyCoverPrompt.Click += (_, _) =>
         {
             if (_editing is null) return;
-            try { Clipboard.SetText(ThumbnailBrief.Build(_editing, ThumbnailLanguage, ThumbnailBrief.HumanPlaceholder)); _status.Text = "Thumbnail prompt copied. Paste it into ChatGPT with the cover image and fill in the last line."; }
+            try { Clipboard.SetText(ThumbnailBrief.Build(CoverBriefShort(_editing), CoverBriefLanguage, ThumbnailBrief.HumanPlaceholder)); _status.Text = "Thumbnail prompt copied. Paste it into ChatGPT with the cover image and fill in the last line."; }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "Copy failed"); }
         };
         _generateCover.Click += async (_, _) => await GenerateCoverWithHiggsfieldAsync();
         _clearCover.Click += async (_, _) =>
         {
             if (_editing is null) return;
-            _editing.CoverTime = null; _editing.CoverImage = null;
+            _editing.SetCover(CoverLanguage, null, null); // the English cover goes back to the original's
             SaveProject();
             await UpdateCoverPreviewAsync();
         };
@@ -1848,13 +1859,18 @@ public sealed class MainForm : Form
     {
         if (_video is null || _editing is null) { _coverPreview.Image = null; _coverInfo.Text = ""; return; }
         var s = _editing;
-        _coverInfo.Text = s.CoverImage is not null ? "Custom image" : s.CoverTime is { } t ? $"Frame at {Fmt(t)}" : "Default: 1 s into the clip";
+        var lang = CoverLanguage;
+        var (time, image) = s.CoverFor(lang);
+        _coverInfo.Text = (lang == "en" && !s.HasEnglishCover ? "Same as original: " : "") +
+                          (image is not null ? "Custom image" : time is { } t ? $"Frame at {Fmt(t)}" : "Default: 1 s into the clip");
         try
         {
             var tmp = Path.Combine(Path.GetTempPath(), "shortgen_covers", $"{Guid.NewGuid():N}.mp4");
             Directory.CreateDirectory(Path.GetDirectoryName(tmp)!);
-            var path = await _renderer.ExportCoverAsync(_video, s, ReadOptions(), tmp, CancellationToken.None);
-            if (path is null || !ReferenceEquals(_editing, s)) return;
+            var opts = ReadOptions();
+            opts.CaptionLanguage = lang ?? "original";
+            var path = await _renderer.ExportCoverAsync(_video, s, opts, tmp, CancellationToken.None);
+            if (path is null || !ReferenceEquals(_editing, s) || CoverLanguage != lang) return; // switched short or language meanwhile
             using var fs = File.OpenRead(path);
             var img = Image.FromStream(fs);
             var old = _coverPreview.Image;
@@ -1875,6 +1891,22 @@ public sealed class MainForm : Form
     }
 
     /// <summary>Language for the thumbnail headline: the transcript language when chosen, otherwise a neutral phrase.</summary>
+    /// <summary>The headline language of the cover being made: English for the English cover.</summary>
+    private string CoverBriefLanguage => CoverLanguage == "en" ? "English" : ThumbnailLanguage;
+
+    /// <summary>For the English cover, the brief uses the English title and the first English line as the hook.</summary>
+    private ShortSuggestion CoverBriefShort(ShortSuggestion s)
+    {
+        if (CoverLanguage != "en") return s;
+        var firstEn = SegmentsOf(s).Select(x => x.English).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+        return new ShortSuggestion
+        {
+            Title = s.English is { Title.Length: > 0 } e ? e.Title : s.Title,
+            Hook = firstEn ?? s.Hook, Emotion = s.Emotion, WhyViral = s.WhyViral,
+            SuggestedCaption = s.English?.Caption ?? s.SuggestedCaption, StartSeconds = s.StartSeconds, EndSeconds = s.EndSeconds,
+        };
+    }
+
     /// <summary>The transcript's language by name ("Portuguese"), for prompts; falls back to the Whisper choice.</summary>
     private string SourceLanguageName
     {
@@ -1903,7 +1935,8 @@ public sealed class MainForm : Form
         }
         var s = _editing;
         string prompt; bool useReference;
-        using (var dlg = new HiggsfieldCoverDialog(s, ThumbnailLanguage, _coverPreview.Image is { } img ? (Image)img.Clone() : null, client.Model))
+        var coverLang = CoverLanguage;
+        using (var dlg = new HiggsfieldCoverDialog(CoverBriefShort(s), CoverBriefLanguage, _coverPreview.Image is { } img ? (Image)img.Clone() : null, client.Model))
         {
             if (dlg.ShowDialog(this) != DialogResult.OK) return;
             prompt = dlg.Prompt; useReference = dlg.UseReference;
@@ -1915,16 +1948,17 @@ public sealed class MainForm : Form
             {
                 var tmp = Path.Combine(Path.GetTempPath(), "shortgen_covers", $"{Guid.NewGuid():N}.mp4");
                 Directory.CreateDirectory(Path.GetDirectoryName(tmp)!);
-                frame = await _renderer.ExportCoverAsync(_video, s, ReadOptions(), tmp, ct) ?? throw new InvalidOperationException("The cover frame could not be exported.");
+                var fo = ReadOptions(); fo.CaptionLanguage = coverLang ?? "original";
+                frame = await _renderer.ExportCoverAsync(_video, s, fo, tmp, ct) ?? throw new InvalidOperationException("The cover frame could not be exported.");
                 _status.Text = "Uploading the frame to Higgsfield...";
                 reference = await client.UploadAsync(frame, ct);
             }
             _status.Text = $"Higgsfield ({client.Model}) is drawing the cover...";
             var url = await client.GenerateImageAsync(prompt, reference, new Progress<string>(m => { Log(m); _status.Text = m; }), ct);
-            var outPath = Path.Combine(Path.GetDirectoryName(_video.FilePath)!, "covers", SafeFolder(s.Title) + ".higgsfield.jpg");
+            var outPath = Path.Combine(Path.GetDirectoryName(_video.FilePath)!, "covers", SafeFolder(s.Title) + (coverLang == "en" ? " (EN)" : "") + ".higgsfield.jpg");
             await client.DownloadAsync(url, outPath, ct);
             if (frame is not null) { try { File.Delete(frame); } catch { } }
-            s.CoverImage = outPath;
+            s.SetCover(coverLang, null, outPath);
             SaveProject();
             Log($"Higgsfield cover saved to {outPath}");
             if (ReferenceEquals(_editing, s)) await UpdateCoverPreviewAsync();
@@ -2483,6 +2517,8 @@ public sealed class MainForm : Form
         _editSegments.Columns["English"]!.Visible = on;
         _retranslate.Visible = on;
         _previewLangGroup.Visible = on;
+        _coverLang.Visible = on;
+        if (!on && _coverLang.SelectedIndex != 0) _coverLang.SelectedIndex = 0;
         if (!on && _previewLang.SelectedIndex != 0) _previewLang.SelectedIndex = 0; // also resets _previewEnglish
         if (!on) _previewEnglish = false;
     }
@@ -2570,25 +2606,9 @@ public sealed class MainForm : Form
             langs = AskPreviewLanguages(s);
             if (langs.Count == 0) return;
         }
-        var done = new List<string>();
-        await RunBusyAsync("Rendering preview", async ct =>
-        {
-            int n = 1;
-            foreach (var lang in langs)
-            {
-                var opts = ReadOptions();
-                opts.OutputFolder = Path.Combine(Path.GetTempPath(), "shortgen_previews");
-                opts.CaptionLanguage = lang;
-                opts.FileSuffix = lang == "en" ? " (EN)" : "";
-                _busyTitle = langs.Count > 1 ? $"Rendering preview {n++}/{langs.Count}" + (lang == "en" ? " (English)" : " (original)") : "Rendering preview";
-                var r = await _renderer.RenderAsync(_video, _transcript, s, opts, 0, ProgressReporter(), new Progress<string>(Log), ct);
-                if (!r.Success) throw new InvalidOperationException(r.Error ?? "Preview failed.");
-                done.Add(r.OutputPath);
-                Log($"Preview ready: {r.OutputPath}");
-            }
-        });
-        // open the previews only after all of them are rendered
-        foreach (var path in done) OpenPath(path);
+        // Render preview makes the real files: saved in the shorts folder with their covers and post texts and
+        // listed on Publish, one per language; the videos open once all of them are rendered.
+        await GenerateAsync(new[] { s }, langs, openVideos: true);
     }
 
     /// <summary>Dev convenience: shows the Render preview language question for the short in the editor.</summary>
@@ -2714,6 +2734,7 @@ public sealed class MainForm : Form
         {
             H("Cover");
             P(s.CoverImage is not null ? $"Custom image: {Path.GetFileName(s.CoverImage)}" : $"Frame at {Fmt(s.CoverTime!.Value)} into the clip");
+            if (s.HasEnglishCover) P("English: " + (s.CoverImageEn is not null ? $"custom image {Path.GetFileName(s.CoverImageEn)}" : $"frame at {Fmt(s.CoverTimeEn!.Value)}"));
         }
         if (_transcript is not null)
         {
@@ -2839,7 +2860,9 @@ public sealed class MainForm : Form
     }
 
     /// <param name="only">Render just these shorts; null = all ticked shorts.</param>
-    private async Task GenerateAsync(IReadOnlyList<ShortSuggestion>? only = null)
+    /// <param name="languages">Render exactly these caption languages ("original" / "en") instead of the Generate setting.</param>
+    /// <param name="openVideos">Open the rendered videos afterwards (Render preview) instead of their folder.</param>
+    private async Task GenerateAsync(IReadOnlyList<ShortSuggestion>? only = null, IReadOnlyList<string>? languages = null, bool openVideos = false)
     {
         if (_video is null || _suggestions is null) return;
         var selected = only?.ToList() ?? _suggestions.Shorts.Where(s => s.Selected).ToList();
@@ -2858,15 +2881,22 @@ public sealed class MainForm : Form
         await RunBusyAsync("Generating shorts", async ct =>
         {
             int i = 1, ok = 0;
+            var rendered = new List<string>();
             var mode = _settings.CaptionLanguage;
             foreach (var s in selected)
             {
                 ct.ThrowIfCancellationRequested();
                 // the languages this short is rendered in: English only when it was ticked for English
                 var langs = new List<string>();
-                if (mode != "en" || !s.TranslateEnglish) langs.Add("original");
-                if (mode != "original" && s.TranslateEnglish) langs.Add("en");
-                if (mode == "en" && !s.TranslateEnglish) Log($"\"{s.Title}\" is not ticked for English; rendering the original captions.");
+                if (languages is not null) langs.AddRange(languages.Where(l => l == "original" || (l == "en" && s.TranslateEnglish)));
+                else
+                {
+                    if (mode != "en" || !s.TranslateEnglish) langs.Add("original");
+                    if (mode != "original" && s.TranslateEnglish) langs.Add("en");
+                    if (mode == "en" && !s.TranslateEnglish) Log($"\"{s.Title}\" is not ticked for English; rendering the original captions.");
+                }
+                // the file number is the short's place among the ticked shorts, so one short keeps its name
+                int fileIndex = only is null ? i : Math.Max(1, _suggestions.Shorts.Where(x => x.Selected).ToList().IndexOf(s) + 1);
                 foreach (var lang in langs)
                 {
                 bool en = lang == "en";
@@ -2904,7 +2934,8 @@ public sealed class MainForm : Form
                     }
                     item.SubItems[1].Text = "rendering...";
                 }
-                var r = await _renderer.RenderAsync(_video, _transcript, s, opt, i, ProgressReporter(), new Progress<string>(Log), ct);
+                var r = await _renderer.RenderAsync(_video, _transcript, s, opt, fileIndex, ProgressReporter(), new Progress<string>(Log), ct);
+                if (r.Success) rendered.Add(r.OutputPath);
                 item.SubItems[1].Text = r.Success ? "done" : "failed";
                 item.SubItems[2].Text = r.Success ? r.OutputPath : r.Error ?? "";
                 item.Tag = r.OutputPath;
@@ -2931,7 +2962,8 @@ public sealed class MainForm : Form
             _publishPanel.RefreshList();
             RefreshQueue();
             Log($"Finished: {ok}/{selected.Count} shorts generated in {sub}" + (ok > 0 ? ". Open the Publish step to send them to your accounts." : ""));
-            if (ok > 0) OpenPath(sub);
+            if (ok > 0 && !openVideos) OpenPath(sub);
+            if (openVideos) foreach (var path in rendered) OpenPath(path);
         });
     }
 

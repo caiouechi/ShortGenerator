@@ -30,6 +30,11 @@ public sealed class PublishPanel : UserControl
     /// <summary>Deletes a rendered short (file, cover, project entry); MainForm owns the list and the confirmation.</summary>
     [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<GeneratedFile, bool> Delete { get; set; } = _ => false;
+    /// <summary>Which videos an account receives ("original" / "en" / "both"), remembered in the settings.</summary>
+    [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Func<string, string> GetAccountLanguage { get; set; } = _ => "both";
+    [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Action<string, string> SetAccountLanguage { get; set; } = (_, _) => { };
 
     // header
     private readonly Label _connection = new() { Dock = DockStyle.Top, Height = 48, Padding = new Padding(10, 6, 10, 0), ForeColor = Color.DimGray };
@@ -57,6 +62,7 @@ public sealed class PublishPanel : UserControl
     private readonly PictureBox _cover = new() { Width = 54, Height = 96, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(19, 24, 52) };
     private readonly Label _editingTitle = new() { AutoSize = true, MaximumSize = new Size(600, 0) };
     private readonly Label _editingHint = new() { AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(600, 0) };
+    private readonly FancyButton _changeCover = new() { Text = "Change cover...", Width = 140, Glyph = "\uE8B9" };
     private readonly FlowLayoutPanel _cards = new() { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty, BackColor = Theme.Bg };
     private readonly Label _notConnected = new() { AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(600, 0), Margin = new Padding(0, 10, 0, 0) };
     private readonly List<NetworkCard> _networkCards = new();
@@ -114,6 +120,18 @@ public sealed class PublishPanel : UserControl
         _editingTitle.Font = Theme.HeadingFont(10f); _editingTitle.ForeColor = Theme.Heading;
         selText.Controls.Add(_editingTitle);
         selText.Controls.Add(_editingHint);
+        _changeCover.Margin = new Padding(0, 6, 0, 0);
+        selText.Controls.Add(_changeCover);
+        _changeCover.Click += (_, _) =>
+        {
+            if (_editing is null) return;
+            using var d = new OpenFileDialog { Title = "Choose the cover sent with this video", Filter = "Images|*.jpg;*.jpeg;*.png;*.webp|All files|*.*" };
+            if (d.ShowDialog(this) != DialogResult.OK) return;
+            _editing.CoverPath = d.FileName;
+            Saved();
+            LoadCover(_editing.CoverPath);
+            Log($"Cover for \"{_editing.Title}\" set to {Path.GetFileName(d.FileName)}.");
+        };
         selected.Controls.Add(selText, 1, 0);
 
         var body = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
@@ -374,9 +392,16 @@ public sealed class PublishPanel : UserControl
         if (files.Count == 0) return;
 
         var where = string.Join(", ", targets.Select(t => t.Describe()));
-        int requests = files.Count * targets.Sum(t => t.Sends().Count);
+        int requests = files.Sum(f => targets.Sum(t => t.Sends(f.File.Language).Count));
+        if (requests == 0)
+        {
+            MessageBox.Show(this, "None of the ticked accounts takes the ticked videos' language. Check the language next to each account.", "Nothing to publish");
+            return;
+        }
+        var plan = string.Join("\n", files.Select(f => $"  {(f.File.Language == "en" ? "[EN] " : "")}{f.File.Title}  ->  " +
+            (string.Join(", ", targets.SelectMany(t => t.Sends(f.File.Language).Select(x => x.Account))) is { Length: > 0 } a ? a : "(no account for this language)")));
         var again = files.Where(f => f.File.Publications.Any(p => targets.Any(t => t.Network == p.Network.ToLowerInvariant()) && p.Status is "published" or "drafted")).Select(f => f.File.Title).ToList();
-        var message = $"Publish {files.Count} short{(files.Count == 1 ? "" : "s")} to {where}?" + (requests > 1 ? $"\n\nEach account is sent separately ({requests} uploads) so you see every result as it lands." : "")
+        var message = $"Publish {files.Count} short{(files.Count == 1 ? "" : "s")}?\n\n{plan}" + (requests > 1 ? $"\n\nEach account is sent separately ({requests} uploads) so you see every result as it lands." : "")
             + (targets.Any(t => t.Network == "instagram") ? "\n\nInstagram posts go live immediately and are visible to followers." : "")
             + (again.Count > 0 ? $"\n\nAlready posted there before and will be posted AGAIN: {string.Join(", ", again)}." : "");
         if (MessageBox.Show(this, message, "Publish with galiluna", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
@@ -395,7 +420,8 @@ public sealed class PublishPanel : UserControl
                 foreach (var card in targets)
                 {
                     if (cancelled) break;
-                    var sends = card.Sends();
+                    var sends = card.Sends(file.Language);
+                    if (sends.Count == 0) continue; // no account on this network takes this language
                     var done = new List<string>(); // per-account lines shown on the card as they arrive
                     int index = 0;
                     foreach (var (account, options) in sends)
@@ -508,6 +534,25 @@ public sealed class PublishPanel : UserControl
         private readonly PublishPanel _owner;
         private readonly GaliLunaClient.Accounts _accounts;
         private readonly Dictionary<CheckBox, int> _boxes = new();
+        private readonly Dictionary<CheckBox, string> _boxKeys = new();
+        private readonly Dictionary<string, ComboBox> _langs = new();
+
+        /// <summary>"Original / English / Both": which of the short's videos this account receives (remembered).</summary>
+        private ComboBox LanguagePicker(string key)
+        {
+            var c = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170, Margin = new Padding(0, 1, 0, 2) };
+            c.Items.AddRange(new object[] { "Original videos", "English videos", "Both" });
+            c.SelectedIndex = _owner.GetAccountLanguage(key) switch { "original" => 0, "en" => 1, _ => 2 };
+            c.SelectedIndexChanged += (_, _) => { _owner.SetAccountLanguage(key, c.SelectedIndex switch { 0 => "original", 1 => "en", _ => "both" }); _owner.UpdateButtons(); };
+            _langs[key] = c;
+            return c;
+        }
+
+        private bool Takes(string key, string? fileLanguage)
+        {
+            if (!_langs.TryGetValue(key, out var c)) return true;
+            return c.SelectedIndex == 2 || (c.SelectedIndex == 1) == (fileLanguage == "en");
+        }
         private readonly ComboBox _privacy = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top };
         private readonly ComboBox _mode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top };
         private readonly Label _modeHint = new() { AutoSize = true, ForeColor = Color.DimGray };
@@ -550,6 +595,7 @@ public sealed class PublishPanel : UserControl
                 if (_privacy.Items.Count > 0) _privacy.SelectedIndex = 0;
                 _privacy.Enabled = false;
                 _mode.SelectedIndexChanged += (_, _) => { _privacy.Enabled = _mode.SelectedIndex == 1; UpdateModeHint(); owner.UpdateButtons(); };
+                Add("Videos", LanguagePicker("tiktok"));
                 Add("How", _mode);
                 Add("Visibility", _privacy);
                 Add("", _modeHint);
@@ -560,10 +606,14 @@ public sealed class PublishPanel : UserControl
                 var list = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty, BackColor = Theme.Elevated };
                 foreach (var a in yt ? accounts.Youtube.Channels : accounts.Instagram)
                 {
-                    var box = new CheckBox { Text = a.Label, AutoSize = true, Checked = true, Margin = new Padding(0, 2, 0, 2) };
+                    var accountRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty, BackColor = Theme.Elevated };
+                    var box = new CheckBox { Text = a.Label, AutoSize = true, Checked = true, Margin = new Padding(0, 4, 10, 2), MinimumSize = new Size(190, 0) };
                     box.CheckedChanged += (_, _) => owner.UpdateButtons();
-                    list.Controls.Add(box);
+                    accountRow.Controls.Add(box);
+                    accountRow.Controls.Add(LanguagePicker($"{network}:{a.Id}"));
+                    list.Controls.Add(accountRow);
                     _boxes[box] = a.Id;
+                    _boxKeys[box] = $"{network}:{a.Id}";
                 }
                 Add(yt ? "Channels" : "Accounts", list);
                 if (yt)
@@ -632,22 +682,24 @@ public sealed class PublishPanel : UserControl
         /// One request per ticked account (or one for TikTok), each with only that account as target, so the
         /// outcome of every account shows as soon as galiluna answers for it instead of after the whole batch.
         /// </summary>
-        public List<(string Account, GaliLunaClient.SendOptions Options)> Sends()
+        /// <param name="fileLanguage">null for an original-language file, "en" for the English one: only accounts set to take it are returned.</param>
+        public List<(string Account, GaliLunaClient.SendOptions Options)> Sends(string? fileLanguage = null)
         {
             var none = Array.Empty<int>();
             var list = new List<(string, GaliLunaClient.SendOptions)>();
             switch (Network)
             {
                 case "instagram":
-                    foreach (var kv in _boxes.Where(kv => kv.Key.Checked))
+                    foreach (var kv in _boxes.Where(kv => kv.Key.Checked && Takes(_boxKeys[kv.Key], fileLanguage)))
                         list.Add((kv.Key.Text, new GaliLunaClient.SendOptions(new[] { kv.Value }, "off", null, false, none, "public")));
                     break;
                 case "youtube":
-                    foreach (var kv in _boxes.Where(kv => kv.Key.Checked))
+                    foreach (var kv in _boxes.Where(kv => kv.Key.Checked && Takes(_boxKeys[kv.Key], fileLanguage)))
                         list.Add((kv.Key.Text, new GaliLunaClient.SendOptions(none, "off", null, false, new[] { kv.Value }, _privacy.SelectedItem as string ?? "public")));
                     break;
                 default:
-                    list.Add((_accounts.Tiktok?.Label ?? "TikTok", new GaliLunaClient.SendOptions(none, _mode.SelectedIndex == 1 ? "direct" : "drafts", _privacy.SelectedItem as string, false, none, "public")));
+                    if (Takes("tiktok", fileLanguage))
+                        list.Add((_accounts.Tiktok?.Label ?? "TikTok", new GaliLunaClient.SendOptions(none, _mode.SelectedIndex == 1 ? "direct" : "drafts", _privacy.SelectedItem as string, false, none, "public")));
                     break;
             }
             return list;

@@ -170,22 +170,23 @@ public sealed class ShortRenderer
     public async Task<string?> ExportCoverAsync(VideoInfo video, ShortSuggestion s, GenerateOptions options, string videoOutPath, CancellationToken ct)
     {
         var coverPath = Path.ChangeExtension(videoOutPath, ".cover.jpg");
+        var (coverTime, coverImage) = s.CoverFor(options.CaptionLanguage);
         try
         {
-            if (!string.IsNullOrWhiteSpace(s.CoverImage) && File.Exists(s.CoverImage))
+            if (!string.IsNullOrWhiteSpace(coverImage) && File.Exists(coverImage))
             {
                 var (w, h) = OutputSize(video, options.CropMode);
                 // normalise the custom image to the output size (cover-fit) so every network gets the right aspect
                 await _ffmpeg.RunAsync(new[]
                 {
-                    "-y", "-i", s.CoverImage,
+                    "-y", "-i", coverImage,
                     "-vf", $"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}",
                     "-frames:v", "1", "-q:v", "2", coverPath
                 }, null, null, 0, ct);
                 return coverPath;
             }
 
-            double t = Math.Clamp(s.CoverTime ?? Math.Min(1.0, s.Duration / 2), 0, Math.Max(0, s.Duration - 0.05));
+            double t = Math.Clamp(coverTime ?? Math.Min(1.0, s.Duration / 2), 0, Math.Max(0, s.Duration - 0.05));
             string vf;
             if (options.CropMode == CropMode.VerticalCrop && video.Width > 0 && video.Height > 0)
             {

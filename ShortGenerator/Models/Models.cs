@@ -104,6 +104,23 @@ public sealed class ShortSuggestion
     [JsonPropertyName("cover_time")] public double? CoverTime { get; set; }
     /// <summary>Custom cover image chosen by the user (absolute path). Takes precedence over <see cref="CoverTime"/>.</summary>
     [JsonPropertyName("cover_image")] public string? CoverImage { get; set; }
+    /// <summary>English version's cover: its own frame time or image. Both null = same cover as the original.</summary>
+    [JsonPropertyName("cover_time_en")] public double? CoverTimeEn { get; set; }
+    [JsonPropertyName("cover_image_en")] public string? CoverImageEn { get; set; }
+
+    /// <summary>True when the English version has a cover of its own.</summary>
+    [JsonIgnore] public bool HasEnglishCover => CoverTimeEn is not null || !string.IsNullOrWhiteSpace(CoverImageEn);
+
+    /// <summary>The cover to use for a language: the English one when set, otherwise the original.</summary>
+    public (double? Time, string? Image) CoverFor(string? language) =>
+        language == "en" && HasEnglishCover ? (CoverTimeEn, CoverImageEn) : (CoverTime, CoverImage);
+
+    /// <summary>Sets (or with both null, resets) the cover of one language.</summary>
+    public void SetCover(string? language, double? time, string? image)
+    {
+        if (language == "en") { CoverTimeEn = time; CoverImageEn = image; }
+        else { CoverTime = time; CoverImage = image; }
+    }
 
     /// <summary>The post text for a network, falling back to the generic caption / hashtags.</summary>
     public NetworkPost PostFor(string network)
