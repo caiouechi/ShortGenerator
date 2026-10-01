@@ -167,6 +167,14 @@ public sealed class ShortRenderer
         return f;
     }
 
+    /// <summary>The frame time (seconds into the short) the cover uses, or null when it is a custom image.</summary>
+    public static double? CoverFrameTime(ShortSuggestion s, string? language)
+    {
+        var (coverTime, coverImage) = s.CoverFor(language);
+        if (!string.IsNullOrWhiteSpace(coverImage) && File.Exists(coverImage)) return null;
+        return Math.Clamp(coverTime ?? Math.Min(1.0, s.Duration / 2), 0, Math.Max(0, s.Duration - 0.05));
+    }
+
     public async Task<string?> ExportCoverAsync(VideoInfo video, ShortSuggestion s, GenerateOptions options, string videoOutPath, CancellationToken ct)
     {
         var coverPath = Path.ChangeExtension(videoOutPath, ".cover.jpg");

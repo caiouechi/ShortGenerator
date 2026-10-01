@@ -2953,6 +2953,7 @@ public sealed class MainForm : Form
                         Youtube = ep is null ? s.Youtube : ep.Youtube, Tiktok = ep is null ? s.Tiktok : ep.Tiktok, Instagram = ep is null ? s.Instagram : ep.Instagram,
                         // Cover / thumbnail exported next to the video so publishing can send it along.
                         CoverPath = await _renderer.ExportCoverAsync(_video, s, opt, r.OutputPath, ct),
+                        CoverTimeSeconds = ShortRenderer.CoverFrameTime(s, opt.CaptionLanguage),
                     });
                 }
                 }

@@ -122,6 +122,7 @@ public sealed class PublishPanel : UserControl
             using var d = new OpenFileDialog { Title = "Choose the cover sent with this video", Filter = "Images|*.jpg;*.jpeg;*.png;*.webp|All files|*.*" };
             if (d.ShowDialog(this) != DialogResult.OK) return;
             _editing.CoverPath = d.FileName;
+            _editing.CoverTimeSeconds = null; // a picked image is no frame of the video
             Saved();
             LoadCover(_editing.CoverPath);
             Log($"Cover for \"{_editing.Title}\" set to {Path.GetFileName(d.FileName)}.");
@@ -451,7 +452,7 @@ public sealed class PublishPanel : UserControl
                 var progress = new Progress<double>(v => Show(v < 1 ? $"uploading {(int)(v * 100)}%" : "publishing (this can take a few minutes)..."));
                 try
                 {
-                    var result = await client.SendAsync(j.File.Path, j.Text.Title, j.Text.Description, j.Text.Tags, j.Options, progress, ct, j.File.CoverPath);
+                    var result = await client.SendAsync(j.File.Path, j.Text.Title, j.Text.Description, j.Text.Tags, j.Options, progress, ct, j.File.CoverPath, j.File.CoverTimeSeconds);
                     // Ask again while TikTok is still working, up to ~5 minutes.
                     for (int attempt = 0; attempt < 20 && result.AnyProcessing; attempt++)
                     {

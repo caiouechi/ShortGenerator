@@ -25,6 +25,9 @@ public sealed class GeneratedFile
 
     /// <summary>Cover / thumbnail image exported next to the video (JPEG), when one was made.</summary>
     public string? CoverPath { get; set; }
+    /// <summary>When the cover is a frame of the short: its time in seconds. TikTok can only use a frame as
+    /// its cover, so this is what it gets. Null for a custom image.</summary>
+    public double? CoverTimeSeconds { get; set; }
 
     /// <summary>Post text for a network with fallbacks to the generic caption and hashtags.</summary>
     public NetworkPost PostFor(string network)

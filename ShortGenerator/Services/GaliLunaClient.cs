@@ -114,20 +114,23 @@ public sealed class GaliLunaClient : IDisposable
 
     /// <summary>POST /api/shorts: uploads the MP4 and publishes it. Allow several minutes.</summary>
     public async Task<ShortInfo> SendAsync(string videoPath, string title, string caption, IReadOnlyList<string> hashtags,
-        SendOptions options, IProgress<double>? progress, CancellationToken ct, string? coverPath = null)
+        SendOptions options, IProgress<double>? progress, CancellationToken ct, string? coverPath = null, double? coverTimeSeconds = null)
     {
         await using var file = File.OpenRead(videoPath);
         using var form = new MultipartFormDataContent();
         var videoContent = new ProgressStreamContent(file, progress);
         videoContent.Headers.ContentType = new MediaTypeHeaderValue("video/mp4");
         form.Add(videoContent, "video", Path.GetFileName(videoPath));
-        // Optional cover / thumbnail (JPEG). galiluna forwards it as the Reel cover, the TikTok cover frame
-        // and the YouTube thumbnail once its API supports the field; older servers ignore unknown parts.
+        // Optional cover / thumbnail (JPEG). galiluna makes it the Instagram Reel cover and the YouTube
+        // thumbnail; older servers ignore unknown parts.
         if (coverPath is not null && File.Exists(coverPath))
         {
             var cover = new ByteArrayContent(await File.ReadAllBytesAsync(coverPath, ct));
             cover.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
             form.Add(cover, "cover", Path.GetFileName(coverPath));
+            // TikTok cannot take an image cover; when the cover is a frame, galiluna points TikTok at that frame
+            if (coverTimeSeconds is { } t)
+                form.Add(new StringContent(t.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)), "coverTimeSeconds");
         }
         form.Add(new StringContent(title), "title");
         form.Add(new StringContent(caption), "caption");
