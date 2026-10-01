@@ -368,17 +368,25 @@ public sealed class PublishPanel : UserControl
         if (_populating) return; // ItemChecked fires mid-population, when the collection can still hand out nulls
         int ticked = TickedCount;
         bool any = _accounts is not null && ticked > 0 && !_busy;
-        foreach (var c in _networkCards) c.SetEnabled(any && c.HasTarget, ticked);
-        int destinations = _networkCards.Count(c => c.HasTarget);
-        _publishAll.Enabled = any && destinations > 0;
+        // each button counts what it will really send: the ticked files whose language its ticked accounts take
+        var tickedFiles = ticked == 0 ? new List<GeneratedFile>() : _list.Items.Cast<ListViewItem>().Where(i => i is { Checked: true }).Select(i => (GeneratedFile)i.Tag!).ToList();
+        int destinations = 0, uploads = 0;
+        foreach (var c in _networkCards)
+        {
+            int files = tickedFiles.Count(f => c.Sends(f.Language).Count > 0);
+            uploads += tickedFiles.Sum(f => c.Sends(f.Language).Count);
+            if (files > 0) destinations++;
+            c.SetEnabled(any && files > 0, files);
+        }
+        _publishAll.Enabled = any && uploads > 0;
         _deleteShort.Enabled = !_busy && _list.SelectedItems.Count == 1;
         _openFolder.Enabled = Files().Count > 0;
         _cancelPublish.Visible = _busy;
         _publishAll.Visible = !_busy;
-        _publishAll.Text = destinations > 1 ? $"Publish to all ({destinations})" : "Publish to all";
+        _publishAll.Text = uploads > 1 ? $"Publish to all ({uploads})" : "Publish to all";
         _summary.Text = _accounts is null ? "" : ticked == 0 ? "Tick at least one short on the left." :
-            destinations == 0 ? "Pick an account in a card below." :
-            $"{ticked} short{(ticked == 1 ? "" : "s")} ticked. Publish to one network with its button, or to every network at once.";
+            uploads == 0 ? "None of the ticked accounts takes the ticked videos' language: check the language next to each account." :
+            $"{ticked} short{(ticked == 1 ? "" : "s")} ticked, {uploads} upload{(uploads == 1 ? "" : "s")} to {destinations} network{(destinations == 1 ? "" : "s")}. Each video only goes to the accounts set for its language.";
     }
 
     // ------------------------------------------------------------------ publishing
@@ -733,7 +741,8 @@ public sealed class PublishPanel : UserControl
             _loading = false;
         }
 
-        public void SetEnabled(bool enabled, int ticked) { _publish.Enabled = enabled; _publish.Text = ticked > 1 && enabled ? $"Publish {ticked} to {Title}" : $"Publish to {Title}"; }
+        /// <param name="files">How many of the ticked videos this network will receive (after the language filter).</param>
+        public void SetEnabled(bool enabled, int files) { _publish.Enabled = enabled; _publish.Text = files > 1 && enabled ? $"Publish {files} to {Title}" : $"Publish to {Title}"; }
         public void SetOutcome(string text, Color color) { _outcome.Text = text; _outcome.ForeColor = color; }
     }
 }
