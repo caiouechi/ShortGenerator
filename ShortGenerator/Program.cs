@@ -33,6 +33,7 @@ internal static class Program
             if (Array.IndexOf(args, "--hfdialog") >= 0) form.ShowHiggsfieldDialogPreview();
             // "--translatedialog" opens the English translation dialog for the ticked shorts (dev convenience)
             if (Array.IndexOf(args, "--translatedialog") >= 0) form.ShowTranslateDialogPreview();
+            if (Array.IndexOf(args, "--previewlangs") >= 0) form.ShowPreviewLanguagesPreview();
             if (Array.IndexOf(args, "--settings") >= 0)
                 using (var dlg = new SettingsForm(SettingsStore.Load())) dlg.ShowDialog(form);
         };

@@ -87,6 +87,9 @@ public sealed class MainForm : Form
     // English: caption language in the editor and on Generate shorts
     /// <summary>The live captions follow the table column being edited: English while in the English column.</summary>
     private bool _previewEnglish;
+    private readonly ComboBox _previewLang = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 };
+    private readonly Label _previewLangLabel = new() { Text = "Captions:", AutoSize = true, Margin = new Padding(12, 9, 4, 0) };
+    private readonly FlowLayoutPanel _previewLangGroup = new() { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
     private readonly FancyButton _retranslate = new() { Text = "Translate again", Width = 140, Visible = false, Glyph = "\uF2B7" };
     private readonly ComboBox _captionLang = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
     private bool _loadingLayer;
@@ -710,7 +713,16 @@ public sealed class MainForm : Form
         var segBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(0, 10, 0, 0), FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
         segBar.Controls.Add(_segPlay);
         segBar.Controls.Add(_segDelete);
-        _retranslate.Margin = new Padding(12, 0, 0, 0);
+        // which captions the video preview shows; the English column stays visible either way
+        _previewLang.Items.AddRange(new object[] { "Original", "English" });
+        _previewLang.SelectedIndex = 0;
+        _previewLang.Margin = new Padding(0, 5, 8, 0);
+        _previewLangLabel.ForeColor = Theme.TextSecondary;
+        // label and dropdown wrap together, never apart
+        _previewLangGroup.Controls.Add(_previewLangLabel);
+        _previewLangGroup.Controls.Add(_previewLang);
+        segBar.Controls.Add(_previewLangGroup);
+        _retranslate.Margin = new Padding(4, 0, 0, 0);
         segBar.Controls.Add(_retranslate);
         right.Controls.Add(_editSegments);
         right.Controls.Add(segBar);
@@ -1128,13 +1140,14 @@ public sealed class MainForm : Form
         _crop.SelectedIndexChanged += (_, _) => RefreshPreview();
         _generate.Click += async (_, _) => await GenerateAsync();
         _continueToGenerate.Click += (_, _) => { if (EnsureEnglish(TickedShorts().Where(s => s.TranslateEnglish).ToList(), force: false)) SelectTab(4); };
-        // clicking into the English column previews the English captions on the video; any other column, the original
-        _editSegments.CurrentCellChanged += async (_, _) =>
+        _previewLang.SelectedIndexChanged += async (_, _) =>
         {
-            bool en = _editing?.TranslateEnglish == true && _editSegments.CurrentCell?.OwningColumn?.Name == "English";
+            bool en = _editing?.TranslateEnglish == true && _previewLang.SelectedIndex == 1;
             if (en == _previewEnglish) return;
             _previewEnglish = en;
             await PushCaptionsAsync();
+            if (en && _editing is not null && SegmentsOf(_editing).All(x => string.IsNullOrWhiteSpace(x.English)))
+                _status.Text = "No English lines yet for this short: click 'Translate again'.";
         };
         _retranslate.Click += async (_, _) => await RetranslateEditingAsync();
         _captionLang.SelectedIndexChanged += (_, _) =>
@@ -1793,7 +1806,7 @@ public sealed class MainForm : Form
         _syncingTimeline = false;
 
         FillSegmentGrid(s);
-        _previewEnglish = false;
+        _previewEnglish = s.TranslateEnglish && _previewLang.SelectedIndex == 1;
         UpdateEnglishColumn();
         s.MigrateLegacyCaptionPosition();
         _playerTime = s.StartSeconds;
@@ -2453,6 +2466,8 @@ public sealed class MainForm : Form
         bool on = _editing?.TranslateEnglish == true;
         _editSegments.Columns["English"]!.Visible = on;
         _retranslate.Visible = on;
+        _previewLangGroup.Visible = on;
+        if (!on && _previewLang.SelectedIndex != 0) _previewLang.SelectedIndex = 0; // also resets _previewEnglish
         if (!on) _previewEnglish = false;
     }
 
@@ -2532,14 +2547,66 @@ public sealed class MainForm : Form
     {
         if (_video is null || _editing is null) return;
         var s = _editing;
-        var opts = ReadOptions();
-        opts.OutputFolder = Path.Combine(Path.GetTempPath(), "shortgen_previews");
+        await _player.PauseAsync();
+        var langs = new List<string> { "original" };
+        if (s.TranslateEnglish)
+        {
+            langs = AskPreviewLanguages(s);
+            if (langs.Count == 0) return;
+        }
         await RunBusyAsync("Rendering preview", async ct =>
         {
-            var r = await _renderer.RenderAsync(_video, _transcript, s, opts, 0, ProgressReporter(), new Progress<string>(Log), ct);
-            if (r.Success) OpenPath(r.OutputPath);
-            else throw new InvalidOperationException(r.Error ?? "Preview failed.");
+            int n = 1;
+            foreach (var lang in langs)
+            {
+                var opts = ReadOptions();
+                opts.OutputFolder = Path.Combine(Path.GetTempPath(), "shortgen_previews");
+                opts.CaptionLanguage = lang;
+                opts.FileSuffix = lang == "en" ? " (EN)" : "";
+                _busyTitle = langs.Count > 1 ? $"Rendering preview {n++}/{langs.Count}" + (lang == "en" ? " (English)" : " (original)") : "Rendering preview";
+                var r = await _renderer.RenderAsync(_video, _transcript, s, opts, 0, ProgressReporter(), new Progress<string>(Log), ct);
+                if (r.Success) OpenPath(r.OutputPath);
+                else throw new InvalidOperationException(r.Error ?? "Preview failed.");
+            }
         });
+    }
+
+    /// <summary>Dev convenience: shows the Render preview language question for the short in the editor.</summary>
+    public void ShowPreviewLanguagesPreview() { var s = _editing ?? _suggestions?.Shorts.FirstOrDefault(); if (s is not null) AskPreviewLanguages(s); }
+
+    /// <summary>Asks which caption languages to render (both ticked); returns "original" and/or "en", empty when cancelled.</summary>
+    private List<string> AskPreviewLanguages(ShortSuggestion s)
+    {
+        int missing = SegmentsOf(s).Count(x => string.IsNullOrWhiteSpace(x.English));
+        using var f = new Form
+        {
+            Text = "Render preview", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
+            StartPosition = FormStartPosition.CenterParent, AutoScaleMode = AutoScaleMode.Dpi, ClientSize = new Size(400, 210), BackColor = Theme.Bg,
+        };
+        var original = new CheckBox { Text = "Original captions", Checked = true, AutoSize = true, Location = new Point(24, 58) };
+        var english = new CheckBox { Text = "English captions", Checked = true, AutoSize = true, Location = new Point(24, 88) };
+        var note = new Label
+        {
+            AutoSize = true, MaximumSize = new Size(350, 0), Location = new Point(24, 118), ForeColor = Theme.TextMuted,
+            Text = missing > 0 ? $"{missing} line(s) have no English yet and will show the original text." : "One preview video is rendered per language.",
+        };
+        var render = new FancyButton { Text = "Render", Width = 110, Height = 34, Location = new Point(270, 160) };
+        var cancel = new FancyButton { Text = "Cancel", Width = 100, Height = 34, Location = new Point(160, 160) };
+        f.Controls.Add(new Label { Text = "Which captions should the preview have?", AutoSize = true, Location = new Point(24, 20), Font = Theme.HeadingFont(10.5f), ForeColor = Theme.Heading });
+        f.Controls.AddRange(new Control[] { original, english, note, render, cancel });
+        void Sync() => render.Enabled = original.Checked || english.Checked;
+        original.CheckedChanged += (_, _) => Sync();
+        english.CheckedChanged += (_, _) => Sync();
+        render.Click += (_, _) => { f.DialogResult = DialogResult.OK; f.Close(); };
+        cancel.Click += (_, _) => { f.DialogResult = DialogResult.Cancel; f.Close(); };
+        f.AcceptButton = render; f.CancelButton = cancel;
+        Theme.Primary(render);
+        Theme.Apply(f);
+        if (f.ShowDialog(this) != DialogResult.OK) return new List<string>();
+        var langs = new List<string>();
+        if (original.Checked) langs.Add("original");
+        if (english.Checked) langs.Add("en");
+        return langs;
     }
 
     // ------------------------------------------------------------------ step 4: suggestions
