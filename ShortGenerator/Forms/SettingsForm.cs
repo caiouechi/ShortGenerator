@@ -160,7 +160,7 @@ public sealed class SettingsForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Tool download failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            AppDialog.Show(this, ex.Message, "Tool download failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {

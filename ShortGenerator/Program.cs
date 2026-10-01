@@ -11,7 +11,7 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) =>
-            MessageBox.Show(e.Exception.Message, "Unexpected error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            AppDialog.Show(e.Exception.Message, "Unexpected error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         var form = new MainForm();
         // Dev convenience: "ShortGenerator.exe --tab 3" opens on a given step (0-based).
         var args = Environment.GetCommandLineArgs();
@@ -34,6 +34,11 @@ internal static class Program
             // "--translatedialog" opens the English translation dialog for the ticked shorts (dev convenience)
             if (Array.IndexOf(args, "--translatedialog") >= 0) form.ShowTranslateDialogPreview();
             if (Array.IndexOf(args, "--previewlangs") >= 0) form.ShowPreviewLanguagesPreview();
+            // "--dialogpreview" shows the app dialog as the Publish confirmation uses it (dev convenience)
+            if (Array.IndexOf(args, "--dialogpreview") >= 0)
+                AppDialog.Confirm(form, "Publish 2 uploads?", "galiluna sends the video, its cover and its text to:", "Publish 2",
+                    details: new[] { "Guardiola apareceu no quarto de Neymar de madrugada\n      to Instagram @futebolbrasileiroclipes", "[EN] Guardiola showed up at Neymar's hotel room\n      to TikTok Al Samurai Sensei (direct)" },
+                    notes: new[] { "Posts go live right away and are visible to followers.", "Uploads run in the queue on the left; you can keep working and publish other videos meanwhile." });
             if (Array.IndexOf(args, "--settings") >= 0)
                 using (var dlg = new SettingsForm(SettingsStore.Load())) dlg.ShowDialog(form);
         };

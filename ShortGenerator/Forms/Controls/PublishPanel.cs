@@ -47,8 +47,17 @@ public sealed class PublishPanel : UserControl
     private readonly Label _listTitle = new() { Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, Padding = new Padding(4, 0, 0, 0), Text = "Tick the shorts to publish (double-click to play)" };
     private readonly FancyButton _deleteShort = new() { Text = "Delete short", Width = 120, Enabled = false, Glyph = "\uE74D" };
     private readonly FancyButton _openFolder = new() { Text = "Open folder", Width = 120, Glyph = "\uE8B7" };
-    private readonly FancyButton _cancelPublish = new() { Text = "Cancel publishing", Width = 160, Height = 36, Visible = false, Glyph = "\uE711" };
-    private CancellationTokenSource? _publishCts;
+    private readonly FancyButton _cancelPublish = new() { Text = "Cancel all", Width = 150, Height = 36, Visible = false, Glyph = "\uE711" };
+
+    // left, under the shorts: the publishing queue (what is running, waiting, done)
+    private readonly SplitContainer _leftSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
+    private readonly ListView _queue = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = true };
+    private readonly Label _queueTitle = new() { Text = "Publishing", AutoSize = true, Font = Theme.HeadingFont(10.5f), ForeColor = Theme.Heading, Margin = new Padding(0, 8, 10, 0) };
+    private readonly Label _queueCounts = new() { AutoSize = true, ForeColor = Theme.TextMuted, Margin = new Padding(0, 12, 0, 0) };
+    private readonly Label _queueEmpty = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Theme.TextMuted, BackColor = Theme.Elevated,
+        Text = "Nothing is publishing. Every upload you start shows here: waiting, uploading, live or failed." };
+    private readonly FancyButton _cancelJob = new() { Text = "Cancel selected", Width = 150, Enabled = false, Glyph = "\uE711" };
+    private readonly FancyButton _clearDone = new() { Text = "Clear finished", Width = 140, Enabled = false, Glyph = "\uE894" };
 
     // right: destinations
     private readonly Panel _right = new() { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(12, 0, 4, 8) };
@@ -85,7 +94,42 @@ public sealed class PublishPanel : UserControl
         listHost.Controls.Add(_empty);
         listHost.Controls.Add(_listTitle);
         _empty.BringToFront();
-        _split.Panel1.Controls.Add(listHost);
+
+        // queue under the shorts
+        _queue.Columns.Add("Short", 200);
+        _queue.Columns.Add("Destination", 170);
+        _queue.Columns.Add("Status", 240);
+        Theme.FillColumn(_queue, 2);
+        var queueHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 4, 6, 0) };
+        var queueHead = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, Margin = Padding.Empty, Padding = new Padding(0, 0, 0, 6) };
+        queueHead.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        queueHead.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        queueHead.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        queueHead.Controls.Add(_queueTitle, 0, 0);
+        queueHead.Controls.Add(_queueCounts, 1, 0);
+        var queueButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 0) };
+        queueButtons.Controls.Add(_cancelJob);
+        _clearDone.Margin = Padding.Empty;
+        queueButtons.Controls.Add(_clearDone);
+        queueHead.Controls.Add(queueButtons, 2, 0);
+        var queueBody = new Panel { Dock = DockStyle.Fill };
+        queueBody.Controls.Add(_queue);
+        queueBody.Controls.Add(_queueEmpty);
+        _queueEmpty.BringToFront();
+        queueHost.Controls.Add(queueBody);
+        queueHost.Controls.Add(queueHead);
+        _leftSplit.Panel1.Controls.Add(listHost);
+        _leftSplit.Panel2.Controls.Add(queueHost);
+        bool leftSet = false;
+        _leftSplit.SizeChanged += (_, _) =>
+        {
+            if (leftSet || _leftSplit.Height < 420) return;
+            leftSet = true;
+            _leftSplit.Panel1MinSize = 160;
+            _leftSplit.Panel2MinSize = 150;
+            _leftSplit.SplitterDistance = (int)(_leftSplit.Height * 0.55);
+        };
+        _split.Panel1.Controls.Add(_leftSplit);
 
         // right column: header row, selected short, cards
         // title row with the one global action, then the summary on its own full-width line
@@ -184,7 +228,24 @@ public sealed class PublishPanel : UserControl
             var dir = f is null ? null : Path.GetDirectoryName(f.Path);
             if (dir is not null && Directory.Exists(dir)) TryOpen(dir);
         };
-        _cancelPublish.Click += (_, _) => { _publishCts?.Cancel(); _cancelPublish.Enabled = false; _cancelPublish.Text = "Cancelling..."; };
+        _cancelPublish.Click += (_, _) =>
+        {
+            var open = _jobs.Where(j => j.IsOpen).ToList();
+            if (open.Count == 0) return;
+            if (!AppDialog.Confirm(this, "Cancel all publishing?", $"{open.Count} upload{(open.Count == 1 ? "" : "s")} still waiting or running will stop.", "Cancel all", "Keep publishing", danger: true,
+                    notes: new[] { "An upload galiluna already received may still be posted. Check the account." })) return;
+            foreach (var j in open) CancelJob(j);
+        };
+        _cancelJob.Click += (_, _) =>
+        {
+            foreach (var j in SelectedJobs().Where(j => j.IsOpen).ToList()) CancelJob(j);
+        };
+        _clearDone.Click += (_, _) =>
+        {
+            foreach (var j in _jobs.Where(j => !j.IsOpen).ToList()) { _jobs.Remove(j); _queue.Items.Remove(j.Row); }
+            UpdateQueue();
+        };
+        _queue.SelectedIndexChanged += (_, _) => UpdateQueue();
         _publishAll.Visible = true;
         _list.DoubleClick += (_, _) => { if (_list.SelectedItems.Count == 1 && _list.SelectedItems[0].Tag is GeneratedFile f && File.Exists(f.Path)) TryOpen(f.Path); };
     }
@@ -377,35 +438,55 @@ public sealed class PublishPanel : UserControl
         // a video still uploading cannot be deleted
         _deleteShort.Enabled = _list.SelectedItems.Count == 1 && _list.SelectedItems[0].Tag is GeneratedFile sf && !_inFlight.Any(k => k.StartsWith(sf.Path + "|", StringComparison.OrdinalIgnoreCase));
         _openFolder.Enabled = Files().Count > 0;
-        _cancelPublish.Visible = _running > 0;
-        _cancelPublish.Text = _running > 1 ? $"Cancel publishing ({_running})" : "Cancel publishing";
+        int open = _jobs.Count(j => j.IsOpen);
+        _cancelPublish.Visible = open > 0;
+        _cancelPublish.Text = open > 1 ? $"Cancel all ({open})" : "Cancel all";
         _publishAll.Text = uploads > 1 ? $"Publish to all ({uploads})" : "Publish to all";
         _summary.Text = _accounts is null ? "" : ticked == 0 ? "Tick at least one short on the left." :
             uploads == 0 ? "Tick the accounts to publish to in a card below." :
             $"{ticked} video{(ticked == 1 ? "" : "s")} ticked, {uploads} upload{(uploads == 1 ? "" : "s")} to {destinations} network{(destinations == 1 ? "" : "s")}." +
-            (_running > 0 ? $" Publishing in the background ({_running} running): you can tick another video and publish it meanwhile." : "");
+            (open > 0 ? $" {open} upload{(open == 1 ? "" : "s")} in the queue on the left: you can tick another video and publish it meanwhile." : "");
     }
 
     // ------------------------------------------------------------------ publishing
 
-    /// <summary>Uploads in flight, keyed file path | network | account, so the same video never goes twice to one account at once.</summary>
+    /// <summary>Uploads waiting or running, keyed file path | network | account, so the same video never goes twice to one account at once.</summary>
     private readonly HashSet<string> _inFlight = new();
+    /// <summary>Every upload started in this session, in the order it was queued; finished ones stay until "Clear finished".</summary>
+    private readonly List<PublishJob> _jobs = new();
+    /// <summary>Uploads that run at the same time; the rest wait their turn. galiluna holds each request for minutes.</summary>
+    private const int MaxParallel = 2;
     private int _running;
 
+    /// <summary>One video to one account: everything it sends is captured when it is queued.</summary>
+    private sealed class PublishJob
+    {
+        public required ListViewItem Item { get; init; }
+        public required GeneratedFile File { get; init; }
+        public required NetworkCard Card { get; init; }
+        public required string Account { get; init; }
+        public required GaliLunaClient.SendOptions Options { get; init; }
+        public required NetworkPost Text { get; init; }
+        public required string Key { get; init; }
+        public ListViewItem Row { get; set; } = null!;
+        public CancellationTokenSource Cts { get; } = new();
+        /// <summary>queued | running | done | failed | cancelled</summary>
+        public string State { get; set; } = "queued";
+        public bool IsOpen => State is "queued" or "running";
+    }
+
     /// <summary>
-    /// Sends the ticked videos to the ticked accounts of the given networks. Everything is captured when the button is
-    /// clicked (files, accounts, options, texts) and the upload runs in the background, so another video can be ticked
-    /// and published to other accounts while this one is still uploading.
+    /// Queues the ticked videos for the ticked accounts of the given networks. Nothing waits for the upload: the jobs
+    /// go into the queue on the left, run two at a time, and another video can be ticked and queued meanwhile.
     /// </summary>
-    private async Task PublishAsync(IReadOnlyList<NetworkCard> targets)
+    private Task PublishAsync(IReadOnlyList<NetworkCard> targets)
     {
         var client = ClientFactory();
-        if (client is null || _accounts is null || targets.Count == 0) return;
+        if (client is null || _accounts is null || targets.Count == 0) return Task.CompletedTask;
         var files = _list.Items.Cast<ListViewItem>().Where(i => i is { Checked: true }).Select(i => (Item: i, File: (GeneratedFile)i.Tag!)).ToList();
-        if (files.Count == 0) return;
+        if (files.Count == 0) return Task.CompletedTask;
 
-        // snapshot of the job: later clicks and ticks never change what this one sends
-        var jobs = new List<(ListViewItem Item, GeneratedFile File, NetworkCard Card, string Account, GaliLunaClient.SendOptions Options, NetworkPost Text, string Key)>();
+        var jobs = new List<PublishJob>();
         int skipped = 0;
         foreach (var (item, file) in files)
             foreach (var card in targets)
@@ -414,87 +495,155 @@ public sealed class PublishPanel : UserControl
                     var key = $"{file.Path}|{card.Network}|{account}";
                     if (_inFlight.Contains(key)) { skipped++; continue; }
                     var t = file.PostFor(card.Network);
-                    jobs.Add((item, file, card, account, options, new NetworkPost { Title = t.Title, Description = t.Description, Tags = t.Tags.ToList() }, key));
+                    jobs.Add(new PublishJob
+                    {
+                        Item = item, File = file, Card = card, Account = account, Options = options, Key = key,
+                        Text = new NetworkPost { Title = t.Title, Description = t.Description, Tags = t.Tags.ToList() },
+                    });
                 }
         if (jobs.Count == 0)
         {
-            MessageBox.Show(this, skipped > 0 ? "Those videos are already being sent to those accounts." : "Tick at least one account to publish to.", "Nothing to publish");
-            return;
+            AppDialog.Alert(this, "Nothing to publish", skipped > 0 ? "Those videos are already in the queue for those accounts." : "Tick at least one account to publish to.");
+            return Task.CompletedTask;
         }
-        var plan = string.Join("\n", jobs.GroupBy(j => j.File).Select(g => $"  {(g.Key.Language == "en" ? "[EN] " : "")}{g.Key.Title}  ->  {string.Join(", ", g.Select(j => j.Account))}"));
+
+        var details = jobs.GroupBy(j => j.File).Select(g =>
+            $"{(g.Key.Language == "en" ? "[EN] " : "")}{g.Key.Title}\n      to {string.Join(", ", g.Select(j => j.Card.Network == "tiktok" ? $"TikTok {j.Account} ({(j.Options.TikTokMode == "direct" ? "direct" : "drafts")})" : $"{j.Card.Title} {j.Account}"))}").ToList();
         var again = jobs.Where(j => j.File.Publications.Any(p => string.Equals(p.Network, j.Card.Network, StringComparison.OrdinalIgnoreCase)
                                                                   && string.Equals(p.Account, j.Account, StringComparison.OrdinalIgnoreCase) && p.Status is "published" or "drafted"))
                         .Select(j => $"{j.File.Title} on {j.Account}").Distinct().ToList();
-        var message = $"Publish?\n\n{plan}" + (jobs.Count > 1 ? $"\n\n{jobs.Count} uploads. They run in the background: you can keep working and publish other videos meanwhile." : "")
-            + (jobs.Any(j => j.Card.Network == "instagram") ? "\n\nInstagram posts go live immediately and are visible to followers." : "")
-            + (skipped > 0 ? $"\n\n{skipped} upload(s) already in progress are skipped." : "")
-            + (again.Count > 0 ? $"\n\nAlready posted before and will be posted AGAIN: {string.Join(", ", again)}." : "");
-        if (MessageBox.Show(this, message, "Publish with galiluna", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        var notes = new List<string>();
+        if (jobs.Any(j => j.Card.Network == "instagram" || j.Options.TikTokMode == "direct" || j.Card.Network == "youtube"))
+            notes.Add("Posts go live right away and are visible to followers.");
+        notes.Add("Uploads run in the queue on the left; you can keep working and publish other videos meanwhile.");
+        if (skipped > 0) notes.Add($"{skipped} upload{(skipped == 1 ? "" : "s")} already in the queue {(skipped == 1 ? "is" : "are")} skipped.");
+        if (again.Count > 0) notes.Add("!Already posted before, will be posted again: " + string.Join(", ", again) + ".");
+        var title = jobs.Count == 1 ? "Publish this short?" : $"Publish {jobs.Count} uploads?";
+        if (!AppDialog.Confirm(this, title, "galiluna sends the video, its cover and its text to:", jobs.Count == 1 ? "Publish" : $"Publish {jobs.Count}",
+                details: details, notes: notes)) return Task.CompletedTask;
 
-        foreach (var j in jobs) _inFlight.Add(j.Key);
-        _publishCts ??= new CancellationTokenSource();
-        var ct = _publishCts.Token;
-        _running++;
-        _cancelPublish.Enabled = true;
-        // the videos of this job are unticked right away, so the next one can be ticked and published at once
         _populating = true;
-        foreach (var (item, _) in files) item.Checked = false;
+        foreach (var (item, _) in files) item.Checked = false; // ticked again only on purpose
         _populating = false;
+        foreach (var j in jobs)
+        {
+            _inFlight.Add(j.Key);
+            j.Row = new ListViewItem(new[] { (j.File.Language == "en" ? "[EN] " : "") + j.File.Title, $"{j.Card.Title} · {j.Account}", "Waiting" }) { Tag = j, ForeColor = Theme.TextMuted };
+            _jobs.Add(j);
+            _queue.Items.Add(j.Row);
+            j.Item.SubItems[2].Text = $"{j.Card.Title} ({j.Account}): waiting in the queue";
+        }
+        Log($"Queued {jobs.Count} upload(s).");
+        Pump(client);
+        UpdateQueue();
         UpdateButtons();
-        int ok = 0;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Starts waiting jobs while fewer than <see cref="MaxParallel"/> run.</summary>
+    private void Pump(GaliLunaClient client)
+    {
+        while (_running < MaxParallel && _jobs.FirstOrDefault(j => j.State == "queued") is { } next)
+        {
+            next.State = "running";
+            _running++;
+            _ = RunJobAsync(client, next);
+        }
+    }
+
+    private void SetJob(PublishJob j, string status, Color color)
+    {
+        if (j.Row.ListView is not null) { j.Row.SubItems[2].Text = status; j.Row.ForeColor = color; }
+        if (!j.Item.ListView?.IsDisposed ?? false) j.Item.SubItems[2].Text = $"{j.Card.Title} ({j.Account}): {status}";
+        j.Card.SetOutcome($"{j.Account}: {status}", color == Theme.TextMuted ? Theme.TextMuted : color);
+    }
+
+    private async Task RunJobAsync(GaliLunaClient client, PublishJob j)
+    {
+        var ct = j.Cts.Token;
+        UpdateQueue();
         try
         {
-            foreach (var j in jobs)
+            SetJob(j, "Uploading...", Theme.Purple);
+            var progress = new Progress<double>(v => { if (j.State == "running") SetJob(j, v < 1 ? $"Uploading {(int)(v * 100)}%" : "Publishing (can take a few minutes)...", Theme.Purple); });
+            var result = await client.SendAsync(j.File.Path, j.Text.Title, j.Text.Description, j.Text.Tags, j.Options, progress, ct, j.File.CoverPath, j.File.CoverTimeSeconds);
+            // Ask again while TikTok is still working, up to ~5 minutes.
+            for (int attempt = 0; attempt < 20 && result.AnyProcessing; attempt++)
             {
-                if (ct.IsCancellationRequested) break;
-                void Show(string state) { j.Item.SubItems[2].Text = $"{j.Card.Title} ({j.Account}): {state}"; j.Card.SetOutcome($"{j.Account}: {state}", Theme.TextMuted); }
-                Show("uploading...");
-                var progress = new Progress<double>(v => Show(v < 1 ? $"uploading {(int)(v * 100)}%" : "publishing (this can take a few minutes)..."));
-                try
-                {
-                    var result = await client.SendAsync(j.File.Path, j.Text.Title, j.Text.Description, j.Text.Tags, j.Options, progress, ct, j.File.CoverPath, j.File.CoverTimeSeconds);
-                    // Ask again while TikTok is still working, up to ~5 minutes.
-                    for (int attempt = 0; attempt < 20 && result.AnyProcessing; attempt++)
-                    {
-                        Show("TikTok still working...");
-                        await Task.Delay(TimeSpan.FromSeconds(15), ct);
-                        result = await client.GetShortAsync(result.Id, ct);
-                    }
-                    Apply(j.File, j.Card.Network, j.Account, result.Id, result.Publications);
-                    bool good = result.Publications.Count > 0 && result.Publications.All(x => x.Status is "published" or "drafted");
-                    if (good) ok++;
-                    j.Card.SetOutcome(string.Join("; ", result.Publications.Select(x => $"{x.Account ?? j.Account}: {StatusText(x.Status)}{(x.Error is null ? "" : " - " + x.Error)}")), good ? Theme.Success : Theme.Warning);
-                    Log($"galiluna #{result.Id} \"{j.Text.Title}\" ({j.Card.Title}, {j.Account}): " + string.Join("; ", result.Publications.Select(x => $"{x.Account ?? x.Network} {x.Status}{(x.Error is null ? "" : " - " + x.Error)}")));
-                }
-                catch (OperationCanceledException)
-                {
-                    // Stopped before galiluna answered: if the upload had finished, galiluna may still post it.
-                    j.Card.SetOutcome($"{j.Account}: cancelled (if the upload had finished, galiluna may still have posted it; check the account)", Theme.Warning);
-                    Log($"galiluna \"{j.File.Title}\" ({j.Card.Title}, {j.Account}): cancelled by the user.");
-                }
-                catch (Exception ex)
-                {
-                    Apply(j.File, j.Card.Network, j.Account, null, new[] { new GaliLunaClient.Publication { Network = j.Card.Network, Account = j.Account, Status = "failed", Error = ex.Message } });
-                    j.Card.SetOutcome($"{j.Account}: failed - {ex.Message}", Theme.Danger);
-                    Log($"galiluna \"{j.File.Title}\" ({j.Card.Title}, {j.Account}): {ex.Message}");
-                }
-                finally
-                {
-                    _inFlight.Remove(j.Key);
-                    if (!j.Item.ListView?.IsDisposed ?? false) j.Item.SubItems[2].Text = Describe(j.File);
-                    Saved();
-                }
+                SetJob(j, "TikTok still processing...", Theme.Purple);
+                await Task.Delay(TimeSpan.FromSeconds(15), ct);
+                result = await client.GetShortAsync(result.Id, ct);
             }
-            Log($"Publishing finished: {ok}/{jobs.Count} upload(s) succeeded.");
+            Apply(j.File, j.Card.Network, j.Account, result.Id, result.Publications);
+            bool good = result.Publications.Count > 0 && result.Publications.All(x => x.Status is "published" or "drafted");
+            j.State = good ? "done" : "failed";
+            var text = string.Join("; ", result.Publications.Select(x => $"{StatusText(x.Status)}{(x.Error is null ? "" : " - " + x.Error)}"));
+            SetJob(j, good ? (text.Length > 0 ? char.ToUpper(text[0]) + text[1..] : "Done") : "Failed: " + text, good ? Theme.Success : Theme.Danger);
+            Log($"galiluna #{result.Id} \"{j.Text.Title}\" ({j.Card.Title}, {j.Account}): " + string.Join("; ", result.Publications.Select(x => $"{x.Account ?? x.Network} {x.Status}{(x.Error is null ? "" : " - " + x.Error)}")));
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopped before galiluna answered: if the upload had finished, galiluna may still post it.
+            j.State = "cancelled";
+            SetJob(j, "Cancelled (if the upload had finished it may still be posted)", Theme.Warning);
+            Log($"galiluna \"{j.File.Title}\" ({j.Card.Title}, {j.Account}): cancelled by the user.");
+        }
+        catch (Exception ex)
+        {
+            j.State = "failed";
+            Apply(j.File, j.Card.Network, j.Account, null, new[] { new GaliLunaClient.Publication { Network = j.Card.Network, Account = j.Account, Status = "failed", Error = ex.Message } });
+            SetJob(j, "Failed: " + ex.Message, Theme.Danger);
+            Log($"galiluna \"{j.File.Title}\" ({j.Card.Title}, {j.Account}): {ex.Message}");
         }
         finally
         {
-            foreach (var j in jobs) _inFlight.Remove(j.Key);
             _running--;
-            if (_running == 0) { _publishCts?.Dispose(); _publishCts = null; }
+            _inFlight.Remove(j.Key);
+            if (!j.Item.ListView?.IsDisposed ?? false) j.Item.SubItems[2].Text = Describe(j.File);
+            Saved();
+            Pump(client);
+            UpdateQueue();
             UpdateButtons();
-            if (_running == 0) ShowSelected();
+            if (_running == 0 && ReferenceEquals(_editing, j.File)) ShowSelected();
         }
+    }
+
+    private void CancelJob(PublishJob j)
+    {
+        if (j.State == "queued")
+        {
+            // never started: nothing reached galiluna
+            j.State = "cancelled";
+            _inFlight.Remove(j.Key);
+            SetJob(j, "Cancelled before it started", Theme.TextMuted);
+            if (!j.Item.ListView?.IsDisposed ?? false) j.Item.SubItems[2].Text = Describe(j.File);
+        }
+        else if (j.State == "running")
+        {
+            SetJob(j, "Cancelling...", Theme.Warning);
+            j.Cts.Cancel();
+        }
+        UpdateQueue();
+        UpdateButtons();
+    }
+
+    private IEnumerable<PublishJob> SelectedJobs() => _queue.SelectedItems.Cast<ListViewItem>().Select(i => i.Tag).OfType<PublishJob>();
+
+    /// <summary>Counts in the queue header and the queue's buttons.</summary>
+    private void UpdateQueue()
+    {
+        int running = _jobs.Count(j => j.State == "running"), waiting = _jobs.Count(j => j.State == "queued");
+        int done = _jobs.Count(j => j.State == "done"), failed = _jobs.Count(j => j.State is "failed" or "cancelled");
+        var parts = new List<string>();
+        if (running > 0) parts.Add($"{running} running");
+        if (waiting > 0) parts.Add($"{waiting} waiting");
+        if (done > 0) parts.Add($"{done} done");
+        if (failed > 0) parts.Add($"{failed} failed or cancelled");
+        _queueCounts.Text = string.Join("  ·  ", parts);
+        _queueCounts.ForeColor = running + waiting > 0 ? Theme.Purple : failed > 0 ? Theme.Danger : Theme.TextMuted;
+        _queueEmpty.Visible = _jobs.Count == 0;
+        _cancelJob.Enabled = SelectedJobs().Any(j => j.IsOpen);
+        _clearDone.Enabled = _jobs.Any(j => !j.IsOpen);
     }
 
     private static string StatusText(string status) => status switch { "published" => "live", "drafted" => "in drafts", "processing" => "working...", _ => "failed" };
@@ -573,10 +722,12 @@ public sealed class PublishPanel : UserControl
             {
                 var t = accounts.Tiktok!;
                 _mode.Items.AddRange(new object[] { "Send to my TikTok drafts (finish in the app)", "Post directly to TikTok" });
-                _mode.SelectedIndex = 0;
+                // direct posting is the default; drafts stay one click away
+                _mode.SelectedIndex = 1;
                 foreach (var level in t.PrivacyLevels) _privacy.Items.Add(level);
-                if (_privacy.Items.Count > 0) _privacy.SelectedIndex = 0;
-                _privacy.Enabled = false;
+                var pub = t.PrivacyLevels.IndexOf("PUBLIC_TO_EVERYONE");
+                if (_privacy.Items.Count > 0) _privacy.SelectedIndex = pub >= 0 ? pub : 0;
+                _privacy.Enabled = true;
                 _mode.SelectedIndexChanged += (_, _) => { _privacy.Enabled = _mode.SelectedIndex == 1; UpdateModeHint(); owner.UpdateButtons(); };
                 Add("How", _mode);
                 Add("Visibility", _privacy);

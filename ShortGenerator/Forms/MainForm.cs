@@ -1065,13 +1065,13 @@ public sealed class MainForm : Form
         {
             if (_coverPreview.Image is null) { _status.Text = "No cover to copy yet."; return; }
             try { Clipboard.SetImage(_coverPreview.Image); _status.Text = "Cover image copied. Paste it into ChatGPT together with the thumbnail prompt."; }
-            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Copy failed"); }
+            catch (Exception ex) { AppDialog.Show(this, ex.Message, "Copy failed"); }
         };
         _copyCoverPrompt.Click += (_, _) =>
         {
             if (_editing is null) return;
             try { Clipboard.SetText(ThumbnailBrief.Build(CoverBriefShort(_editing), CoverBriefLanguage, ThumbnailBrief.HumanPlaceholder)); _status.Text = "Thumbnail prompt copied. Paste it into ChatGPT with the cover image and fill in the last line."; }
-            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Copy failed"); }
+            catch (Exception ex) { AppDialog.Show(this, ex.Message, "Copy failed"); }
         };
         _generateCover.Click += async (_, _) => await GenerateCoverWithHiggsfieldAsync();
         _clearCover.Click += async (_, _) =>
@@ -1090,7 +1090,7 @@ public sealed class MainForm : Form
         _keyframeClear.Click += async (_, _) =>
         {
             if (_editing is null) return;
-            if (MessageBox.Show(this, "Remove all camera cuts and caption positions of this short?", "Clear all", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            if (!AppDialog.Confirm(this, "Clear camera and captions?", "All camera cuts and caption positions of this short are removed.", "Clear all", danger: true)) return;
             _editing.Camera.Clear(); _editing.CaptionPositions.Clear();
             await PushKeyframesAsync();
         };
@@ -1122,7 +1122,7 @@ public sealed class MainForm : Form
         _segments.DoubleClick += (_, _) => PreviewSelectedSegment();
 
         _gptBuild.Click += (_, _) => BuildChatGptPrompt();
-        _gptCopy.Click += (_, _) => { try { Clipboard.SetText(_gptPrompt.Text); _status.Text = "Prompt copied to clipboard. Paste it into ChatGPT."; } catch (Exception ex) { MessageBox.Show(this, ex.Message, "Copy failed"); } };
+        _gptCopy.Click += (_, _) => { try { Clipboard.SetText(_gptPrompt.Text); _status.Text = "Prompt copied to clipboard. Paste it into ChatGPT."; } catch (Exception ex) { AppDialog.Show(this, ex.Message, "Copy failed"); } };
         _gptSave.Click += (_, _) => SaveChatGptPrompt();
         _gptPaste.Click += (_, _) => { try { if (Clipboard.ContainsText()) _gptAnswer.Text = Clipboard.GetText(); } catch { } };
         _gptImport.Click += (_, _) => ImportChatGptAnswer();
@@ -1245,13 +1245,12 @@ public sealed class MainForm : Form
         var url = _url.Text.Trim();
         if (!VideoDownloader.LooksLikeUrl(url))
         {
-            MessageBox.Show(this, "Please paste a valid http(s) link.", "Invalid link", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            AppDialog.Show(this, "Please paste a valid http(s) link.", "Invalid link", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
         if (_tools.YtDlpPath is null)
         {
-            if (MessageBox.Show(this, "yt-dlp.exe is not installed yet. Download it now into the tools folder?", "Missing yt-dlp",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            if (!AppDialog.Confirm(this, "Download yt-dlp?", "yt-dlp downloads videos from links. It is not installed yet; it goes into the tools folder.", "Download")) return;
             await RunBusyAsync("Downloading tools", async ct => await _tools.DownloadMissingToolsAsync(new Progress<string>(Log), ct));
             if (_tools.YtDlpPath is null) return;
         }
@@ -1364,8 +1363,7 @@ public sealed class MainForm : Form
             if (thenTranscribe)
             {
                 if (_transcript is { Segments.Count: > 0 } &&
-                    MessageBox.Show(this, "This video already has a transcript. Transcribe it again?", "Transcript exists",
-                        MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                    !AppDialog.Confirm(this, "Transcribe again?", "This video already has a transcript. Transcribing again replaces it.", "Transcribe again", "Keep transcript"))
                 {
                     _tabs.SelectedTab = _tabTranscript;
                     return;
@@ -1383,10 +1381,10 @@ public sealed class MainForm : Form
         if (_library.SelectedItems.Count == 0 || _library.SelectedItems[0].Tag is not string path) return;
         var name = Path.GetFileNameWithoutExtension(path);
         var generated = TryLoadProject(path, out var project) ? project.Generated?.Where(g => File.Exists(g.Path)).ToList() ?? new() : new();
-        var msg = $"Delete \"{name}\"?\n\nThis removes the video, its transcript and project data" +
-                  (generated.Count > 0 ? $", and the {generated.Count} generated short{(generated.Count == 1 ? "" : "s")} made from it." : ".") +
-                  "\n\nThis cannot be undone.";
-        if (MessageBox.Show(this, msg, "Delete video", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+        var removes = new List<string> { "The video file", "Its transcript and project data" };
+        if (generated.Count > 0) removes.Add($"{generated.Count} generated short{(generated.Count == 1 ? "" : "s")} made from it, with covers");
+        if (!AppDialog.Confirm(this, "Delete this video?", $"\"{name}\" will be removed from this computer:", "Delete video", danger: true,
+                details: removes, notes: new[] { "This cannot be undone." })) return;
 
         bool current = _video is not null && string.Equals(_video.FilePath, path, StringComparison.OrdinalIgnoreCase);
         if (current) { _ = _player.PauseAsync(); ClearVideo(); }
@@ -1408,9 +1406,9 @@ public sealed class MainForm : Form
         var name = Path.GetFileNameWithoutExtension(_video.FilePath);
         var dir = Path.GetDirectoryName(_video.FilePath)!;
         var companions = new[] { ".srt", ".vtt", ".txt" }.Select(ext => Path.Combine(dir, name + ext)).Where(File.Exists).ToList();
-        var msg = "Delete the transcript of this video?" + (companions.Count > 0 ? $"\n\nThe transcript file{(companions.Count == 1 ? "" : "s")} next to the video ({string.Join(", ", companions.Select(Path.GetFileName))}) will be deleted too." : "") +
-                  "\n\nSuggestions and shorts already made stay as they are.";
-        if (MessageBox.Show(this, msg, "Delete transcript", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+        if (!AppDialog.Confirm(this, "Delete the transcript?", "The transcript of this video is forgotten. Suggestions and shorts already made stay as they are.",
+                "Delete transcript", danger: true,
+                details: companions.Count > 0 ? companions.Select(f => "Also deletes " + Path.GetFileName(f)).ToList() : null)) return;
         foreach (var f in companions) TryDelete(f);
         _transcript = null;
         ShowTranscript();
@@ -1435,10 +1433,11 @@ public sealed class MainForm : Form
     private bool DeleteGenerated(GeneratedFile file)
     {
         var published = file.Publications.Any(p => p.Status is "published" or "drafted");
-        var msg = $"Delete the short \"{file.Title}\" and its cover image?" +
-                  (published ? "\n\nIt was already published: the post stays online on the networks, only the local file and its record are removed." : "") +
-                  "\n\nThis cannot be undone.";
-        if (MessageBox.Show(this, msg, "Delete short", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return false;
+        var notes = new List<string>();
+        if (published) notes.Add("It was already published: the posts stay online, only the local file and its record are removed.");
+        notes.Add("This cannot be undone.");
+        if (!AppDialog.Confirm(this, "Delete this short?", $"\"{file.Title}\" and its cover image will be deleted from this computer.", "Delete short",
+                danger: true, notes: notes)) return false;
         TryDelete(file.Path);
         TryDelete(file.CoverPath);
         _generated.Remove(file);
@@ -1576,7 +1575,7 @@ public sealed class MainForm : Form
                 await DownloadAsync(thenTranscribe: true);
                 return;
             }
-            MessageBox.Show(this,
+            AppDialog.Show(this,
                 "Load a video first: paste a link and click 'Download + Transcribe', pick one from the downloaded videos list, or open a local file.",
                 "No video", MessageBoxButtons.OK, MessageBoxIcon.Information);
             _tabs.SelectedTab = _tabVideo;
@@ -1649,7 +1648,7 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Could not load transcript", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            AppDialog.Show(this, ex.Message, "Could not load transcript", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 
@@ -1720,7 +1719,7 @@ public sealed class MainForm : Form
     {
         if (_video is null || _transcript is not { Segments.Count: > 0 })
         {
-            MessageBox.Show(this, "Transcribe the video first. The prompt includes the timestamped transcript.", "No transcript", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            AppDialog.Show(this, "Transcribe the video first. The prompt includes the timestamped transcript.", "No transcript", MessageBoxButtons.OK, MessageBoxIcon.Information);
             _tabs.SelectedTab = _tabTranscript;
             return;
         }
@@ -1747,7 +1746,7 @@ public sealed class MainForm : Form
 
     private void ImportChatGptAnswer()
     {
-        if (_video is null) { MessageBox.Show(this, "Load a video first.", "No video"); return; }
+        if (_video is null) { AppDialog.Show(this, "Load a video first.", "No video"); return; }
         SuggestionResponse parsed;
         try
         {
@@ -1755,7 +1754,7 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, "Could not read the answer: " + ex.Message, "Import failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            AppDialog.Show(this, "Could not read the answer: " + ex.Message, "Import failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -1930,7 +1929,7 @@ public sealed class MainForm : Form
         using var client = HiggsfieldClient.FromEnvironment();
         if (client is null)
         {
-            MessageBox.Show(this, "Set HF_API_KEY (and HF_API_SECRET if your key has one) in the environment, then restart the app.", "Higgsfield");
+            AppDialog.Show(this, "Set HF_API_KEY (and HF_API_SECRET if your key has one) in the environment, then restart the app.", "Higgsfield");
             return;
         }
         var s = _editing;
@@ -2143,7 +2142,7 @@ public sealed class MainForm : Form
             img.Save(path, System.Drawing.Imaging.ImageFormat.Png);
             await AddLayersAsync(new[] { path }, CurrentClipTime());
         }
-        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Paste image"); }
+        catch (Exception ex) { AppDialog.Show(this, ex.Message, "Paste image"); }
     }
 
     private async Task RemoveLayerAsync()
@@ -2326,13 +2325,12 @@ public sealed class MainForm : Form
         if (_video is null || _editing is null) return;
         if (!FaceFramer.IsSupported)
         {
-            if (!silent) MessageBox.Show(this, "Face detection is not available on this Windows build. Use Camera mode to place the camera manually.", "Auto camera");
+            if (!silent) AppDialog.Show(this, "Face detection is not available on this Windows build. Use Camera mode to place the camera manually.", "Auto camera");
             return;
         }
         var s = _editing;
         if (!silent && s.Camera.Any(k => k.Source is "manual" or "alt") &&
-            MessageBox.Show(this, "This short has camera cuts you changed. Replace them with automatic face framing?", "Auto camera",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            !AppDialog.Confirm(this, "Replace your camera cuts?", "This short has camera cuts you changed. Automatic face framing replaces them.", "Use auto camera", "Keep mine")) return;
 
         await RunBusyAsync("Detecting faces", async ct =>
         {
@@ -2354,7 +2352,7 @@ public sealed class MainForm : Form
         var s = _editing;
         if (!_faces.TryGetValue(s, out var analysis))
         {
-            if (!FaceFramer.IsSupported) { MessageBox.Show(this, "Face detection is not available on this Windows build. Use Camera mode to drag the camera instead.", "Change camera"); return; }
+            if (!FaceFramer.IsSupported) { AppDialog.Show(this, "Face detection is not available on this Windows build. Use Camera mode to drag the camera instead.", "Change camera"); return; }
             await RunBusyAsync("Detecting faces", async ct =>
             {
                 _faces[s] = await new FaceFramer(_ffmpeg).AnalyzeAsync(_video, s, ProgressReporter(), new Progress<string>(Log), ct);
@@ -2578,8 +2576,7 @@ public sealed class MainForm : Form
     private void DeleteSegmentRow()
     {
         if (_transcript is null || _editSegments.CurrentRow?.Tag is not TranscriptSegment seg) return;
-        if (MessageBox.Show(this, "Remove this line from the transcript? It will not appear in captions.", "Delete line",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        if (!AppDialog.Confirm(this, "Delete this line?", "It is removed from the transcript and will not appear in captions.", "Delete line", danger: true)) return;
         _transcript.Segments.Remove(seg);
         if (_editing is not null) FillSegmentGrid(_editing);
         ShowTranscript();
@@ -2657,7 +2654,7 @@ public sealed class MainForm : Form
         var apiKey = SettingsStore.GetApiKey(_settings);
         if (apiKey is null)
         {
-            MessageBox.Show(this, "Add your Anthropic API key in Settings first.", "API key required", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            AppDialog.Show(this, "Add your Anthropic API key in Settings first.", "API key required", MessageBoxButtons.OK, MessageBoxIcon.Information);
             OpenSettings();
             return;
         }
@@ -2870,7 +2867,7 @@ public sealed class MainForm : Form
         var options = ReadOptions();
         if (options.AddCaptions && _transcript is null)
         {
-            MessageBox.Show(this, "Captions need a transcript. Transcribe first or untick 'Burn captions'.", "No transcript");
+            AppDialog.Show(this, "Captions need a transcript. Transcribe first or untick 'Burn captions'.", "No transcript");
             return;
         }
 
@@ -2972,7 +2969,7 @@ public sealed class MainForm : Form
 
     private async Task RunBusyAsync(string title, Func<CancellationToken, Task> work)
     {
-        if (_cts is not null) { MessageBox.Show(this, "Another operation is running. Cancel it first.", "Busy"); return; }
+        if (_cts is not null) { AppDialog.Show(this, "Another operation is running. Cancel it first.", "Busy"); return; }
         _cts = new CancellationTokenSource();
         SetBusy(true, title);
         try
@@ -2989,7 +2986,7 @@ public sealed class MainForm : Form
         {
             Log($"ERROR: {ex.Message}");
             _status.Text = title + " - failed";
-            MessageBox.Show(this, ex.Message, title + " failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            AppDialog.Show(this, ex.Message, title + " failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {

@@ -55,7 +55,7 @@ public sealed class ClipTimesDialog : Form
         {
             if (_end.Value <= _start.Value + 1)
             {
-                MessageBox.Show(this, "End must be at least 1 second after start.", "Invalid times");
+                AppDialog.Show(this, "End must be at least 1 second after start.", "Invalid times");
                 DialogResult = DialogResult.None;
                 return;
             }
