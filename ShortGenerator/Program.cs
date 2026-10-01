@@ -31,6 +31,8 @@ internal static class Program
                 using (var dlg = new GaliLunaSignInForm(SettingsStore.Load())) dlg.ShowDialog(form);
             // "--hfdialog" opens the Higgsfield cover dialog for the current short (dev convenience for checking the layout)
             if (Array.IndexOf(args, "--hfdialog") >= 0) form.ShowHiggsfieldDialogPreview();
+            // "--translatedialog" opens the English translation dialog for the ticked shorts (dev convenience)
+            if (Array.IndexOf(args, "--translatedialog") >= 0) form.ShowTranslateDialogPreview();
             if (Array.IndexOf(args, "--settings") >= 0)
                 using (var dlg = new SettingsForm(SettingsStore.Load())) dlg.ShowDialog(form);
         };

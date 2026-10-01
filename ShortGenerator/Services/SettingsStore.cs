@@ -12,6 +12,8 @@ public sealed class AppSettings
     public string ClaudeModel { get; set; } = "claude-opus-5";
     public string WhisperModel { get; set; } = "Base";
     public string WhisperLanguage { get; set; } = "auto";
+    /// <summary>Generate shorts: "original", "en" or "both".</summary>
+    public string CaptionLanguage { get; set; } = "both";
     public bool DetectReactions { get; set; } = true;
     /// <summary>Networks the AI writes post text for (title / description / keywords per platform).</summary>
     public bool PostTextYouTube { get; set; } = true;

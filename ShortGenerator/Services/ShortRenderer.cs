@@ -17,7 +17,7 @@ public sealed class ShortRenderer
         var result = new ShortResult { Suggestion = s };
         Directory.CreateDirectory(options.OutputFolder);
 
-        var baseName = $"{index:00} - {SafeFileName(s.Title)}";
+        var baseName = $"{index:00} - {SafeFileName(s.Title)}{options.FileSuffix}";
         var outPath = Path.Combine(options.OutputFolder, baseName + ".mp4");
         int n = 1;
         while (File.Exists(outPath)) outPath = Path.Combine(options.OutputFolder, $"{baseName} ({n++}).mp4");
@@ -63,7 +63,7 @@ public sealed class ShortRenderer
             if (hasCaptions)
             {
                 var style = CaptionStyle.Get(options.CaptionStyleId);
-                var slice = transcript!.Slice(s.StartSeconds, s.EndSeconds);
+                var slice = transcript!.Slice(s.StartSeconds, s.EndSeconds, english: options.CaptionLanguage == "en");
                 s.MigrateLegacyCaptionPosition();
                 var ass = CaptionBuilder.BuildAss(slice, style, options.WordsPerCaption, options.FontSize, outW, outH,
                     options.BurnTitleHook ? s.Hook : null, options.IncludeReactions, s.CaptionPositions);

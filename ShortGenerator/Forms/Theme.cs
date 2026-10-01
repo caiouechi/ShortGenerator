@@ -330,6 +330,25 @@ public static class Theme
         using (var bg = new SolidBrush(rowBg)) e.Graphics.FillRectangle(bg, e.Bounds);
 
         int textX = e.Bounds.X + 6;
+        // extra checkbox columns: the sub item text is "\u2611" (ticked) or "\u2610" (not ticked)
+        if (e.ColumnIndex > 0 && e.SubItem.Text is "\u2611" or "\u2610")
+        {
+            var cb = new Rectangle(e.Bounds.X + 8, e.Bounds.Y + (e.Bounds.Height - 14) / 2, 14, 14);
+            using var cpath = FancyButton.Rounded(cb, 3);
+            if (e.SubItem.Text == "\u2611")
+            {
+                using var fill = new LinearGradientBrush(cb, CosmicBlue, Nebula, 45f);
+                e.Graphics.FillPath(fill, cpath);
+                using var cf = IconFont(8f);
+                TextRenderer.DrawText(e.Graphics, "\uE73E", cf, cb, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            }
+            else
+            {
+                using var pen = new Pen(BorderHover);
+                e.Graphics.DrawPath(pen, cpath);
+            }
+            return;
+        }
         if (e.ColumnIndex == 0 && lv.CheckBoxes)
         {
             var box = new Rectangle(e.Bounds.X + 6, e.Bounds.Y + (e.Bounds.Height - 14) / 2, 14, 14);

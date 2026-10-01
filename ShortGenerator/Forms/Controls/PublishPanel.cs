@@ -190,7 +190,7 @@ public sealed class PublishPanel : UserControl
         _list.Items.Clear();
         foreach (var f in Files())
         {
-            var item = new ListViewItem(new[] { f.Title, File.Exists(f.Path) ? f.When.ToString("MMM d HH:mm") : "file missing", Describe(f) }) { Tag = f };
+            var item = new ListViewItem(new[] { (f.Language == "en" ? "[EN] " : "") + f.Title, File.Exists(f.Path) ? f.When.ToString("MMM d HH:mm") : "file missing", Describe(f) }) { Tag = f };
             item.Checked = !f.Sent && File.Exists(f.Path);
             if (!File.Exists(f.Path)) item.ForeColor = Color.Gray;
             _list.Items.Add(item);

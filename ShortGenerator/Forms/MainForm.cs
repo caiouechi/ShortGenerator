@@ -84,6 +84,10 @@ public sealed class MainForm : Form
     private readonly ComboBox _layerStyle = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
     private readonly ComboBox _layerAnim = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
     private readonly ContextMenuStrip _segMenu = new();
+    // English: caption language in the editor and on Generate shorts
+    private readonly ComboBox _editLang = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 };
+    private readonly FancyButton _retranslate = new() { Text = "Translate again", Width = 140, Visible = false, Glyph = "\uF2B7" };
+    private readonly ComboBox _captionLang = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
     private bool _loadingLayer;
     // face analysis per short, kept for the session so "Change camera" can offer other framings instantly
     private readonly Dictionary<ShortSuggestion, FaceFramer.Analysis> _faces = new(ReferenceEqualityComparer.Instance);
@@ -498,7 +502,6 @@ public sealed class MainForm : Form
         bar.Controls.Add(_gptMin);
         bar.Controls.Add(new Label { Text = "to", AutoSize = true, Margin = new Padding(4, 7, 4, 0) });
         bar.Controls.Add(_gptMax);
-        bar.Controls.Add(new Label { Text = "Post text for:", AutoSize = true, Margin = new Padding(18, 7, 4, 0) });
         bar.Controls.Add(PostTargetBoxes());
 
         var help = new Label
@@ -560,7 +563,6 @@ public sealed class MainForm : Form
         bar.Controls.Add(_minSec);
         bar.Controls.Add(new Label { Text = "to", AutoSize = true, Margin = new Padding(4, 7, 4, 0) });
         bar.Controls.Add(_maxSec);
-        bar.Controls.Add(new Label { Text = "Post text for:", AutoSize = true, Margin = new Padding(18, 7, 4, 0) });
         bar.Controls.Add(PostTargetBoxes());
         bar.Controls.Add(new Label { Text = "", Width = 20 });
         bar.Controls.Add(_previewClip);
@@ -576,6 +578,7 @@ public sealed class MainForm : Form
         _suggestList.Columns.Add("Length", 60);
         _suggestList.Columns.Add("Viral score", 95);
         _suggestList.Columns.Add("Emotion", 110);
+        _suggestList.Columns.Add("English", 64);
         Theme.FillColumn(_suggestList, 2);
 
         var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
@@ -697,11 +700,19 @@ public sealed class MainForm : Form
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "Start", HeaderText = "Start", ReadOnly = true, FillWeight = 18 });
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "End", HeaderText = "End", ReadOnly = true, FillWeight = 18 });
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "Text", HeaderText = "Text (editable)", FillWeight = 64 });
+        _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "English", HeaderText = "English (editable)", FillWeight = 64, Visible = false });
+        _editSegments.Columns["English"]!.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
         _editSegments.Columns["Text"]!.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
         _editSegments.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells;
-        var segBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(0, 10, 0, 0), FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
+        var segBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(0, 10, 0, 0), FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
         segBar.Controls.Add(_segPlay);
         segBar.Controls.Add(_segDelete);
+        _editLang.Items.AddRange(new object[] { "Original", "English" });
+        _editLang.SelectedIndex = 0;
+        segBar.Controls.Add(new Label { Text = "Captions:", AutoSize = true, Margin = new Padding(12, 9, 4, 0), ForeColor = Theme.TextSecondary });
+        _editLang.Margin = new Padding(0, 5, 8, 0);
+        segBar.Controls.Add(_editLang);
+        segBar.Controls.Add(_retranslate);
         right.Controls.Add(_editSegments);
         right.Controls.Add(segBar);
         right.Controls.Add(new Label { Text = "Transcript of this short", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, UseMnemonic = false });
@@ -848,6 +859,9 @@ public sealed class MainForm : Form
         Add("Look", _look);
         Add("", _lookDesc);
         Add("", _addCaptions);
+        _captionLang.Items.AddRange(new object[] { "Original language", "English", "Both (two files per short)" });
+        _captionLang.SelectedIndex = _settings.CaptionLanguage switch { "en" => 1, "both" => 2, _ => 0 };
+        Add("Captions in", _captionLang);
         Add("Caption style", _style);
         Add("", _styleDesc);
         Add("Words per caption", _wordsPerCaption);
@@ -866,7 +880,7 @@ public sealed class MainForm : Form
         _queue.Columns.Add("#", 26);
         _queue.Columns.Add("Title", 200);
         _queue.Columns.Add("Range", 112);
-        _queue.Columns.Add("Status", 78);
+        _queue.Columns.Add("Status", 130);
         // the title takes whatever width is left, so the range and status stay visible without scrolling
         Theme.FillColumn(_queue, 2);
         var queueHost = new Panel { Dock = DockStyle.Fill };
@@ -942,7 +956,7 @@ public sealed class MainForm : Form
         _player.Status += s => Log("Player: " + s);
         _player.CaptionMoved += (x, y, t) => BeginInvoke(() => OnCaptionMoved(x, y, t));
         _player.CameraMoved += (x, y, z, t) => BeginInvoke(() => OnCameraMoved(x, y, z, t));
-        _player.EditRequested += t => BeginInvoke(async () => { if (SegmentAt(t) is { } seg) await _player.BeginEditAsync(seg.Text); });
+        _player.EditRequested += t => BeginInvoke(async () => { if (SegmentAt(t) is { } seg) await _player.BeginEditAsync(EnglishMode ? seg.English ?? seg.Text : seg.Text); });
         _player.TextEdited += (t, text) => BeginInvoke(() => OnCaptionTextEdited(t, text));
         _player.LineRequested += t => BeginInvoke(() => EditLineInGrid(t));
         _player.LayerSelected += id => BeginInvoke(() => SelectLayerRow(id));
@@ -1050,7 +1064,7 @@ public sealed class MainForm : Form
         _clipStart.ValueChanged += async (_, _) => await ApplyClipTimesAsync();
         _clipEnd.ValueChanged += async (_, _) => await ApplyClipTimesAsync();
         _renderPreview.Click += async (_, _) => await RenderEditorPreviewAsync();
-        _editSegments.CellEndEdit += (_, e) => OnSegmentEdited(e.RowIndex);
+        _editSegments.CellEndEdit += (_, e) => OnSegmentEdited(e.RowIndex, e.ColumnIndex);
         _editSegments.CellDoubleClick += async (_, e) => { if (e.RowIndex >= 0 && e.ColumnIndex != 2) await PlayFromRowAsync(e.RowIndex); };
         // one click on a transcript line jumps the player there (double-click plays from it)
         _editSegments.CellClick += async (_, e) =>
@@ -1089,6 +1103,18 @@ public sealed class MainForm : Form
             UpdateGenerateEnabled();
         };
         _suggestList.DoubleClick += (_, _) => EditSelectedClip();
+        // one click on the English cell ticks / unticks the English version of that short
+        _suggestList.MouseClick += (_, e) =>
+        {
+            var hit = _suggestList.HitTest(e.Location);
+            if (hit.Item?.Tag is not ShortSuggestion s || hit.SubItem is null) return;
+            if (hit.Item.SubItems.IndexOf(hit.SubItem) != _suggestList.Columns.Count - 1) return;
+            s.TranslateEnglish = !s.TranslateEnglish;
+            hit.SubItem.Text = s.TranslateEnglish ? "\u2611" : "\u2610";
+            _suggestList.Invalidate(hit.SubItem.Bounds);
+            SaveProject();
+            UpdateGenerateEnabled();
+        };
         _editClip.Click += (_, _) => EditSelectedClip();
         _addClip.Click += (_, _) => AddCustomClip();
         _removeClip.Click += (_, _) => RemoveSelectedClip();
@@ -1101,7 +1127,15 @@ public sealed class MainForm : Form
         _includeReactions.CheckedChanged += (_, _) => RefreshPreview();
         _crop.SelectedIndexChanged += (_, _) => RefreshPreview();
         _generate.Click += async (_, _) => await GenerateAsync();
-        _continueToGenerate.Click += (_, _) => SelectTab(4);
+        _continueToGenerate.Click += (_, _) => { if (EnsureEnglish(TickedShorts().Where(s => s.TranslateEnglish).ToList(), force: false)) SelectTab(4); };
+        _editLang.SelectedIndexChanged += async (_, _) => await OnEditLanguageChangedAsync();
+        _retranslate.Click += async (_, _) => await RetranslateEditingAsync();
+        _captionLang.SelectedIndexChanged += (_, _) =>
+        {
+            _settings.CaptionLanguage = _captionLang.SelectedIndex switch { 1 => "en", 2 => "both", _ => "original" };
+            try { SettingsStore.Save(_settings); } catch { }
+            RefreshQueue();
+        };
         _backToSuggestions.Click += (_, _) => SelectTab(3);
         _queue.ItemChecked += (_, e) =>
         {
@@ -1602,6 +1636,8 @@ public sealed class MainForm : Form
     private FlowLayoutPanel PostTargetBoxes()
     {
         var panel = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty, Padding = Padding.Empty };
+        // the label travels with its checkboxes, so a wrapping toolbar never separates them
+        panel.Controls.Add(new Label { Text = "Post text for:", AutoSize = true, Margin = new Padding(18, 7, 4, 0) });
         foreach (var (key, label, checkedNow) in new[]
         {
             ("youtube", "YouTube", _settings.PostTextYouTube),
@@ -2095,7 +2131,7 @@ public sealed class MainForm : Form
             _editSegments.ClearSelection();
             row.Selected = true;
             _editSegments.FirstDisplayedScrollingRowIndex = Math.Max(0, row.Index - 2);
-            _editSegments.CurrentCell = row.Cells["Text"];
+            _editSegments.CurrentCell = row.Cells[EnglishMode ? "English" : "Text"];
             _editSegments.Focus();
             _editSegments.BeginEdit(false); // caret at the end, nothing selected, so typing does not wipe the line
             break;
@@ -2106,7 +2142,19 @@ public sealed class MainForm : Form
     private void OnCaptionTextEdited(double t, string text)
     {
         var seg = SegmentAt(t);
-        if (seg is null || string.IsNullOrWhiteSpace(text) || text == seg.Text) return;
+        if (seg is null || string.IsNullOrWhiteSpace(text)) return;
+        if (EnglishMode)
+        {
+            if (text == seg.English) return;
+            seg.English = text; seg.EnglishFrom = seg.Text;
+            foreach (DataGridViewRow row in _editSegments.Rows)
+                if (ReferenceEquals(row.Tag, seg)) { row.Cells["English"].Value = text; MarkEnglishCell(row); }
+            SaveProject();
+            _ = PushCaptionsAsync();
+            Log("English caption line updated from the video.");
+            return;
+        }
+        if (text == seg.Text) return;
         seg.Text = text;
         foreach (DataGridViewRow row in _editSegments.Rows)
             if (ReferenceEquals(row.Tag, seg)) row.Cells["Text"].Value = text;
@@ -2265,8 +2313,9 @@ public sealed class MainForm : Form
         _editSegments.Rows.Clear();
         foreach (var seg in SegmentsOf(s))
         {
-            int row = _editSegments.Rows.Add(Fmt(seg.Start), Fmt(seg.End), seg.Text);
+            int row = _editSegments.Rows.Add(Fmt(seg.Start), Fmt(seg.End), seg.Text, seg.English ?? "");
             _editSegments.Rows[row].Tag = seg;
+            MarkEnglishCell(_editSegments.Rows[row]);
         }
     }
 
@@ -2274,7 +2323,7 @@ public sealed class MainForm : Form
     {
         if (_editing is null || !_player.IsReady) return;
         var opts = ReadOptions();
-        var slice = _transcript?.Slice(_editing.StartSeconds, _editing.EndSeconds) ?? new List<TranscriptSegment>();
+        var slice = _transcript?.Slice(_editing.StartSeconds, _editing.EndSeconds, english: EnglishMode) ?? new List<TranscriptSegment>();
         await _player.SetCaptionsAsync(slice, _editing.StartSeconds, CaptionStyle.Get(opts.CaptionStyleId), opts.FontSize, opts.WordsPerCaption,
             opts.CropMode, opts.AddCaptions, opts.IncludeReactions);
     }
@@ -2337,16 +2386,98 @@ public sealed class MainForm : Form
         }
     }
 
-    private void OnSegmentEdited(int rowIndex)
+    private void OnSegmentEdited(int rowIndex, int columnIndex = -1)
     {
         if (rowIndex < 0 || _editSegments.Rows[rowIndex].Tag is not TranscriptSegment seg) return;
-        var newText = (_editSegments.Rows[rowIndex].Cells["Text"].Value?.ToString() ?? "").Trim();
+        var row = _editSegments.Rows[rowIndex];
+        if (columnIndex >= 0 && _editSegments.Columns[columnIndex].Name == "English")
+        {
+            var en = (row.Cells["English"].Value?.ToString() ?? "").Trim();
+            if (en == (seg.English ?? "")) return;
+            seg.English = en.Length > 0 ? en : null;
+            seg.EnglishFrom = seg.Text; // a hand-written English line matches the current original
+            MarkEnglishCell(row);
+            SaveProject();
+            _ = PushCaptionsAsync();
+            Log("English line updated.");
+            return;
+        }
+        var newText = (row.Cells["Text"].Value?.ToString() ?? "").Trim();
         if (newText == seg.Text) return;
         seg.Text = newText;
+        MarkEnglishCell(row);  // the English line may now be out of date
         ShowTranscript();      // keep the Transcript tab in sync
         SaveProject();
         _ = PushCaptionsAsync();
         Log("Transcript line updated.");
+    }
+
+    /// <summary>English cells whose original changed after translating are tinted, with a tip to translate again.</summary>
+    private void MarkEnglishCell(DataGridViewRow row)
+    {
+        if (row.Tag is not TranscriptSegment seg) return;
+        var cell = row.Cells["English"];
+        cell.Style.BackColor = seg.EnglishOutdated ? ColorTranslator.FromHtml("#FFF4E0") : Color.Empty;
+        cell.ToolTipText = seg.EnglishOutdated ? "The original line changed after it was translated. Use 'Translate again' or edit this line." :
+                           string.IsNullOrWhiteSpace(seg.English) ? "No English yet: the original line is used." : "";
+    }
+
+    private bool EnglishMode => _editLang.SelectedIndex == 1;
+
+    private async Task OnEditLanguageChangedAsync()
+    {
+        _editSegments.Columns["English"]!.Visible = EnglishMode;
+        _retranslate.Visible = EnglishMode;
+        await PushCaptionsAsync();
+        if (EnglishMode && _editing is not null && _transcript is not null && SegmentsOf(_editing).All(s => string.IsNullOrWhiteSpace(s.English)))
+            _status.Text = "This short has no English yet: click 'Translate again', or tick English in Suggestions and continue.";
+    }
+
+    /// <summary>Translates the lines of the short in the editor that are missing or out of date (all lines when everything is current).</summary>
+    private async Task RetranslateEditingAsync()
+    {
+        if (_editing is null || _transcript is null) return;
+        bool anyStale = SegmentsOf(_editing).Any(x => x.EnglishIsStale);
+        if (!anyStale && MessageBox.Show(this, "Every English line of this short is up to date. Translate all of them again?", "Translate again",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        if (EnsureEnglish(new[] { _editing }, force: !anyStale)) { FillSegmentGrid(_editing); await PushCaptionsAsync(); }
+    }
+
+    /// <summary>Dev convenience: shows the translation dialog for the ticked shorts without applying anything.</summary>
+    public void ShowTranslateDialogPreview()
+    {
+        if (_transcript is null) return;
+        var shorts = TickedShorts().Where(s => s.TranslateEnglish).ToList();
+        var job = CaptionTranslator.Plan(shorts, _transcript, ThumbnailLanguage, forceLines: true);
+        using var dlg = new TranslateDialog(job, shorts.Count, null);
+        dlg.ShowDialog(this);
+    }
+
+    private List<ShortSuggestion> TickedShorts() => _suggestions?.Shorts.Where(s => s.Selected).ToList() ?? new List<ShortSuggestion>();
+
+    /// <summary>
+    /// Makes sure the given shorts have English captions and post text, translating only what is missing or out of
+    /// date. Returns false only when the user cancels (Skip continues without English).
+    /// </summary>
+    private bool EnsureEnglish(IReadOnlyList<ShortSuggestion> shorts, bool force)
+    {
+        if (_transcript is null || shorts.Count == 0) return true;
+        var job = CaptionTranslator.Plan(shorts, _transcript, ThumbnailLanguage, force);
+        if (job.IsEmpty) return true;
+        var key = SettingsStore.GetApiKey(_settings);
+        Func<CancellationToken, Task<string>>? claude = key is null ? null : ct => CaptionTranslator.TranslateWithClaudeAsync(key, _settings.ClaudeModel, job, ct);
+        using var dlg = new TranslateDialog(job, shorts.Count, claude);
+        var result = dlg.ShowDialog(this);
+        if (result == DialogResult.Cancel) return false;
+        if (result == DialogResult.OK)
+        {
+            SaveProject();
+            var (lines, posts, missing) = dlg.Applied;
+            Log($"English: {lines} caption line(s) and {posts} post text(s) translated" + (missing > 0 ? $"; {missing} line(s) missing in the answer keep the original text." : "."));
+            if (_editing is not null) FillSegmentGrid(_editing);
+        }
+        else Log("English skipped for now; those shorts render with the original captions until translated.");
+        return true;
     }
 
     private void DeleteSegmentRow()
@@ -2420,7 +2551,7 @@ public sealed class MainForm : Form
             foreach (var s in _suggestions.Shorts)
             {
                 var item = new ListViewItem(new[] { "", (i++).ToString(), s.Title, Fmt(s.StartSeconds), Fmt(s.EndSeconds), $"{s.Duration:F0}s",
-                    s.ViralityScore > 0 ? $"{s.ViralityScore}/10" : "-", s.Emotion })
+                    s.ViralityScore > 0 ? $"{s.ViralityScore}/10" : "-", s.Emotion, s.TranslateEnglish ? "\u2611" : "\u2610" })
                 { Tag = s, Checked = s.Selected };
                 _suggestList.Items.Add(item);
             }
@@ -2578,8 +2709,10 @@ public sealed class MainForm : Form
             int i = 1;
             foreach (var s in _suggestions.Shorts)
             {
-                var file = _generated.LastOrDefault(g => g.Title == s.Title && File.Exists(g.Path));
+                var file = _generated.LastOrDefault(g => (g.ShortTitle ?? g.Title) == s.Title && g.Language is null && File.Exists(g.Path));
                 string status = file is null ? (s.Selected ? "queued" : "") : file.Sent ? "published" : "rendered";
+                if (s.Selected && _settings.CaptionLanguage != "original" && s.TranslateEnglish && _transcript is not null)
+                    status += SegmentsOf(s).Any(x => x.EnglishIsStale) || s.English is null ? " · EN to do" : " · EN ready";
                 var item = new ListViewItem(new[] { "", (i++).ToString(), s.Title, $"{Fmt(s.StartSeconds)} - {Fmt(s.EndSeconds)}  ({s.Duration:F0}s)", status })
                 { Tag = s, Checked = s.Selected };
                 if (!s.Selected) item.ForeColor = Theme.TextMuted;
@@ -2610,15 +2743,33 @@ public sealed class MainForm : Form
         await RunBusyAsync("Generating shorts", async ct =>
         {
             int i = 1, ok = 0;
+            var mode = _settings.CaptionLanguage;
             foreach (var s in selected)
             {
                 ct.ThrowIfCancellationRequested();
-                _busyTitle = $"Generating {i}/{selected.Count}: {s.Title}";
+                // the languages this short is rendered in: English only when it was ticked for English
+                var langs = new List<string>();
+                if (mode != "en" || !s.TranslateEnglish) langs.Add("original");
+                if (mode != "original" && s.TranslateEnglish) langs.Add("en");
+                if (mode == "en" && !s.TranslateEnglish) Log($"\"{s.Title}\" is not ticked for English; rendering the original captions.");
+                foreach (var lang in langs)
+                {
+                bool en = lang == "en";
+                var opt = ReadOptions();
+                opt.OutputFolder = sub;
+                opt.CaptionLanguage = lang;
+                opt.FileSuffix = en ? " (EN)" : "";
+                if (en && _transcript is not null)
+                {
+                    int missing = SegmentsOf(s).Count(x => string.IsNullOrWhiteSpace(x.English));
+                    if (missing > 0) Log($"\"{s.Title}\" (EN): {missing} line(s) have no English and keep the original text.");
+                }
+                _busyTitle = $"Generating {i}/{selected.Count}: {s.Title}" + (en ? " (EN)" : "");
                 _status.Text = _busyTitle + "...";
-                var item = _results.Items.Add(new ListViewItem(new[] { s.Title, "rendering...", "" }));
-                // an earlier render of this short that was never published is replaced, so the folder holds one
-                // file per short and the cover on disk is always the current one
-                foreach (var old in _generated.Where(g => g.Title == s.Title && !g.Sent).ToList())
+                var item = _results.Items.Add(new ListViewItem(new[] { s.Title + (en ? " (EN)" : ""), "rendering...", "" }));
+                // an earlier render of this short in this language that was never published is replaced, so the
+                // folder holds one file per short and language and the cover on disk is always the current one
+                foreach (var old in _generated.Where(g => (g.ShortTitle ?? g.Title) == s.Title && g.Language == (en ? "en" : null) && !g.Sent).ToList())
                 {
                     TryDelete(old.Path);
                     TryDelete(old.CoverPath);
@@ -2638,22 +2789,26 @@ public sealed class MainForm : Form
                     }
                     item.SubItems[1].Text = "rendering...";
                 }
-                var r = await _renderer.RenderAsync(_video, _transcript, s, options, i, ProgressReporter(), new Progress<string>(Log), ct);
+                var r = await _renderer.RenderAsync(_video, _transcript, s, opt, i, ProgressReporter(), new Progress<string>(Log), ct);
                 item.SubItems[1].Text = r.Success ? "done" : "failed";
                 item.SubItems[2].Text = r.Success ? r.OutputPath : r.Error ?? "";
                 item.Tag = r.OutputPath;
                 if (r.Success)
                 {
                     ok++;
+                    var ep = en ? s.English : null;
                     _generated.Add(new GeneratedFile
                     {
-                        Title = s.Title, Path = r.OutputPath, When = DateTime.Now,
-                        // Carried along so the Publish step has the post text without finding the suggestion again.
-                        Caption = s.SuggestedCaption, Hashtags = s.Hashtags?.ToList(),
-                        Youtube = s.Youtube, Tiktok = s.Tiktok, Instagram = s.Instagram,
+                        Title = ep is { Title.Length: > 0 } ? ep.Title : s.Title, ShortTitle = s.Title, Language = en ? "en" : null,
+                        Path = r.OutputPath, When = DateTime.Now,
+                        // Carried along so the Publish step has the post text without finding the suggestion again;
+                        // the English file carries the English texts.
+                        Caption = ep?.Caption ?? s.SuggestedCaption, Hashtags = (ep?.Hashtags ?? s.Hashtags)?.ToList(),
+                        Youtube = ep is null ? s.Youtube : ep.Youtube, Tiktok = ep is null ? s.Tiktok : ep.Tiktok, Instagram = ep is null ? s.Instagram : ep.Instagram,
                         // Cover / thumbnail exported next to the video so publishing can send it along.
-                        CoverPath = await _renderer.ExportCoverAsync(_video, s, options, r.OutputPath, ct),
+                        CoverPath = await _renderer.ExportCoverAsync(_video, s, opt, r.OutputPath, ct),
                     });
+                }
                 }
                 i++;
             }

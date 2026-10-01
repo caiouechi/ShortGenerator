@@ -7,6 +7,10 @@ public sealed class GeneratedFile
 {
     public string Title { get; set; } = "";
     public string Path { get; set; } = "";
+    /// <summary>Title of the suggestion this file was rendered from (the post title can be its English version).</summary>
+    public string? ShortTitle { get; set; }
+    /// <summary>null for the original captions, "en" for the English version.</summary>
+    public string? Language { get; set; }
     public DateTime When { get; set; }
 
     /// <summary>Caption and hashtags of the suggestion this file was rendered from, copied at render time

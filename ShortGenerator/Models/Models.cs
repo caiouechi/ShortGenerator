@@ -25,6 +25,14 @@ public sealed class TranscriptSegment
     public string Text { get; set; } = "";
     /// <summary>Peak loudness of this line above the speaker's normal level, in dB (set when reactions are detected).</summary>
     public double? Loudness { get; set; }
+    /// <summary>English version of this line for English captions (same timing as the original).</summary>
+    public string? English { get; set; }
+    /// <summary>The original text the English version was made from; when the original is edited later the English is out of date.</summary>
+    public string? EnglishFrom { get; set; }
+    /// <summary>No English yet, or the original changed after it was translated.</summary>
+    [JsonIgnore] public bool EnglishIsStale => string.IsNullOrWhiteSpace(English) || EnglishFrom != Text;
+    /// <summary>An English version exists but the original changed after it was translated.</summary>
+    [JsonIgnore] public bool EnglishOutdated => !string.IsNullOrWhiteSpace(English) && EnglishFrom != Text;
 
     public double Duration => End - Start;
 }
@@ -37,7 +45,8 @@ public sealed class Transcript
     public string ToPlainText() => string.Join(" ", Segments.Select(s => s.Text.Trim()));
 
     /// <summary>Segments overlapping the given window, trimmed and re-based so the window starts at 0.</summary>
-    public List<TranscriptSegment> Slice(double start, double end)
+    /// <param name="english">Use each line's English version when it has one (English captions).</param>
+    public List<TranscriptSegment> Slice(double start, double end, bool english = false)
     {
         var result = new List<TranscriptSegment>();
         foreach (var s in Segments)
@@ -47,7 +56,7 @@ public sealed class Transcript
             {
                 Start = Math.Max(s.Start, start) - start,
                 End = Math.Min(s.End, end) - start,
-                Text = s.Text.Trim()
+                Text = (english && !string.IsNullOrWhiteSpace(s.English) ? s.English : s.Text).Trim()
             });
         }
         return result;
@@ -119,6 +128,10 @@ public sealed class ShortSuggestion
     [JsonPropertyName("camera")] public List<CameraKeyframe> Camera { get; set; } = new();
     /// <summary>Illustrations shown over the short (people, objects, places being talked about).</summary>
     [JsonPropertyName("overlays")] public List<ImageOverlay> Overlays { get; set; } = new();
+    /// <summary>Make an English version of this short (captions + post text). Ticked by default.</summary>
+    [JsonPropertyName("translate_en")] public bool TranslateEnglish { get; set; } = true;
+    /// <summary>English post texts, filled when the short is translated.</summary>
+    [JsonPropertyName("english")] public EnglishPost? English { get; set; }
 
     /// <summary>Moves the legacy single caption position into the keyframe list.</summary>
     public void MigrateLegacyCaptionPosition()
@@ -137,6 +150,17 @@ public sealed class ShortSuggestion
 }
 
 /// <summary>Title, description / caption and keyword tags written for one social network.</summary>
+/// <summary>English version of a short's post texts (the English captions live on the transcript lines).</summary>
+public sealed class EnglishPost
+{
+    [JsonPropertyName("title")] public string Title { get; set; } = "";
+    [JsonPropertyName("caption")] public string Caption { get; set; } = "";
+    [JsonPropertyName("hashtags")] public List<string> Hashtags { get; set; } = new();
+    [JsonPropertyName("youtube")] public NetworkPost? Youtube { get; set; }
+    [JsonPropertyName("tiktok")] public NetworkPost? Tiktok { get; set; }
+    [JsonPropertyName("instagram")] public NetworkPost? Instagram { get; set; }
+}
+
 public sealed class NetworkPost
 {
     [JsonPropertyName("title")] public string Title { get; set; } = "";
@@ -234,6 +258,10 @@ public sealed class GenerateOptions
     public bool AutoCamera { get; set; } = true;
     /// <summary>Colour / exposure treatment (see VisualLook). "auto" by default, "none" leaves the picture alone.</summary>
     public string Look { get; set; } = "auto";
+    /// <summary>"original" or "en": which text the burned captions use.</summary>
+    public string CaptionLanguage { get; set; } = "original";
+    /// <summary>Appended to the file name, e.g. " (EN)" for the English version.</summary>
+    public string FileSuffix { get; set; } = "";
 }
 
 public sealed class ShortResult
