@@ -171,7 +171,7 @@ public sealed class MainForm : Form
     private readonly CheckBox _addCaptions = new() { Text = "Burn captions into the video", Checked = true, AutoSize = true };
     private readonly ComboBox _style = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
     private readonly Label _styleDesc = new() { AutoSize = true, MaximumSize = new Size(300, 0), ForeColor = Color.DimGray };
-    private readonly NumericUpDown _wordsPerCaption = new() { Minimum = 1, Maximum = 8, Value = 3, Width = 60 };
+    private readonly NumericUpDown _wordsPerCaption = new() { Minimum = 1, Maximum = 8, Value = 6, Width = 60 };
     private readonly NumericUpDown _fontSize = new() { Minimum = 0, Maximum = 200, Value = 0, Width = 60 };
     private readonly ComboBox _crop = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
     private readonly CheckBox _burnHook = new() { Text = "Show the hook as a title at the start", AutoSize = true };
@@ -812,19 +812,35 @@ public sealed class MainForm : Form
         center.Controls.Add(controls);
 
         // columns: drag the splitters to give the list, the player or the transcript more room
+        // Default proportions (left 15 %, player 45 %, transcript + images 40 %) follow the window, so maximizing
+        // gives the tables the extra room. Once the user drags a splitter, that layout is kept.
         var columns = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, FixedPanel = FixedPanel.Panel1 };
-        SplitWhenSized(columns, 330);
-        columns.Panel1MinSize = 280;
         columns.Panel1.Controls.Add(left);
-        var inner = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, FixedPanel = FixedPanel.Panel2 };
-        bool innerSet = false;
-        inner.SizeChanged += (_, _) =>
+        var inner = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical };
+        bool userMoved = false, sizing = false; _ = sizing;
+        void Proportion()
         {
-            if (innerSet || inner.Width < 700) return;
-            innerSet = true;
-            inner.Panel2MinSize = 260;
-            inner.SplitterDistance = inner.Width - 340;
-        };
+            if (userMoved || columns.Width < 900) return;
+            sizing = true;
+            try
+            {
+                columns.Panel1MinSize = 300;
+                columns.SplitterDistance = Math.Max(310, Math.Min(380, (int)(columns.Width * 0.15)));
+                if (inner.Width > 700)
+                {
+                    inner.Panel1MinSize = 360; inner.Panel2MinSize = 300;
+                    int right = Math.Max(340, (int)(columns.Width * 0.40));
+                    inner.SplitterDistance = Math.Max(inner.Panel1MinSize, inner.Width - right);
+                }
+            }
+            catch (InvalidOperationException) { } // sizes not settled yet; the next resize applies it
+            finally { sizing = false; }
+        }
+        columns.SizeChanged += (_, _) => Proportion();
+        inner.SizeChanged += (_, _) => Proportion();
+        // a real drag ends with a mouse release on the splitter bar (resizes also raise SplitterMoved)
+        columns.MouseUp += (_, _) => userMoved = true;
+        inner.MouseUp += (_, _) => userMoved = true;
         inner.Panel1.Controls.Add(center);
         inner.Panel2.Controls.Add(rightSplit);
         columns.Panel2.Controls.Add(inner);

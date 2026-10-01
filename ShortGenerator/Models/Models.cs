@@ -246,7 +246,7 @@ public sealed class GenerateOptions
 {
     public bool AddCaptions { get; set; } = true;
     public string CaptionStyleId { get; set; } = "bold-pop";
-    public int WordsPerCaption { get; set; } = 3;
+    public int WordsPerCaption { get; set; } = 6;
     /// <summary>0 = use the style's default size.</summary>
     public int FontSize { get; set; } = 0;
     public CropMode CropMode { get; set; } = CropMode.VerticalCrop;
