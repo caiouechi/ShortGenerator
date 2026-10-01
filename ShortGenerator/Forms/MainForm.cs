@@ -85,7 +85,8 @@ public sealed class MainForm : Form
     private readonly ComboBox _layerAnim = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
     private readonly ContextMenuStrip _segMenu = new();
     // English: caption language in the editor and on Generate shorts
-    private readonly ComboBox _editLang = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 };
+    /// <summary>The live captions follow the table column being edited: English while in the English column.</summary>
+    private bool _previewEnglish;
     private readonly FancyButton _retranslate = new() { Text = "Translate again", Width = 140, Visible = false, Glyph = "\uF2B7" };
     private readonly ComboBox _captionLang = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
     private bool _loadingLayer;
@@ -699,19 +700,17 @@ public sealed class MainForm : Form
         var right = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 6, 0, 6) };
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "Start", HeaderText = "Start", ReadOnly = true, FillWeight = 18 });
         _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "End", HeaderText = "End", ReadOnly = true, FillWeight = 18 });
-        _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "Text", HeaderText = "Text (editable)", FillWeight = 64 });
-        _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "English", HeaderText = "English (editable)", FillWeight = 64, Visible = false });
+        _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "Text", HeaderText = "Original", FillWeight = 64 });
+        _editSegments.Columns.Add(new DataGridViewTextBoxColumn { Name = "English", HeaderText = "English", FillWeight = 64, Visible = false });
         _editSegments.Columns["English"]!.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
+        // the times stay readable however narrow the column gets; the text columns share the rest
+        _editSegments.Columns["Start"]!.MinimumWidth = _editSegments.Columns["End"]!.MinimumWidth = 58;
         _editSegments.Columns["Text"]!.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
         _editSegments.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells;
         var segBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(0, 10, 0, 0), FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
         segBar.Controls.Add(_segPlay);
         segBar.Controls.Add(_segDelete);
-        _editLang.Items.AddRange(new object[] { "Original", "English" });
-        _editLang.SelectedIndex = 0;
-        segBar.Controls.Add(new Label { Text = "Captions:", AutoSize = true, Margin = new Padding(12, 9, 4, 0), ForeColor = Theme.TextSecondary });
-        _editLang.Margin = new Padding(0, 5, 8, 0);
-        segBar.Controls.Add(_editLang);
+        _retranslate.Margin = new Padding(12, 0, 0, 0);
         segBar.Controls.Add(_retranslate);
         right.Controls.Add(_editSegments);
         right.Controls.Add(segBar);
@@ -1114,6 +1113,7 @@ public sealed class MainForm : Form
             _suggestList.Invalidate(hit.SubItem.Bounds);
             SaveProject();
             UpdateGenerateEnabled();
+            if (ReferenceEquals(s, _editing)) UpdateEnglishColumn();
         };
         _editClip.Click += (_, _) => EditSelectedClip();
         _addClip.Click += (_, _) => AddCustomClip();
@@ -1128,7 +1128,14 @@ public sealed class MainForm : Form
         _crop.SelectedIndexChanged += (_, _) => RefreshPreview();
         _generate.Click += async (_, _) => await GenerateAsync();
         _continueToGenerate.Click += (_, _) => { if (EnsureEnglish(TickedShorts().Where(s => s.TranslateEnglish).ToList(), force: false)) SelectTab(4); };
-        _editLang.SelectedIndexChanged += async (_, _) => await OnEditLanguageChangedAsync();
+        // clicking into the English column previews the English captions on the video; any other column, the original
+        _editSegments.CurrentCellChanged += async (_, _) =>
+        {
+            bool en = _editing?.TranslateEnglish == true && _editSegments.CurrentCell?.OwningColumn?.Name == "English";
+            if (en == _previewEnglish) return;
+            _previewEnglish = en;
+            await PushCaptionsAsync();
+        };
         _retranslate.Click += async (_, _) => await RetranslateEditingAsync();
         _captionLang.SelectedIndexChanged += (_, _) =>
         {
@@ -1786,6 +1793,8 @@ public sealed class MainForm : Form
         _syncingTimeline = false;
 
         FillSegmentGrid(s);
+        _previewEnglish = false;
+        UpdateEnglishColumn();
         s.MigrateLegacyCaptionPosition();
         _playerTime = s.StartSeconds;
         if (_cameraMode.Checked) _cameraMode.Checked = false;
@@ -2422,15 +2431,15 @@ public sealed class MainForm : Form
                            string.IsNullOrWhiteSpace(seg.English) ? "No English yet: the original line is used." : "";
     }
 
-    private bool EnglishMode => _editLang.SelectedIndex == 1;
+    private bool EnglishMode => _previewEnglish;
 
-    private async Task OnEditLanguageChangedAsync()
+    /// <summary>The English column and "Translate again" belong to shorts ticked for English in Suggestions.</summary>
+    private void UpdateEnglishColumn()
     {
-        _editSegments.Columns["English"]!.Visible = EnglishMode;
-        _retranslate.Visible = EnglishMode;
-        await PushCaptionsAsync();
-        if (EnglishMode && _editing is not null && _transcript is not null && SegmentsOf(_editing).All(s => string.IsNullOrWhiteSpace(s.English)))
-            _status.Text = "This short has no English yet: click 'Translate again', or tick English in Suggestions and continue.";
+        bool on = _editing?.TranslateEnglish == true;
+        _editSegments.Columns["English"]!.Visible = on;
+        _retranslate.Visible = on;
+        if (!on) _previewEnglish = false;
     }
 
     /// <summary>Translates the lines of the short in the editor that are missing or out of date (all lines when everything is current).</summary>
@@ -2464,7 +2473,10 @@ public sealed class MainForm : Form
     private bool EnsureEnglish(IReadOnlyList<ShortSuggestion> shorts, bool force)
     {
         if (_transcript is null || shorts.Count == 0) return true;
-        var job = CaptionTranslator.Plan(shorts, _transcript, ThumbnailLanguage, force);
+        // Nothing missing or out of date: no dialog. Otherwise send every line of these shorts as they are now
+        // (with the user's edits), so the answer fills the whole English column row by row.
+        if (!force && CaptionTranslator.Plan(shorts, _transcript, ThumbnailLanguage).IsEmpty) return true;
+        var job = CaptionTranslator.Plan(shorts, _transcript, ThumbnailLanguage, forceLines: true);
         if (job.IsEmpty) return true;
         var key = SettingsStore.GetApiKey(_settings);
         Func<CancellationToken, Task<string>>? claude = key is null ? null : ct => CaptionTranslator.TranslateWithClaudeAsync(key, _settings.ClaudeModel, job, ct);
