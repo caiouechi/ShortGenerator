@@ -2434,13 +2434,15 @@ public sealed class MainForm : Form
     }
 
     /// <summary>Translates the lines of the short in the editor that are missing or out of date (all lines when everything is current).</summary>
+    /// <summary>
+    /// Translates every line of the transcript table as it is now (with your edits), and fills every English row
+    /// with the answer. Uncommitted typing in the table is committed first so it is part of what gets sent.
+    /// </summary>
     private async Task RetranslateEditingAsync()
     {
         if (_editing is null || _transcript is null) return;
-        bool anyStale = SegmentsOf(_editing).Any(x => x.EnglishIsStale);
-        if (!anyStale && MessageBox.Show(this, "Every English line of this short is up to date. Translate all of them again?", "Translate again",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-        if (EnsureEnglish(new[] { _editing }, force: !anyStale)) { FillSegmentGrid(_editing); await PushCaptionsAsync(); }
+        if (_editSegments.IsCurrentCellInEditMode) _editSegments.EndEdit();
+        if (EnsureEnglish(new[] { _editing }, force: true)) { FillSegmentGrid(_editing); await PushCaptionsAsync(); }
     }
 
     /// <summary>Dev convenience: shows the translation dialog for the ticked shorts without applying anything.</summary>
