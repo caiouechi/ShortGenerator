@@ -1846,6 +1846,20 @@ public sealed class MainForm : Form
     }
 
     /// <summary>Language for the thumbnail headline: the transcript language when chosen, otherwise a neutral phrase.</summary>
+    /// <summary>The transcript's language by name ("Portuguese"), for prompts; falls back to the Whisper choice.</summary>
+    private string SourceLanguageName
+    {
+        get
+        {
+            var code = _transcript?.Language;
+            var known = LanguageOptions.All.FirstOrDefault(o => o.Code != "auto" && string.Equals(o.Code, code, StringComparison.OrdinalIgnoreCase));
+            if (known is not null) return known.Name;
+            if (!string.IsNullOrWhiteSpace(code) && code != "auto")
+                try { return new System.Globalization.CultureInfo(code).EnglishName; } catch { }
+            return ThumbnailLanguage;
+        }
+    }
+
     private string ThumbnailLanguage => _language.SelectedIndex > 0 && !string.IsNullOrWhiteSpace(_language.Text) ? _language.Text : "the language spoken in the video";
 
     /// <summary>Developer-only: asks what the thumbnail should be, then has Higgsfield redraw the cover (with or without the frame as reference).</summary>
@@ -2459,7 +2473,7 @@ public sealed class MainForm : Form
     {
         if (_transcript is null) return;
         var shorts = TickedShorts().Where(s => s.TranslateEnglish).ToList();
-        var job = CaptionTranslator.Plan(shorts, _transcript, ThumbnailLanguage, forceLines: true);
+        var job = CaptionTranslator.Plan(shorts, _transcript, SourceLanguageName, forceLines: true);
         using var dlg = new TranslateDialog(job, shorts.Count, null);
         dlg.ShowDialog(this);
     }
@@ -2475,8 +2489,8 @@ public sealed class MainForm : Form
         if (_transcript is null || shorts.Count == 0) return true;
         // Nothing missing or out of date: no dialog. Otherwise send every line of these shorts as they are now
         // (with the user's edits), so the answer fills the whole English column row by row.
-        if (!force && CaptionTranslator.Plan(shorts, _transcript, ThumbnailLanguage).IsEmpty) return true;
-        var job = CaptionTranslator.Plan(shorts, _transcript, ThumbnailLanguage, forceLines: true);
+        if (!force && CaptionTranslator.Plan(shorts, _transcript, SourceLanguageName).IsEmpty) return true;
+        var job = CaptionTranslator.Plan(shorts, _transcript, SourceLanguageName, forceLines: true);
         if (job.IsEmpty) return true;
         var key = SettingsStore.GetApiKey(_settings);
         Func<CancellationToken, Task<string>>? claude = key is null ? null : ct => CaptionTranslator.TranslateWithClaudeAsync(key, _settings.ClaudeModel, job, ct);

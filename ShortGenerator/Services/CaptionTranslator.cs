@@ -19,6 +19,8 @@ public sealed class CaptionTranslator
     {
         public List<(int Id, TranscriptSegment Line)> Lines { get; } = new();
         public List<(string Key, ShortSuggestion Short)> Shorts { get; } = new();
+        /// <summary>Each short with the ids of its lines in its own order (a line shared by two shorts is listed under both).</summary>
+        public List<(ShortSuggestion Short, List<int> LineIds)> Groups { get; } = new();
         public string SourceLanguage { get; init; } = "the original language";
         public bool IsEmpty => Lines.Count == 0 && Shorts.Count == 0;
     }
@@ -30,15 +32,18 @@ public sealed class CaptionTranslator
     public static Job Plan(IEnumerable<ShortSuggestion> shorts, Transcript transcript, string sourceLanguage, bool forceLines = false)
     {
         var job = new Job { SourceLanguage = sourceLanguage };
-        var seen = new HashSet<TranscriptSegment>(ReferenceEqualityComparer.Instance);
+        var ids = new Dictionary<TranscriptSegment, int>(ReferenceEqualityComparer.Instance);
         int id = 1, key = 1;
         foreach (var s in shorts)
         {
-            foreach (var seg in transcript.Segments.Where(x => x.End > s.StartSeconds && x.Start < s.EndSeconds))
+            var group = new List<int>();
+            foreach (var seg in transcript.Segments.Where(x => x.End > s.StartSeconds && x.Start < s.EndSeconds).OrderBy(x => x.Start))
             {
-                if (string.IsNullOrWhiteSpace(seg.Text) || !seen.Add(seg)) continue;
-                if (forceLines || seg.EnglishIsStale) job.Lines.Add((id++, seg));
+                if (string.IsNullOrWhiteSpace(seg.Text) || !(forceLines || seg.EnglishIsStale)) continue;
+                if (!ids.TryGetValue(seg, out var existing)) { existing = id++; ids[seg] = existing; job.Lines.Add((existing, seg)); }
+                group.Add(existing);
             }
+            if (group.Count > 0) job.Groups.Add((s, group));
             if (s.English is null) job.Shorts.Add(($"s{key++}", s));
         }
         return job;
@@ -59,9 +64,16 @@ public sealed class CaptionTranslator
         sb.AppendLine($"Source language: {job.SourceLanguage}.");
         if (job.Lines.Count > 0)
         {
+            var text = job.Lines.ToDictionary(l => l.Id, l => l.Line.Text.Trim());
             sb.AppendLine();
-            sb.AppendLine("# Caption lines (translate each one; keep the same id)");
-            foreach (var (id, line) in job.Lines) sb.AppendLine($"{id}. {line.Text.Trim()}");
+            sb.AppendLine("# Caption lines, short by short (translate every id once and keep the id; when two shorts share a line it appears under both with the same id)");
+            int n = 1;
+            foreach (var (sh, lineIds) in job.Groups)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"## Short {n++}: \"{sh.Title}\" ({Clock(sh.StartSeconds)} - {Clock(sh.EndSeconds)})");
+                foreach (var id in lineIds) sb.AppendLine($"{id}. {text[id]}");
+            }
         }
         if (job.Shorts.Count > 0)
         {
@@ -88,6 +100,8 @@ public sealed class CaptionTranslator
         sb.AppendLine("Every id listed above must appear in \"lines\" and every key in \"shorts\".");
         return sb.ToString();
     }
+
+    private static string Clock(double seconds) { var t = TimeSpan.FromSeconds(Math.Max(0, seconds)); return t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"mm\:ss"); }
 
     public sealed record Result(Dictionary<int, string> Lines, Dictionary<string, EnglishPost> Shorts);
 
