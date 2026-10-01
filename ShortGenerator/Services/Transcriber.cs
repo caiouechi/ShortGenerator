@@ -115,6 +115,7 @@ public sealed class Transcriber
             }, ct);
 
             int removed = RemoveRepetitionLoops(transcript);
+            CleanSpeakerMarks(transcript);
             SplitLongSegments(transcript, maxSeconds: 6);
 
             if (detectReactions)
@@ -200,6 +201,48 @@ public sealed class Transcriber
     /// Collapse any run of 3+ consecutive identical segments down to its first occurrence.
     /// Returns how many segments were dropped.
     /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex LeadingDash = new(@"^\s*[-–—]+\s*");
+    // a dialogue dash after a sentence end: "-Vambora. -E você" -> "Vambora. E você"
+    private static readonly System.Text.RegularExpressions.Regex InnerDash = new(@"(?<=[.!?…,]\s*)[-–—]+(?=\s*\p{L})");
+
+    /// <summary>
+    /// Removes the marks Whisper adds that captions do not need: the leading "-" of a speaker change, dialogue
+    /// dashes after a sentence ends, and quotes wrapping a whole line. Quotes inside a line are kept.
+    /// </summary>
+    public static string CleanSpeakerMarks(string text)
+    {
+        var t = LeadingDash.Replace(text.Trim(), "");
+        t = InnerDash.Replace(t, "");
+        t = System.Text.RegularExpressions.Regex.Replace(t, @"\s{2,}", " ").Trim();
+        // a line wrapped in quotes with no other quote inside: drop the wrapping quotes
+        static bool Q(char c) => c is '"' or '“' or '”' or '„';
+        if (t.Length >= 2 && Q(t[0]))
+        {
+            int close = t.Length - 1;
+            while (close > 0 && !Q(t[close]) && !char.IsLetterOrDigit(t[close]) && t[close] != ']') close--; // allow "..."? / "...". endings
+            if (close > 0 && Q(t[close]) && !t[1..close].Any(Q)) t = (t[1..close] + t[(close + 1)..]).Trim();
+        }
+        return t;
+    }
+
+    /// <summary>Cleans every line (and its English version); returns how many lines changed.</summary>
+    public static int CleanSpeakerMarks(Transcript transcript)
+    {
+        int changed = 0;
+        foreach (var seg in transcript.Segments)
+        {
+            var clean = CleanSpeakerMarks(seg.Text);
+            bool englishWasCurrent = seg.EnglishFrom == seg.Text;
+            if (clean != seg.Text) { seg.Text = clean; changed++; }
+            if (!string.IsNullOrWhiteSpace(seg.English))
+            {
+                seg.English = CleanSpeakerMarks(seg.English);
+                if (englishWasCurrent) seg.EnglishFrom = seg.Text; // the translation still matches the cleaned line
+            }
+        }
+        return changed;
+    }
+
     public static int RemoveRepetitionLoops(Transcript transcript)
     {
         var segs = transcript.Segments;

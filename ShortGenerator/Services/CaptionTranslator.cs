@@ -164,7 +164,7 @@ public sealed class CaptionTranslator
             shorts++;
             for (int i = 0; i < g.Lines.Count; i++)
             {
-                if (res.Lines.TryGetValue(i + 1, out var en)) { g.Lines[i].English = en; g.Lines[i].EnglishFrom = g.Lines[i].Text; lines++; }
+                if (res.Lines.TryGetValue(i + 1, out var en)) { g.Lines[i].English = Transcriber.CleanSpeakerMarks(en); g.Lines[i].EnglishFrom = g.Lines[i].Text; lines++; }
                 else missing++;
             }
         }

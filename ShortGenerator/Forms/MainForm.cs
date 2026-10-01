@@ -1527,9 +1527,10 @@ public sealed class MainForm : Form
                 _transcript = project.Transcript;
                 // Transcripts saved by earlier runs may still contain a Whisper repetition loop; clean on load.
                 int removed = Transcriber.RemoveRepetitionLoops(_transcript);
+                int cleaned = Transcriber.CleanSpeakerMarks(_transcript); // "-" speaker marks and wrapping quotes from older runs
                 ShowTranscript();
                 Log(removed > 0 ? $"Restored saved transcript and removed {removed} repeated segments." : "Restored saved transcript.");
-                if (removed > 0) SaveProject();
+                if (removed > 0 || cleaned > 0) SaveProject();
             }
             if (project.Suggestions is { Shorts.Count: > 0 })
             {
@@ -1638,6 +1639,7 @@ public sealed class MainForm : Form
                 foreach (var s in t.Segments) s.Text = TranscriptEvents.Strip(s.Text);
             t.Segments = t.Segments.Where(s => s.Text.Trim().Length > 0).ToList();
             Transcriber.RemoveRepetitionLoops(t);
+            Transcriber.CleanSpeakerMarks(t);
             _transcript = t;
             ShowTranscript();
             SaveProject();
