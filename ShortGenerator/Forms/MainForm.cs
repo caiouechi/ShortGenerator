@@ -2570,6 +2570,7 @@ public sealed class MainForm : Form
             langs = AskPreviewLanguages(s);
             if (langs.Count == 0) return;
         }
+        var done = new List<string>();
         await RunBusyAsync("Rendering preview", async ct =>
         {
             int n = 1;
@@ -2581,10 +2582,13 @@ public sealed class MainForm : Form
                 opts.FileSuffix = lang == "en" ? " (EN)" : "";
                 _busyTitle = langs.Count > 1 ? $"Rendering preview {n++}/{langs.Count}" + (lang == "en" ? " (English)" : " (original)") : "Rendering preview";
                 var r = await _renderer.RenderAsync(_video, _transcript, s, opts, 0, ProgressReporter(), new Progress<string>(Log), ct);
-                if (r.Success) OpenPath(r.OutputPath);
-                else throw new InvalidOperationException(r.Error ?? "Preview failed.");
+                if (!r.Success) throw new InvalidOperationException(r.Error ?? "Preview failed.");
+                done.Add(r.OutputPath);
+                Log($"Preview ready: {r.OutputPath}");
             }
         });
+        // open the previews only after all of them are rendered
+        foreach (var path in done) OpenPath(path);
     }
 
     /// <summary>Dev convenience: shows the Render preview language question for the short in the editor.</summary>
@@ -3013,10 +3017,27 @@ public sealed class MainForm : Form
         return string.IsNullOrWhiteSpace(cleaned) ? "video" : cleaned;
     }
 
+    /// <summary>
+    /// Opens a file or folder with its default app. Never blocks with a dialog: if Windows cannot start the app
+    /// ("Server execution failed" is common when the Media Player / Films &amp; TV app is slow to launch) it retries
+    /// once, then shows the file selected in Explorer so it can be opened from there.
+    /// </summary>
     private static void OpenPath(string path)
     {
-        try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
-        catch (Exception ex) { MessageBox.Show(ex.Message, "Could not open", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); return; }
+            catch (Exception) when (attempt == 0) { Thread.Sleep(800); }
+            catch (Exception)
+            {
+                try
+                {
+                    if (File.Exists(path)) Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+                    else if (Directory.Exists(path)) Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
+                }
+                catch { }
+            }
+        }
     }
 
     private void PlayRange(double start)
