@@ -8,43 +8,40 @@ using ShortGenerator.Models;
 namespace ShortGenerator.Services;
 
 /// <summary>
-/// Translates the shorts that will be generated into English: their caption lines (keyed by number so nothing
-/// drifts and the original timing is kept) and their post texts (title, caption, hashtags, per-network text).
-/// One request covers every short; it can go through Claude (API key) or be copied to ChatGPT and pasted back.
+/// Translates the shorts that will be generated into English. The request is organised short by short: each
+/// short carries its post texts (title, caption, hashtags, per-network text) and its whole transcript, numbered
+/// from 1 within that short, and the answer comes back as one object per short with its own numbered lines.
+/// That keeps 10 or 20 shorts readable and checkable, and every English line lands on the row it belongs to
+/// (the original timing is kept). It can go through Claude (API key) or be copied to ChatGPT and pasted back.
 /// </summary>
 public sealed class CaptionTranslator
 {
-    /// <summary>The work for one request: numbered transcript lines and the shorts whose post text is needed.</summary>
+    /// <summary>One short of the request: its key, its lines in order (numbered 1..n in the prompt).</summary>
+    public sealed record Group(string Key, ShortSuggestion Short, List<TranscriptSegment> Lines);
+
     public sealed class Job
     {
-        public List<(int Id, TranscriptSegment Line)> Lines { get; } = new();
-        public List<(string Key, ShortSuggestion Short)> Shorts { get; } = new();
-        /// <summary>Each short with the ids of its lines in its own order (a line shared by two shorts is listed under both).</summary>
-        public List<(ShortSuggestion Short, List<int> LineIds)> Groups { get; } = new();
+        public List<Group> Groups { get; } = new();
         public string SourceLanguage { get; init; } = "the original language";
-        public bool IsEmpty => Lines.Count == 0 && Shorts.Count == 0;
+        public bool IsEmpty => Groups.Count == 0;
+        /// <summary>Caption lines sent, counted per short (a line in two shorts counts twice).</summary>
+        public int LineCount => Groups.Sum(g => g.Lines.Count);
     }
 
     /// <summary>
-    /// Lines of the given shorts without an up-to-date English version (missing, or the original changed since),
-    /// and the shorts with no English post text yet. A line shared by two shorts is sent once.
+    /// The shorts that need English: those with no English post text yet or with a line missing / out of date
+    /// (or all of them when <paramref name="forceLines"/>). Each one is sent with its whole transcript, as edited.
     /// </summary>
     public static Job Plan(IEnumerable<ShortSuggestion> shorts, Transcript transcript, string sourceLanguage, bool forceLines = false)
     {
         var job = new Job { SourceLanguage = sourceLanguage };
-        var ids = new Dictionary<TranscriptSegment, int>(ReferenceEqualityComparer.Instance);
-        int id = 1, key = 1;
+        int key = 1;
         foreach (var s in shorts)
         {
-            var group = new List<int>();
-            foreach (var seg in transcript.Segments.Where(x => x.End > s.StartSeconds && x.Start < s.EndSeconds).OrderBy(x => x.Start))
-            {
-                if (string.IsNullOrWhiteSpace(seg.Text) || !(forceLines || seg.EnglishIsStale)) continue;
-                if (!ids.TryGetValue(seg, out var existing)) { existing = id++; ids[seg] = existing; job.Lines.Add((existing, seg)); }
-                group.Add(existing);
-            }
-            if (group.Count > 0) job.Groups.Add((s, group));
-            if (s.English is null) job.Shorts.Add(($"s{key++}", s));
+            var lines = transcript.Segments.Where(x => x.End > s.StartSeconds && x.Start < s.EndSeconds && !string.IsNullOrWhiteSpace(x.Text))
+                .OrderBy(x => x.Start).ToList();
+            if (forceLines || s.English is null || lines.Any(x => x.EnglishIsStale))
+                job.Groups.Add(new Group($"s{key++}", s, lines));
         }
         return job;
     }
@@ -62,48 +59,46 @@ public sealed class CaptionTranslator
         sb.AppendLine(Rules);
         sb.AppendLine();
         sb.AppendLine($"Source language: {job.SourceLanguage}.");
-        if (job.Lines.Count > 0)
+        sb.AppendLine($"There are {job.Groups.Count} short{(job.Groups.Count == 1 ? "" : "s")} below. Translate each one on its own: its post texts and every one of its caption lines. " +
+                      "Line numbers restart at 1 in every short.");
+        foreach (var g in job.Groups)
         {
-            var text = job.Lines.ToDictionary(l => l.Id, l => l.Line.Text.Trim());
+            var s = g.Short;
             sb.AppendLine();
-            sb.AppendLine("# Caption lines, short by short (translate every id once and keep the id; when two shorts share a line it appears under both with the same id)");
-            int n = 1;
-            foreach (var (sh, lineIds) in job.Groups)
-            {
-                sb.AppendLine();
-                sb.AppendLine($"## Short {n++}: \"{sh.Title}\" ({Clock(sh.StartSeconds)} - {Clock(sh.EndSeconds)})");
-                foreach (var id in lineIds) sb.AppendLine($"{id}. {text[id]}");
-            }
-        }
-        if (job.Shorts.Count > 0)
-        {
-            sb.AppendLine();
-            sb.AppendLine("# Post texts (write the English version of each short's texts; keep the same key)");
-            foreach (var (key, s) in job.Shorts)
-            {
-                sb.AppendLine($"[{key}] title: {s.Title}");
-                sb.AppendLine($"  hook: {s.Hook}");
-                sb.AppendLine($"  caption: {s.SuggestedCaption}");
-                sb.AppendLine($"  hashtags: {string.Join(" ", s.Hashtags ?? new List<string>())}");
-                foreach (var (name, p) in new[] { ("youtube", s.Youtube), ("tiktok", s.Tiktok), ("instagram", s.Instagram) })
-                    if (p is not null) sb.AppendLine($"  {name}: title \"{p.Title}\" | text \"{p.Description.Replace("\n", " / ")}\" | tags {string.Join(", ", p.Tags)}");
-            }
+            sb.AppendLine($"## [{g.Key}] \"{s.Title}\" ({Clock(s.StartSeconds)} - {Clock(s.EndSeconds)})");
+            sb.AppendLine($"title: {s.Title}");
+            sb.AppendLine($"hook: {s.Hook}");
+            sb.AppendLine($"caption: {s.SuggestedCaption}");
+            sb.AppendLine($"hashtags: {string.Join(" ", s.Hashtags ?? new List<string>())}");
+            foreach (var (name, p) in new[] { ("youtube", s.Youtube), ("tiktok", s.Tiktok), ("instagram", s.Instagram) })
+                if (p is not null) sb.AppendLine($"{name}: title \"{p.Title}\" | text \"{p.Description.Replace("\n", " / ")}\" | tags {string.Join(", ", p.Tags)}");
+            sb.AppendLine($"lines ({g.Lines.Count}):");
+            for (int i = 0; i < g.Lines.Count; i++) sb.AppendLine($"{i + 1}. {g.Lines[i].Text.Trim()}");
         }
         sb.AppendLine();
         sb.AppendLine("# Output format");
-        sb.AppendLine("Reply with ONLY a JSON object, no markdown, no commentary, no citation or source markers inside the strings, exactly in this shape:");
-        sb.AppendLine("{\"lines\":[{\"id\":1,\"en\":\"...\"}],");
-        sb.AppendLine(" \"shorts\":[{\"key\":\"s1\",\"title\":\"...\",\"caption\":\"...\",\"hashtags\":[\"...\"],");
+        sb.AppendLine("Reply with ONLY a JSON object, no markdown, no commentary, no citation or source markers inside the strings. " +
+                      "One object per short, in the same order and with the same key; each short's \"lines\" has every line number of that short:");
+        sb.AppendLine("{\"shorts\":[");
+        sb.AppendLine("  {\"key\":\"s1\",\"title\":\"...\",\"caption\":\"...\",\"hashtags\":[\"...\"],");
         sb.AppendLine("   \"youtube\":{\"title\":\"...\",\"description\":\"...\",\"tags\":[\"...\"]},");
         sb.AppendLine("   \"tiktok\":{\"title\":\"\",\"description\":\"...\",\"tags\":[\"...\"]},");
-        sb.AppendLine("   \"instagram\":{\"title\":\"\",\"description\":\"...\",\"tags\":[\"...\"]}}]}");
-        sb.AppendLine("Every id listed above must appear in \"lines\" and every key in \"shorts\".");
+        sb.AppendLine("   \"instagram\":{\"title\":\"\",\"description\":\"...\",\"tags\":[\"...\"]},");
+        sb.AppendLine("   \"lines\":[{\"id\":1,\"en\":\"...\"},{\"id\":2,\"en\":\"...\"}]}");
+        sb.AppendLine("]}");
         return sb.ToString();
     }
 
-    private static string Clock(double seconds) { var t = TimeSpan.FromSeconds(Math.Max(0, seconds)); return t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"mm\:ss"); }
+    private static string Clock(double seconds)
+    {
+        var t = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"mm\:ss");
+    }
 
-    public sealed record Result(Dictionary<int, string> Lines, Dictionary<string, EnglishPost> Shorts);
+    /// <summary>A short's translation: its post texts and its lines by number (1-based, within the short).</summary>
+    public sealed record ShortResult(EnglishPost Post, Dictionary<int, string> Lines);
+
+    public sealed record Result(Dictionary<string, ShortResult> Shorts);
 
     /// <summary>Reads the answer: tolerant to code fences, text around the JSON and ChatGPT citation markers.</summary>
     public static Result Parse(string raw)
@@ -115,43 +110,64 @@ public sealed class CaptionTranslator
         if (first < 0 || last <= first) throw new FormatException("Could not find a JSON object in the answer.");
         using var doc = JsonDocument.Parse(text[first..(last + 1)], new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
         var root = doc.RootElement;
-        var lines = new Dictionary<int, string>();
-        if (root.TryGetProperty("lines", out var ls) && ls.ValueKind == JsonValueKind.Array)
-            foreach (var l in ls.EnumerateArray())
-            {
-                int id = l.TryGetProperty("id", out var i) ? (i.ValueKind == JsonValueKind.Number ? i.GetInt32() : int.TryParse(i.GetString(), out var n) ? n : -1) : -1;
-                var en = Str(l, "en") ?? Str(l, "text") ?? Str(l, "english");
-                if (id > 0 && !string.IsNullOrWhiteSpace(en)) lines[id] = en.Trim();
-            }
-        var shorts = new Dictionary<string, EnglishPost>(StringComparer.OrdinalIgnoreCase);
+        var shorts = new Dictionary<string, ShortResult>(StringComparer.OrdinalIgnoreCase);
         if (root.TryGetProperty("shorts", out var ss) && ss.ValueKind == JsonValueKind.Array)
+        {
+            int index = 1;
             foreach (var s in ss.EnumerateArray())
             {
+                // a missing key falls back to the position, so an answer that dropped the keys still lines up
                 var key = Str(s, "key");
-                if (string.IsNullOrWhiteSpace(key)) continue;
-                shorts[key] = new EnglishPost
+                if (string.IsNullOrWhiteSpace(key)) key = $"s{index}";
+                index++;
+                var lines = new Dictionary<int, string>();
+                if (s.TryGetProperty("lines", out var ls) && ls.ValueKind == JsonValueKind.Array)
+                {
+                    int pos = 1;
+                    foreach (var l in ls.EnumerateArray())
+                    {
+                        int id = pos++;
+                        string? en = null;
+                        if (l.ValueKind == JsonValueKind.String) en = l.GetString(); // ["line 1", "line 2"] works too
+                        else
+                        {
+                            if (l.TryGetProperty("id", out var i)) id = i.ValueKind == JsonValueKind.Number ? i.GetInt32() : int.TryParse(i.GetString(), out var n) ? n : id;
+                            en = Str(l, "en") ?? Str(l, "text") ?? Str(l, "english");
+                        }
+                        if (!string.IsNullOrWhiteSpace(en)) lines[id] = en.Trim();
+                    }
+                }
+                shorts[key] = new ShortResult(new EnglishPost
                 {
                     Title = Str(s, "title") ?? "",
                     Caption = Str(s, "caption") ?? "",
                     Hashtags = Tags(s, "hashtags"),
                     Youtube = Net(s, "youtube"), Tiktok = Net(s, "tiktok"), Instagram = Net(s, "instagram"),
-                };
+                }, lines);
             }
-        if (lines.Count == 0 && shorts.Count == 0) throw new FormatException("The answer has no translated lines or post texts.");
-        return new Result(lines, shorts);
+        }
+        if (shorts.Count == 0) throw new FormatException("The answer has no \"shorts\" list.");
+        return new Result(shorts);
     }
 
-    /// <summary>Writes the translation into the lines (remembering the original they came from) and the shorts.</summary>
+    /// <summary>
+    /// Writes each short's answer onto its own rows (line n of the short = its n-th transcript line, remembering the
+    /// original it was made from) and its post texts. Returns translated lines, shorts and lines left without English.
+    /// </summary>
     public static (int Lines, int Shorts, int Missing) Apply(Job job, Result r)
     {
         int lines = 0, shorts = 0, missing = 0;
-        foreach (var (id, seg) in job.Lines)
+        foreach (var g in job.Groups)
         {
-            if (r.Lines.TryGetValue(id, out var en)) { seg.English = en; seg.EnglishFrom = seg.Text; lines++; }
-            else missing++;
+            if (!r.Shorts.TryGetValue(g.Key, out var res)) { missing += g.Lines.Count; continue; }
+            g.Short.English = res.Post;
+            shorts++;
+            for (int i = 0; i < g.Lines.Count; i++)
+            {
+                if (res.Lines.TryGetValue(i + 1, out var en)) { g.Lines[i].English = en; g.Lines[i].EnglishFrom = g.Lines[i].Text; lines++; }
+                else missing++;
+            }
         }
-        foreach (var (key, s) in job.Shorts)
-            if (r.Shorts.TryGetValue(key, out var p)) { s.English = p; shorts++; }
         return (lines, shorts, missing);
     }
 
@@ -166,26 +182,26 @@ public sealed class CaptionTranslator
         };
         var schemaObj = new
         {
-            type = "object", additionalProperties = false, required = new[] { "lines", "shorts" },
+            type = "object", additionalProperties = false, required = new[] { "shorts" },
             properties = new
             {
-                lines = new
-                {
-                    type = "array",
-                    items = new { type = "object", additionalProperties = false, required = new[] { "id", "en" }, properties = new { id = new { type = "integer" }, en = new { type = "string" } } }
-                },
                 shorts = new
                 {
                     type = "array",
                     items = new
                     {
                         type = "object", additionalProperties = false,
-                        required = new[] { "key", "title", "caption", "hashtags", "youtube", "tiktok", "instagram" },
+                        required = new[] { "key", "title", "caption", "hashtags", "youtube", "tiktok", "instagram", "lines" },
                         properties = new
                         {
                             key = new { type = "string" }, title = new { type = "string" }, caption = new { type = "string" },
                             hashtags = new { type = "array", items = new { type = "string" } },
                             youtube = Net(), tiktok = Net(), instagram = Net(),
+                            lines = new
+                            {
+                                type = "array",
+                                items = new { type = "object", additionalProperties = false, required = new[] { "id", "en" }, properties = new { id = new { type = "integer" }, en = new { type = "string" } } }
+                            },
                         }
                     }
                 }
@@ -195,7 +211,7 @@ public sealed class CaptionTranslator
         var response = await client.Messages.Create(new MessageCreateParams
         {
             Model = string.IsNullOrWhiteSpace(model) ? "claude-opus-5" : model,
-            MaxTokens = 16000,
+            MaxTokens = 32000,
             System = Rules,
             OutputConfig = new OutputConfig { Format = new JsonOutputFormat { Schema = schema } },
             Messages = [new() { Role = Role.User, Content = BuildPrompt(job) }]

@@ -40,8 +40,8 @@ public sealed class TranslateDialog : Form
         for (int i = 0; i < 6; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles[4] = new RowStyle(SizeType.Percent, 100);
         root.Controls.Add(new Label { Text = "English captions and post text", AutoSize = true, Font = Theme.HeadingFont(12f), ForeColor = Theme.Heading, Margin = new Padding(0, 0, 0, 4) }, 0, 0);
-        var what = $"{shortCount} short{(shortCount == 1 ? "" : "s")}: {job.Lines.Count} caption line{(job.Lines.Count == 1 ? "" : "s")}" +
-                   (job.Shorts.Count > 0 ? $" and the titles, captions and hashtags of {job.Shorts.Count} short{(job.Shorts.Count == 1 ? "" : "s")}" : "") +
+        int n = job.Groups.Count;
+        var what = $"{n} short{(n == 1 ? "" : "s")}, each with its whole transcript ({job.LineCount} caption line{(job.LineCount == 1 ? "" : "s")} in total) and its title, caption and hashtags" +
                    ". Only the shorts you are about to generate are translated; you can fix any English line later in Edit & preview.";
         root.Controls.Add(new Label { Text = what, AutoSize = true, MaximumSize = new Size(610, 0), ForeColor = Theme.TextSecondary, Margin = new Padding(0, 0, 0, 14), UseMnemonic = false }, 0, 1);
 
