@@ -380,8 +380,6 @@ public sealed class MainForm : Form
         _publishPanel.Log = Log;
         _publishPanel.OpenSettings = OpenSettings;
         _publishPanel.Delete = DeleteGenerated;
-        _publishPanel.GetAccountLanguage = key => _settings.AccountLanguages.TryGetValue(key, out var v) ? v : "both";
-        _publishPanel.SetAccountLanguage = (key, value) => { _settings.AccountLanguages[key] = value; try { SettingsStore.Save(_settings); } catch { } };
         _publishPanel.OpenSignIn = () =>
         {
             using var dlg = new GaliLunaSignInForm(_settings);

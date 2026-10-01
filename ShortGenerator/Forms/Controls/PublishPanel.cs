@@ -30,11 +30,6 @@ public sealed class PublishPanel : UserControl
     /// <summary>Deletes a rendered short (file, cover, project entry); MainForm owns the list and the confirmation.</summary>
     [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<GeneratedFile, bool> Delete { get; set; } = _ => false;
-    /// <summary>Which videos an account receives ("original" / "en" / "both"), remembered in the settings.</summary>
-    [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-    public Func<string, string> GetAccountLanguage { get; set; } = _ => "both";
-    [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-    public Action<string, string> SetAccountLanguage { get; set; } = (_, _) => { };
 
     // header
     private readonly Label _connection = new() { Dock = DockStyle.Top, Height = 48, Padding = new Padding(10, 6, 10, 0), ForeColor = Color.DimGray };
@@ -70,7 +65,6 @@ public sealed class PublishPanel : UserControl
     private GaliLunaClient.Accounts? _accounts;
     private GeneratedFile? _editing;
     private bool _populating;
-    private bool _busy;
     private Control? _content;
 
     public PublishPanel()
@@ -190,6 +184,7 @@ public sealed class PublishPanel : UserControl
             if (dir is not null && Directory.Exists(dir)) TryOpen(dir);
         };
         _cancelPublish.Click += (_, _) => { _publishCts?.Cancel(); _cancelPublish.Enabled = false; _cancelPublish.Text = "Cancelling..."; };
+        _publishAll.Visible = true;
         _list.DoubleClick += (_, _) => { if (_list.SelectedItems.Count == 1 && _list.SelectedItems[0].Tag is GeneratedFile f && File.Exists(f.Path)) TryOpen(f.Path); };
     }
 
@@ -367,31 +362,40 @@ public sealed class PublishPanel : UserControl
     {
         if (_populating) return; // ItemChecked fires mid-population, when the collection can still hand out nulls
         int ticked = TickedCount;
-        bool any = _accounts is not null && ticked > 0 && !_busy;
-        // each button counts what it will really send: the ticked files whose language its ticked accounts take
-        var tickedFiles = ticked == 0 ? new List<GeneratedFile>() : _list.Items.Cast<ListViewItem>().Where(i => i is { Checked: true }).Select(i => (GeneratedFile)i.Tag!).ToList();
+        bool any = _accounts is not null && ticked > 0;
+        // publishing runs in the background, so the buttons stay usable while uploads are in flight
         int destinations = 0, uploads = 0;
         foreach (var c in _networkCards)
         {
-            int files = tickedFiles.Count(f => c.Sends(f.Language).Count > 0);
-            uploads += tickedFiles.Sum(f => c.Sends(f.Language).Count);
-            if (files > 0) destinations++;
-            c.SetEnabled(any && files > 0, files);
+            int accounts = c.Sends().Count;
+            uploads += ticked * accounts;
+            if (accounts > 0) destinations++;
+            c.SetEnabled(any && accounts > 0, ticked);
         }
         _publishAll.Enabled = any && uploads > 0;
-        _deleteShort.Enabled = !_busy && _list.SelectedItems.Count == 1;
+        // a video still uploading cannot be deleted
+        _deleteShort.Enabled = _list.SelectedItems.Count == 1 && _list.SelectedItems[0].Tag is GeneratedFile sf && !_inFlight.Any(k => k.StartsWith(sf.Path + "|", StringComparison.OrdinalIgnoreCase));
         _openFolder.Enabled = Files().Count > 0;
-        _cancelPublish.Visible = _busy;
-        _publishAll.Visible = !_busy;
+        _cancelPublish.Visible = _running > 0;
+        _cancelPublish.Text = _running > 1 ? $"Cancel publishing ({_running})" : "Cancel publishing";
         _publishAll.Text = uploads > 1 ? $"Publish to all ({uploads})" : "Publish to all";
         _summary.Text = _accounts is null ? "" : ticked == 0 ? "Tick at least one short on the left." :
-            uploads == 0 ? "None of the ticked accounts takes the ticked videos' language: check the language next to each account." :
-            $"{ticked} short{(ticked == 1 ? "" : "s")} ticked, {uploads} upload{(uploads == 1 ? "" : "s")} to {destinations} network{(destinations == 1 ? "" : "s")}. Each video only goes to the accounts set for its language.";
+            uploads == 0 ? "Tick the accounts to publish to in a card below." :
+            $"{ticked} video{(ticked == 1 ? "" : "s")} ticked, {uploads} upload{(uploads == 1 ? "" : "s")} to {destinations} network{(destinations == 1 ? "" : "s")}." +
+            (_running > 0 ? $" Publishing in the background ({_running} running): you can tick another video and publish it meanwhile." : "");
     }
 
     // ------------------------------------------------------------------ publishing
 
-    /// <summary>Sends every ticked short to the given networks, one request per network so each gets its own text and targets.</summary>
+    /// <summary>Uploads in flight, keyed file path | network | account, so the same video never goes twice to one account at once.</summary>
+    private readonly HashSet<string> _inFlight = new();
+    private int _running;
+
+    /// <summary>
+    /// Sends the ticked videos to the ticked accounts of the given networks. Everything is captured when the button is
+    /// clicked (files, accounts, options, texts) and the upload runs in the background, so another video can be ticked
+    /// and published to other accounts while this one is still uploading.
+    /// </summary>
     private async Task PublishAsync(IReadOnlyList<NetworkCard> targets)
     {
         var client = ClientFactory();
@@ -399,108 +403,96 @@ public sealed class PublishPanel : UserControl
         var files = _list.Items.Cast<ListViewItem>().Where(i => i is { Checked: true }).Select(i => (Item: i, File: (GeneratedFile)i.Tag!)).ToList();
         if (files.Count == 0) return;
 
-        var where = string.Join(", ", targets.Select(t => t.Describe()));
-        int requests = files.Sum(f => targets.Sum(t => t.Sends(f.File.Language).Count));
-        if (requests == 0)
+        // snapshot of the job: later clicks and ticks never change what this one sends
+        var jobs = new List<(ListViewItem Item, GeneratedFile File, NetworkCard Card, string Account, GaliLunaClient.SendOptions Options, NetworkPost Text, string Key)>();
+        int skipped = 0;
+        foreach (var (item, file) in files)
+            foreach (var card in targets)
+                foreach (var (account, options) in card.Sends())
+                {
+                    var key = $"{file.Path}|{card.Network}|{account}";
+                    if (_inFlight.Contains(key)) { skipped++; continue; }
+                    var t = file.PostFor(card.Network);
+                    jobs.Add((item, file, card, account, options, new NetworkPost { Title = t.Title, Description = t.Description, Tags = t.Tags.ToList() }, key));
+                }
+        if (jobs.Count == 0)
         {
-            MessageBox.Show(this, "None of the ticked accounts takes the ticked videos' language. Check the language next to each account.", "Nothing to publish");
+            MessageBox.Show(this, skipped > 0 ? "Those videos are already being sent to those accounts." : "Tick at least one account to publish to.", "Nothing to publish");
             return;
         }
-        var plan = string.Join("\n", files.Select(f => $"  {(f.File.Language == "en" ? "[EN] " : "")}{f.File.Title}  ->  " +
-            (string.Join(", ", targets.SelectMany(t => t.Sends(f.File.Language).Select(x => x.Account))) is { Length: > 0 } a ? a : "(no account for this language)")));
-        var again = files.Where(f => f.File.Publications.Any(p => targets.Any(t => t.Network == p.Network.ToLowerInvariant()) && p.Status is "published" or "drafted")).Select(f => f.File.Title).ToList();
-        var message = $"Publish {files.Count} short{(files.Count == 1 ? "" : "s")}?\n\n{plan}" + (requests > 1 ? $"\n\nEach account is sent separately ({requests} uploads) so you see every result as it lands." : "")
-            + (targets.Any(t => t.Network == "instagram") ? "\n\nInstagram posts go live immediately and are visible to followers." : "")
-            + (again.Count > 0 ? $"\n\nAlready posted there before and will be posted AGAIN: {string.Join(", ", again)}." : "");
+        var plan = string.Join("\n", jobs.GroupBy(j => j.File).Select(g => $"  {(g.Key.Language == "en" ? "[EN] " : "")}{g.Key.Title}  ->  {string.Join(", ", g.Select(j => j.Account))}"));
+        var again = jobs.Where(j => j.File.Publications.Any(p => string.Equals(p.Network, j.Card.Network, StringComparison.OrdinalIgnoreCase)
+                                                                  && string.Equals(p.Account, j.Account, StringComparison.OrdinalIgnoreCase) && p.Status is "published" or "drafted"))
+                        .Select(j => $"{j.File.Title} on {j.Account}").Distinct().ToList();
+        var message = $"Publish?\n\n{plan}" + (jobs.Count > 1 ? $"\n\n{jobs.Count} uploads. They run in the background: you can keep working and publish other videos meanwhile." : "")
+            + (jobs.Any(j => j.Card.Network == "instagram") ? "\n\nInstagram posts go live immediately and are visible to followers." : "")
+            + (skipped > 0 ? $"\n\n{skipped} upload(s) already in progress are skipped." : "")
+            + (again.Count > 0 ? $"\n\nAlready posted before and will be posted AGAIN: {string.Join(", ", again)}." : "");
         if (MessageBox.Show(this, message, "Publish with galiluna", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
 
-        _busy = true;
-        _publishCts = new CancellationTokenSource();
+        foreach (var j in jobs) _inFlight.Add(j.Key);
+        _publishCts ??= new CancellationTokenSource();
         var ct = _publishCts.Token;
-        _cancelPublish.Enabled = true; _cancelPublish.Text = "Cancel publishing";
+        _running++;
+        _cancelPublish.Enabled = true;
+        // the videos of this job are unticked right away, so the next one can be ticked and published at once
+        _populating = true;
+        foreach (var (item, _) in files) item.Checked = false;
+        _populating = false;
         UpdateButtons();
-        int ok = 0, total = 0; bool cancelled = false;
+        int ok = 0;
         try
         {
-            foreach (var (item, file) in files)
+            foreach (var j in jobs)
             {
-                if (cancelled) break;
-                foreach (var card in targets)
+                if (ct.IsCancellationRequested) break;
+                void Show(string state) { j.Item.SubItems[2].Text = $"{j.Card.Title} ({j.Account}): {state}"; j.Card.SetOutcome($"{j.Account}: {state}", Theme.TextMuted); }
+                Show("uploading...");
+                var progress = new Progress<double>(v => Show(v < 1 ? $"uploading {(int)(v * 100)}%" : "publishing (this can take a few minutes)..."));
+                try
                 {
-                    if (cancelled) break;
-                    var sends = card.Sends(file.Language);
-                    if (sends.Count == 0) continue; // no account on this network takes this language
-                    var done = new List<string>(); // per-account lines shown on the card as they arrive
-                    int index = 0;
-                    foreach (var (account, options) in sends)
+                    var result = await client.SendAsync(j.File.Path, j.Text.Title, j.Text.Description, j.Text.Tags, j.Options, progress, ct, j.File.CoverPath);
+                    // Ask again while TikTok is still working, up to ~5 minutes.
+                    for (int attempt = 0; attempt < 20 && result.AnyProcessing; attempt++)
                     {
-                        if (ct.IsCancellationRequested) { cancelled = true; break; }
-                        total++; index++;
-                        string Progress(string state) => sends.Count > 1 ? $"{card.Title} {index}/{sends.Count} ({account}): {state}" : $"{card.Title}: {state}";
-                        item.SubItems[2].Text = Progress("uploading...");
-                        card.SetOutcome(string.Join("; ", done.Append($"{account}: uploading...")), Theme.TextMuted);
-                        var progress = new Progress<double>(p =>
-                        {
-                            var state = p < 1 ? $"uploading {(int)(p * 100)}%" : "publishing (this can take a few minutes)...";
-                            item.SubItems[2].Text = Progress(state);
-                            card.SetOutcome(string.Join("; ", done.Append($"{account}: {state}")), Theme.TextMuted);
-                        });
-                        try
-                        {
-                            var text = file.PostFor(card.Network);
-                            var result = await client.SendAsync(file.Path, text.Title, text.Description, text.Tags, options, progress, ct, file.CoverPath);
-                            // Ask again while TikTok is still working, up to ~5 minutes.
-                            for (int attempt = 0; attempt < 20 && result.AnyProcessing; attempt++)
-                            {
-                                item.SubItems[2].Text = Progress("TikTok still working...");
-                                await Task.Delay(TimeSpan.FromSeconds(15), ct);
-                                result = await client.GetShortAsync(result.Id, ct);
-                            }
-                            Apply(file, card.Network, account, result.Id, result.Publications);
-                            bool good = result.Publications.Count > 0 && result.Publications.All(p => p.Status is "published" or "drafted");
-                            if (good) ok++;
-                            done.Add(string.Join("; ", result.Publications.Select(p => $"{p.Account ?? account}: {StatusText(p.Status)}{(p.Error is null ? "" : " - " + p.Error)}")));
-                            card.SetOutcome(string.Join("; ", done), good ? Theme.Success : Theme.Warning);
-                            item.SubItems[2].Text = Describe(file); // the list shows each account as soon as it lands
-                            Saved();
-                            Log($"galiluna #{result.Id} \"{text.Title}\" ({card.Title}, {account}): " + string.Join("; ", result.Publications.Select(p => $"{p.Account ?? p.Network} {p.Status}{(p.Error is null ? "" : " - " + p.Error)}")));
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            // Stopped before galiluna answered. The upload may or may not have reached the network:
-                            // the Published column shows the truth after Refresh (galiluna keeps the outcome).
-                            cancelled = true;
-                            done.Add($"{account}: cancelled (if the upload had finished, galiluna may still have posted it; check the account)");
-                            card.SetOutcome(string.Join("; ", done), Theme.Warning);
-                            Log($"galiluna \"{file.Title}\" ({card.Title}, {account}): cancelled by the user.");
-                            break;
-                        }
-                        catch (Exception ex)
-                        {
-                            Apply(file, card.Network, account, null, new[] { new GaliLunaClient.Publication { Network = card.Network, Account = account, Status = "failed", Error = ex.Message } });
-                            done.Add($"{account}: failed - {ex.Message}");
-                            card.SetOutcome(string.Join("; ", done), Theme.Danger);
-                            Log($"galiluna \"{file.Title}\" ({card.Title}, {account}): {ex.Message}");
-                        }
+                        Show("TikTok still working...");
+                        await Task.Delay(TimeSpan.FromSeconds(15), ct);
+                        result = await client.GetShortAsync(result.Id, ct);
                     }
+                    Apply(j.File, j.Card.Network, j.Account, result.Id, result.Publications);
+                    bool good = result.Publications.Count > 0 && result.Publications.All(x => x.Status is "published" or "drafted");
+                    if (good) ok++;
+                    j.Card.SetOutcome(string.Join("; ", result.Publications.Select(x => $"{x.Account ?? j.Account}: {StatusText(x.Status)}{(x.Error is null ? "" : " - " + x.Error)}")), good ? Theme.Success : Theme.Warning);
+                    Log($"galiluna #{result.Id} \"{j.Text.Title}\" ({j.Card.Title}, {j.Account}): " + string.Join("; ", result.Publications.Select(x => $"{x.Account ?? x.Network} {x.Status}{(x.Error is null ? "" : " - " + x.Error)}")));
                 }
-                item.SubItems[2].Text = Describe(file);
-                if (!cancelled) item.Checked = false;
-                Saved();
+                catch (OperationCanceledException)
+                {
+                    // Stopped before galiluna answered: if the upload had finished, galiluna may still post it.
+                    j.Card.SetOutcome($"{j.Account}: cancelled (if the upload had finished, galiluna may still have posted it; check the account)", Theme.Warning);
+                    Log($"galiluna \"{j.File.Title}\" ({j.Card.Title}, {j.Account}): cancelled by the user.");
+                }
+                catch (Exception ex)
+                {
+                    Apply(j.File, j.Card.Network, j.Account, null, new[] { new GaliLunaClient.Publication { Network = j.Card.Network, Account = j.Account, Status = "failed", Error = ex.Message } });
+                    j.Card.SetOutcome($"{j.Account}: failed - {ex.Message}", Theme.Danger);
+                    Log($"galiluna \"{j.File.Title}\" ({j.Card.Title}, {j.Account}): {ex.Message}");
+                }
+                finally
+                {
+                    _inFlight.Remove(j.Key);
+                    if (!j.Item.ListView?.IsDisposed ?? false) j.Item.SubItems[2].Text = Describe(j.File);
+                    Saved();
+                }
             }
-            _summary.Text = cancelled
-                ? $"Publishing cancelled after {ok} publication{(ok == 1 ? "" : "s")}."
-                : $"{ok}/{total} publication{(total == 1 ? "" : "s")} succeeded. The Published column shows each account.";
-            _summary.ForeColor = cancelled ? Theme.Warning : ok == total ? Theme.Success : Theme.Warning;
+            Log($"Publishing finished: {ok}/{jobs.Count} upload(s) succeeded.");
         }
         finally
         {
-            _busy = false;
-            _publishCts?.Dispose(); _publishCts = null;
-            var keep = _summary.ForeColor;
+            foreach (var j in jobs) _inFlight.Remove(j.Key);
+            _running--;
+            if (_running == 0) { _publishCts?.Dispose(); _publishCts = null; }
             UpdateButtons();
-            ShowSelected();
-            _summary.ForeColor = keep;
+            if (_running == 0) ShowSelected();
         }
     }
 
@@ -542,25 +534,7 @@ public sealed class PublishPanel : UserControl
         private readonly PublishPanel _owner;
         private readonly GaliLunaClient.Accounts _accounts;
         private readonly Dictionary<CheckBox, int> _boxes = new();
-        private readonly Dictionary<CheckBox, string> _boxKeys = new();
-        private readonly Dictionary<string, ComboBox> _langs = new();
 
-        /// <summary>"Original / English / Both": which of the short's videos this account receives (remembered).</summary>
-        private ComboBox LanguagePicker(string key)
-        {
-            var c = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170, Margin = new Padding(0, 1, 0, 2) };
-            c.Items.AddRange(new object[] { "Original videos", "English videos", "Both" });
-            c.SelectedIndex = _owner.GetAccountLanguage(key) switch { "original" => 0, "en" => 1, _ => 2 };
-            c.SelectedIndexChanged += (_, _) => { _owner.SetAccountLanguage(key, c.SelectedIndex switch { 0 => "original", 1 => "en", _ => "both" }); _owner.UpdateButtons(); };
-            _langs[key] = c;
-            return c;
-        }
-
-        private bool Takes(string key, string? fileLanguage)
-        {
-            if (!_langs.TryGetValue(key, out var c)) return true;
-            return c.SelectedIndex == 2 || (c.SelectedIndex == 1) == (fileLanguage == "en");
-        }
         private readonly ComboBox _privacy = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top };
         private readonly ComboBox _mode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top };
         private readonly Label _modeHint = new() { AutoSize = true, ForeColor = Color.DimGray };
@@ -603,7 +577,6 @@ public sealed class PublishPanel : UserControl
                 if (_privacy.Items.Count > 0) _privacy.SelectedIndex = 0;
                 _privacy.Enabled = false;
                 _mode.SelectedIndexChanged += (_, _) => { _privacy.Enabled = _mode.SelectedIndex == 1; UpdateModeHint(); owner.UpdateButtons(); };
-                Add("Videos", LanguagePicker("tiktok"));
                 Add("How", _mode);
                 Add("Visibility", _privacy);
                 Add("", _modeHint);
@@ -614,14 +587,10 @@ public sealed class PublishPanel : UserControl
                 var list = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty, BackColor = Theme.Elevated };
                 foreach (var a in yt ? accounts.Youtube.Channels : accounts.Instagram)
                 {
-                    var accountRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty, BackColor = Theme.Elevated };
-                    var box = new CheckBox { Text = a.Label, AutoSize = true, Checked = true, Margin = new Padding(0, 4, 10, 2), MinimumSize = new Size(190, 0) };
+                    var box = new CheckBox { Text = a.Label, AutoSize = true, Checked = false, Margin = new Padding(0, 2, 0, 2) };
                     box.CheckedChanged += (_, _) => owner.UpdateButtons();
-                    accountRow.Controls.Add(box);
-                    accountRow.Controls.Add(LanguagePicker($"{network}:{a.Id}"));
-                    list.Controls.Add(accountRow);
+                    list.Controls.Add(box);
                     _boxes[box] = a.Id;
-                    _boxKeys[box] = $"{network}:{a.Id}";
                 }
                 Add(yt ? "Channels" : "Accounts", list);
                 if (yt)
@@ -690,24 +659,23 @@ public sealed class PublishPanel : UserControl
         /// One request per ticked account (or one for TikTok), each with only that account as target, so the
         /// outcome of every account shows as soon as galiluna answers for it instead of after the whole batch.
         /// </summary>
-        /// <param name="fileLanguage">null for an original-language file, "en" for the English one: only accounts set to take it are returned.</param>
-        public List<(string Account, GaliLunaClient.SendOptions Options)> Sends(string? fileLanguage = null)
+        /// <summary>One request per ticked account (or one for TikTok), so each account's result shows as soon as it lands.</summary>
+        public List<(string Account, GaliLunaClient.SendOptions Options)> Sends()
         {
             var none = Array.Empty<int>();
             var list = new List<(string, GaliLunaClient.SendOptions)>();
             switch (Network)
             {
                 case "instagram":
-                    foreach (var kv in _boxes.Where(kv => kv.Key.Checked && Takes(_boxKeys[kv.Key], fileLanguage)))
+                    foreach (var kv in _boxes.Where(kv => kv.Key.Checked))
                         list.Add((kv.Key.Text, new GaliLunaClient.SendOptions(new[] { kv.Value }, "off", null, false, none, "public")));
                     break;
                 case "youtube":
-                    foreach (var kv in _boxes.Where(kv => kv.Key.Checked && Takes(_boxKeys[kv.Key], fileLanguage)))
+                    foreach (var kv in _boxes.Where(kv => kv.Key.Checked))
                         list.Add((kv.Key.Text, new GaliLunaClient.SendOptions(none, "off", null, false, new[] { kv.Value }, _privacy.SelectedItem as string ?? "public")));
                     break;
                 default:
-                    if (Takes("tiktok", fileLanguage))
-                        list.Add((_accounts.Tiktok?.Label ?? "TikTok", new GaliLunaClient.SendOptions(none, _mode.SelectedIndex == 1 ? "direct" : "drafts", _privacy.SelectedItem as string, false, none, "public")));
+                    list.Add((_accounts.Tiktok?.Label ?? "TikTok", new GaliLunaClient.SendOptions(none, _mode.SelectedIndex == 1 ? "direct" : "drafts", _privacy.SelectedItem as string, false, none, "public")));
                     break;
             }
             return list;
