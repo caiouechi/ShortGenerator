@@ -18,7 +18,7 @@ public sealed class TranslateDialog : Form
     private readonly FancyButton _import = new() { Text = "Import", Width = 110 };
     private readonly FancyButton _skip = new() { Text = "Skip for now", Width = 130 };
     private readonly FancyButton _cancel = new() { Text = "Cancel", Width = 100 };
-    private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(600, 0), ForeColor = Color.DimGray };
+    private readonly Label _status = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 8, 0, 0) };
     private CancellationTokenSource? _cts;
 
     /// <summary>What happened: translated lines / shorts and lines the answer left out.</summary>
@@ -29,45 +29,58 @@ public sealed class TranslateDialog : Form
     {
         _job = job; _claude = claude;
         Text = "Translate to English";
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false; MinimizeBox = false;
+        // Resizable: the answer box grows with the window, the text wraps to whatever width it has.
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MaximizeBox = true; MinimizeBox = false;
+        ShowIcon = false; ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(660, 560);
+        ClientSize = new Size(700, 580);
+        MinimumSize = new Size(580, 480);
         BackColor = Theme.Bg;
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(22, 18, 22, 16) };
-        for (int i = 0; i < 6; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        // one column exactly as wide as the window, never as wide as its widest child
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (int i = 0; i < 7; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles[4] = new RowStyle(SizeType.Percent, 100);
         root.Controls.Add(new Label { Text = "English captions and post text", AutoSize = true, Font = Theme.HeadingFont(12f), ForeColor = Theme.Heading, Margin = new Padding(0, 0, 0, 4) }, 0, 0);
         int n = job.Groups.Count;
         var what = $"{n} short{(n == 1 ? "" : "s")}, each with its whole transcript ({job.LineCount} caption line{(job.LineCount == 1 ? "" : "s")} in total) and its title, caption and hashtags" +
                    ". Only the shorts you are about to generate are translated; you can fix any English line later in Edit & preview.";
-        root.Controls.Add(new Label { Text = what, AutoSize = true, MaximumSize = new Size(610, 0), ForeColor = Theme.TextSecondary, Margin = new Padding(0, 0, 0, 14), UseMnemonic = false }, 0, 1);
+        var whatLabel = new Label { Text = what, AutoSize = true, ForeColor = Theme.TextSecondary, Margin = new Padding(0, 0, 0, 14), UseMnemonic = false };
+        root.Controls.Add(whatLabel, 0, 1);
 
-        var routes = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 8) };
+        var routes = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Margin = new Padding(0, 0, 0, 8) };
         _useClaude.Margin = new Padding(0, 0, 10, 0);
         if (claude is not null) routes.Controls.Add(_useClaude);
         routes.Controls.Add(_copy);
         root.Controls.Add(routes, 0, 2);
-        root.Controls.Add(new Label
+        var howLabel = new Label
         {
             Text = claude is not null ? "Claude translates in one step. Or copy the prompt to ChatGPT and paste its answer below."
                                       : "Copy the prompt, paste it into ChatGPT, then paste its answer below and click Import. (Add an Anthropic key in Settings to translate in one click.)",
-            AutoSize = true, MaximumSize = new Size(610, 0), ForeColor = Theme.TextMuted, Margin = new Padding(0, 0, 0, 8)
-        }, 0, 3);
+            AutoSize = true, ForeColor = Theme.TextMuted, Margin = new Padding(0, 0, 0, 8)
+        };
+        root.Controls.Add(howLabel, 0, 3);
         _answer.Font = Theme.Mono(9f);
         root.Controls.Add(_answer, 0, 4);
 
-        var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 10, 0, 0) };
-        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        bottom.Controls.Add(_status, 0, 0);
-        var buttons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-        foreach (var b in new[] { _paste, _import, _skip, _cancel }) { b.Margin = new Padding(8, 0, 0, 0); buttons.Controls.Add(b); }
-        bottom.Controls.Add(buttons, 1, 0);
-        root.Controls.Add(bottom, 0, 5);
+        // status on its own line under the answer, the buttons right-aligned below it (they wrap on a narrow window)
+        root.Controls.Add(_status, 0, 5);
+        var buttons = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Margin = new Padding(0, 10, 0, 0) };
+        foreach (var b in new[] { _cancel, _skip, _import, _paste }) { b.Margin = new Padding(8, 0, 0, 4); buttons.Controls.Add(b); }
+        root.Controls.Add(buttons, 0, 6);
         Controls.Add(root);
+
+        // labels wrap to the real width of the window (a fixed MaximumSize overflowed at 125 % scaling)
+        void Wrap()
+        {
+            var w = Math.Max(200, root.ClientSize.Width - root.Padding.Horizontal);
+            foreach (var l in new[] { whatLabel, howLabel, _status }) l.MaximumSize = new Size(w, 0);
+        }
+        root.SizeChanged += (_, _) => Wrap();
+        Wrap();
 
         _copy.Click += (_, _) =>
         {
