@@ -202,6 +202,9 @@ public static class Theme
                 b.ForeColor = TextSecondary;
                 break;
             case TextBox tb:
+                // multiline boxes hold whole AI answers and transcripts: lift the 32,767-character default limit,
+                // which silently cut long pastes (a 16-short translation) and broke the JSON
+                if (tb.Multiline) tb.MaxLength = 0;
                 if (tb.Parent is RoundedField) { tb.ForeColor = Text; break; } // already framed by the field
                 tb.BorderStyle = BorderStyle.FixedSingle;
                 tb.BackColor = tb.ReadOnly ? SurfaceSoft : Surface;

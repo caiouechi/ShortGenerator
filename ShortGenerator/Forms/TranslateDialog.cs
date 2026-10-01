@@ -11,7 +11,7 @@ public sealed class TranslateDialog : Form
 {
     private readonly CaptionTranslator.Job _job;
     private readonly Func<CancellationToken, Task<string>>? _claude;
-    private readonly TextBox _answer = new() { Multiline = true, ScrollBars = ScrollBars.Vertical, AcceptsReturn = true, Dock = DockStyle.Fill, PlaceholderText = "Paste ChatGPT's JSON answer here, then click Import." };
+    private readonly TextBox _answer = new() { Multiline = true, ScrollBars = ScrollBars.Vertical, AcceptsReturn = true, Dock = DockStyle.Fill, MaxLength = 0, PlaceholderText = "Paste ChatGPT's JSON answer here, then click Import." };
     private readonly FancyButton _useClaude = new() { Text = "Translate with Claude", Width = 210, Height = 38, Glyph = "" };
     private readonly FancyButton _copy = new() { Text = "Copy prompt for ChatGPT", Width = 210, Height = 34, Glyph = "" };
     private readonly FancyButton _paste = new() { Text = "Paste", Width = 90 };

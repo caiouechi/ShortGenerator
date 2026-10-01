@@ -125,7 +125,7 @@ public sealed class MainForm : Form
     private readonly FancyButton _gptPaste = new() { Text = "Paste from clipboard", Width = 150 };
     private readonly FancyButton _gptImport = new() { Text = "Import suggestions", Width = 170 };
     private readonly TextBox _gptPrompt = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill };
-    private readonly TextBox _gptAnswer = new() { Multiline = true, ScrollBars = ScrollBars.Both, AcceptsReturn = true, AcceptsTab = true, Dock = DockStyle.Fill,
+    private readonly TextBox _gptAnswer = new() { Multiline = true, MaxLength = 0, ScrollBars = ScrollBars.Both, AcceptsReturn = true, AcceptsTab = true, Dock = DockStyle.Fill,
         PlaceholderText = "Paste ChatGPT's JSON answer here, then click 'Import suggestions'." };
 
     // empty states (Higgsfield illustrations)
