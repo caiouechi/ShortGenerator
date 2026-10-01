@@ -167,6 +167,59 @@ public sealed class ShortRenderer
         return f;
     }
 
+    /// <summary>How long the cover image opens the TikTok copy; TikTok's cover is then pointed at its middle.</summary>
+    public const double CoverLeadSeconds = 0.1;
+
+    /// <summary>
+    /// TikTok takes no cover image through its API, only the time of a frame inside the video. This makes a copy of
+    /// the short that opens with the cover image for <see cref="CoverLeadSeconds"/> (three frames at 30 fps, the audio
+    /// shifted to match), so TikTok's cover can point at it. Same encode as the render. Returns the copy's path, in a
+    /// temporary folder under the same file name (galiluna names the stored file after it); the caller deletes it.
+    /// </summary>
+    public async Task<string> MakeCoverLeadCopyAsync(string videoPath, string coverPath, CancellationToken ct)
+    {
+        var (w, h, _) = await _ffmpeg.ProbeAsync(videoPath, ct);
+        if (w <= 0 || h <= 0) (w, h) = (1080, 1920);
+        var dir = Path.Combine(Path.GetTempPath(), "ShortGenerator", "tiktok-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var outPath = Path.Combine(dir, Path.GetFileName(videoPath));
+        int delayMs = (int)Math.Round(CoverLeadSeconds * 1000);
+        string Graph(bool audio) =>
+            $"[1:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,fps=30,format=yuv420p[c];" +
+            $"[0:v]setsar=1,fps=30,format=yuv420p[v];[c][v]concat=n=2:v=1:a=0[ov]" +
+            (audio ? $";[0:a]adelay={delayMs}:all=1[oa]" : "");
+        string crf = "20";
+        IEnumerable<string> Args(bool audio)
+        {
+            var a = new List<string>
+            {
+                "-y", "-i", videoPath, "-loop", "1", "-framerate", "30", "-t", F(CoverLeadSeconds), "-i", coverPath,
+                "-filter_complex", Graph(audio), "-map", "[ov]",
+            };
+            if (audio) a.AddRange(new[] { "-map", "[oa]", "-c:a", "aac", "-b:a", "160k" });
+            a.AddRange(new[] { "-c:v", "libx264", "-preset", "fast", "-crf", crf, "-pix_fmt", "yuv420p", "-r", "30", "-movflags", "+faststart", outPath });
+            return a;
+        }
+        bool audio = true;
+        try
+        {
+            await _ffmpeg.RunAsync(Args(audio), null, null, 0, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // a short without an audio track: same copy, video only
+            audio = false;
+            await _ffmpeg.RunAsync(Args(audio), null, null, 0, ct);
+        }
+        // galiluna takes up to 48 MB; a re-encode can land a little above a file that was close to it
+        if (new FileInfo(outPath).Length > 46L * 1024 * 1024)
+        {
+            crf = "24";
+            await _ffmpeg.RunAsync(Args(audio), null, null, 0, ct);
+        }
+        return outPath;
+    }
+
     /// <summary>The frame time (seconds into the short) the cover uses, or null when it is a custom image.</summary>
     public static double? CoverFrameTime(ShortSuggestion s, string? language)
     {

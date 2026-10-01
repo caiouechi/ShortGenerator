@@ -380,6 +380,7 @@ public sealed class MainForm : Form
         _publishPanel.Log = Log;
         _publishPanel.OpenSettings = OpenSettings;
         _publishPanel.Delete = DeleteGenerated;
+        _publishPanel.MakeCoverLeadCopy = (video, cover, ct) => _renderer.MakeCoverLeadCopyAsync(video, cover, ct);
         _publishPanel.OpenSignIn = () =>
         {
             using var dlg = new GaliLunaSignInForm(_settings);

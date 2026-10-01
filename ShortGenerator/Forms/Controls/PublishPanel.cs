@@ -30,6 +30,9 @@ public sealed class PublishPanel : UserControl
     /// <summary>Deletes a rendered short (file, cover, project entry); MainForm owns the list and the confirmation.</summary>
     [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<GeneratedFile, bool> Delete { get; set; } = _ => false;
+    /// <summary>Makes a copy of the video that opens with the cover image (TikTok takes no cover image, only a frame time).</summary>
+    [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Func<string, string, CancellationToken, Task<string>>? MakeCoverLeadCopy { get; set; }
 
     // header
     private readonly Label _connection = new() { Dock = DockStyle.Top, Height = 48, Padding = new Padding(10, 6, 10, 0), ForeColor = Color.DimGray };
@@ -562,11 +565,31 @@ public sealed class PublishPanel : UserControl
     {
         var ct = j.Cts.Token;
         UpdateQueue();
+        string? tempCopy = null;
         try
         {
+            // TikTok can only show a frame of the video as its cover. When the cover is an image (a custom one, or a
+            // short rendered before frame times were kept), TikTok gets a copy that opens with it for a tenth of a
+            // second, and its cover points there. Drafts get the same copy: TikTok suggests the first frame.
+            string videoPath = j.File.Path;
+            double? coverTime = j.File.CoverTimeSeconds;
+            if (j.Card.Network == "tiktok" && coverTime is null && MakeCoverLeadCopy is not null && j.File.CoverPath is { } cover && File.Exists(cover))
+            {
+                SetJob(j, "Adding the cover for TikTok...", Theme.Purple);
+                try
+                {
+                    tempCopy = await MakeCoverLeadCopy(j.File.Path, cover, ct);
+                    videoPath = tempCopy;
+                    coverTime = ShortRenderer.CoverLeadSeconds / 2;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Log($"TikTok cover for \"{j.File.Title}\" could not be added ({ex.Message}); sending the video without it.");
+                }
+            }
             SetJob(j, "Uploading...", Theme.Purple);
             var progress = new Progress<double>(v => { if (j.State == "running") SetJob(j, v < 1 ? $"Uploading {(int)(v * 100)}%" : "Publishing (can take a few minutes)...", Theme.Purple); });
-            var result = await client.SendAsync(j.File.Path, j.Text.Title, j.Text.Description, j.Text.Tags, j.Options, progress, ct, j.File.CoverPath, j.File.CoverTimeSeconds);
+            var result = await client.SendAsync(videoPath, j.Text.Title, j.Text.Description, j.Text.Tags, j.Options, progress, ct, j.File.CoverPath, coverTime);
             // Ask again while TikTok is still working, up to ~5 minutes.
             for (int attempt = 0; attempt < 20 && result.AnyProcessing; attempt++)
             {
@@ -597,6 +620,7 @@ public sealed class PublishPanel : UserControl
         }
         finally
         {
+            if (tempCopy is not null) { try { Directory.Delete(Path.GetDirectoryName(tempCopy)!, recursive: true); } catch { } }
             _running--;
             _inFlight.Remove(j.Key);
             if (!j.Item.ListView?.IsDisposed ?? false) j.Item.SubItems[2].Text = Describe(j.File);
