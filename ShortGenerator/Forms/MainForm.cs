@@ -55,6 +55,13 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _clipStart = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
     private readonly NumericUpDown _clipEnd = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 80, Maximum = 100000 };
     private readonly FancyButton _renderPreview = new() { Text = "Render preview", Width = 160 };
+    // render queue (Edit & preview, bottom right): Render preview adds the short here; one render runs at a time
+    private readonly ListView _renders = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = true };
+    private readonly Label _rendersCounts = new() { AutoSize = true, ForeColor = Theme.TextMuted, Margin = new Padding(0, 12, 0, 0) };
+    private readonly Label _rendersEmpty = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Theme.TextMuted, BackColor = Theme.Elevated,
+        Text = "No renders yet. Render preview adds the short here; while one renders you can select another short and queue it." };
+    private readonly FancyButton _renderCancel = new() { Text = "Cancel selected", Width = 150, Enabled = false, Glyph = "\uE711" };
+    private readonly FancyButton _renderClear = new() { Text = "Clear finished", Width = 140, Enabled = false, Glyph = "\uE894" };
     // cover / thumbnail for the short
     private readonly PictureBox _coverPreview = new() { Width = 96, Height = 170, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(19, 24, 52), BorderStyle = BorderStyle.None };
     private readonly FancyButton _setCover = new() { Text = "Use this frame", Width = 170, Glyph = "" };
@@ -747,7 +754,8 @@ public sealed class MainForm : Form
         Theme.FillColumn(_layers, 2);
         foreach (var st in ImageOverlay.Styles) _layerStyle.Items.Add(st.Name);
         foreach (var an in ImageOverlay.Animations) _layerAnim.Items.Add(an.Name);
-        var props = new TableLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, ColumnCount = 4, Padding = new Padding(0, 8, 0, 0) };
+        var props = new TableLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, ColumnCount = 4, Padding = new Padding(0, 8, 0, 0), Visible = false };
+        _layerPropsPanel = props; // shown only while an image is selected, so an empty Images table leaves room for the renders
         props.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         props.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         props.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -777,7 +785,42 @@ public sealed class MainForm : Form
         layersHost.Controls.Add(props);
         layersHost.Controls.Add(layerBar);
         // AutoSize off + fixed height lets the hint wrap onto a second line instead of being cut off
-        layersHost.Controls.Add(new Label { Text = "Images. Right-click a transcript line to add one. On the video: drag to move, scroll to resize, Shift+scroll to rotate.", Dock = DockStyle.Top, Height = 58, AutoSize = false, ForeColor = Color.DimGray, UseMnemonic = false });
+        layersHost.Controls.Add(new Label { Text = "Images. Right-click a transcript line to add one. On the video: drag to move, scroll to resize, Shift+scroll to rotate.", Dock = DockStyle.Top, Height = 40, AutoSize = false, ForeColor = Color.DimGray, UseMnemonic = false });
+
+        // render queue under the images
+        _renders.Columns.Add("Short", 200);
+        _renders.Columns.Add("Captions", 110);
+        _renders.Columns.Add("Status", 200);
+        Theme.FillColumn(_renders, 2);
+        var rendersHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 6, 0, 6) };
+        var rendersHead = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, Margin = Padding.Empty, Padding = new Padding(0, 0, 0, 6) };
+        rendersHead.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        rendersHead.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        rendersHead.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        rendersHead.Controls.Add(new Label { Text = "Renders", AutoSize = true, Font = Theme.HeadingFont(10.5f), ForeColor = Theme.Heading, Margin = new Padding(0, 8, 10, 0) }, 0, 0);
+        rendersHead.Controls.Add(_rendersCounts, 1, 0);
+        var rendersButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 0) };
+        rendersButtons.Controls.Add(_renderCancel);
+        _renderClear.Margin = Padding.Empty;
+        rendersButtons.Controls.Add(_renderClear);
+        rendersHead.Controls.Add(rendersButtons, 2, 0);
+        var rendersBody = new Panel { Dock = DockStyle.Fill };
+        rendersBody.Controls.Add(_renders);
+        rendersBody.Controls.Add(_rendersEmpty);
+        _rendersEmpty.BringToFront();
+        rendersHost.Controls.Add(rendersBody);
+        rendersHost.Controls.Add(rendersHead);
+        var bottomSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
+        bool bottomSet = false;
+        bottomSplit.SizeChanged += (_, _) =>
+        {
+            if (bottomSet || bottomSplit.Height < 240) return;
+            bottomSet = true;
+            bottomSplit.Panel1MinSize = 110; bottomSplit.Panel2MinSize = 110;
+            bottomSplit.SplitterDistance = Math.Max(110, (int)(bottomSplit.Height * 0.5));
+        };
+        bottomSplit.Panel1.Controls.Add(layersHost);
+        bottomSplit.Panel2.Controls.Add(rendersHost);
         var rightSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
         bool rightSet = false;
         rightSplit.SizeChanged += (_, _) =>
@@ -788,7 +831,7 @@ public sealed class MainForm : Form
             rightSplit.SplitterDistance = (int)(rightSplit.Height * 0.52);
         };
         rightSplit.Panel1.Controls.Add(right);
-        rightSplit.Panel2.Controls.Add(layersHost);
+        rightSplit.Panel2.Controls.Add(bottomSplit);
 
         // center: player + controls
         var center = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6) };
@@ -1101,6 +1144,18 @@ public sealed class MainForm : Form
         _clipStart.ValueChanged += async (_, _) => await ApplyClipTimesAsync();
         _clipEnd.ValueChanged += async (_, _) => await ApplyClipTimesAsync();
         _renderPreview.Click += async (_, _) => await RenderEditorPreviewAsync();
+        _renders.SelectedIndexChanged += (_, _) => UpdateRenders();
+        _renderCancel.Click += (_, _) => { foreach (var j in SelectedRenders().ToList()) CancelRender(j); };
+        _renderClear.Click += (_, _) =>
+        {
+            foreach (var j in _renderJobs.Where(j => !j.IsOpen).ToList()) { _renderJobs.Remove(j); _renders.Items.Remove(j.Row); }
+            UpdateRenders();
+        };
+        _renders.DoubleClick += (_, _) =>
+        {
+            if (SelectedRenders().FirstOrDefault() is { State: "done" } j)
+                foreach (var g in _generated.Where(g => (g.ShortTitle ?? g.Title) == j.Short.Title && File.Exists(g.Path) && g.When >= j.Started)) OpenPath(g.Path);
+        };
         _editSegments.CellEndEdit += (_, e) => OnSegmentEdited(e.RowIndex, e.ColumnIndex);
         _editSegments.CellDoubleClick += async (_, e) => { if (e.RowIndex >= 0 && e.ColumnIndex != 2) await PlayFromRowAsync(e.RowIndex); };
         // one click on a transcript line jumps the player there (double-click plays from it)
@@ -2070,9 +2125,12 @@ public sealed class MainForm : Form
         RefreshKeyframeList(); // image marks on the scrub bar
     }
 
+    private TableLayoutPanel? _layerPropsPanel;
+
     private void ShowLayerProps(ImageOverlay? o)
     {
         _loadingLayer = true;
+        if (_layerPropsPanel is not null) _layerPropsPanel.Visible = o is not null;
         foreach (Control c in new Control[] { _layerFrom, _layerTo, _layerSize, _layerRot, _layerStyle, _layerAnim, _removeLayer }) c.Enabled = o is not null;
         if (o is not null)
         {
@@ -2632,8 +2690,136 @@ public sealed class MainForm : Form
             if (langs.Count == 0) return;
         }
         // Render preview makes the real files: saved in the shorts folder with their covers and post texts and
-        // listed on Publish, one per language; the videos open once all of them are rendered.
-        await GenerateAsync(new[] { s }, langs, openVideos: true);
+        // listed on Publish, one per language. It goes into the render queue, so another short can be queued
+        // while this one renders; the videos open as each render finishes.
+        EnqueueRender(s, langs);
+    }
+
+    // ------------------------------------------------------------------ render queue
+
+    /// <summary>One short to render in the given caption languages. It renders the short as it is when its turn comes.</summary>
+    private sealed class RenderJob
+    {
+        public required ShortSuggestion Short { get; init; }
+        public required List<string> Langs { get; set; }
+        public ListViewItem Row { get; set; } = null!;
+        /// <summary>queued | running | done | failed | cancelled</summary>
+        public string State { get; set; } = "queued";
+        public DateTime Started { get; set; }
+        public bool IsOpen => State is "queued" or "running";
+    }
+
+    private readonly List<RenderJob> _renderJobs = new();
+    private RenderJob? _currentRender;
+    /// <summary>How the last RunBusyAsync ended: done | cancelled | failed.</summary>
+    private string _lastBusyOutcome = "";
+
+    private static string LangsText(IEnumerable<string> langs) => string.Join(" + ", langs.Select(l => l == "en" ? "English" : "Original"));
+
+    private void EnqueueRender(ShortSuggestion s, List<string> langs)
+    {
+        // the same short still waiting: just update what it renders, never twice in a row
+        if (_renderJobs.FirstOrDefault(j => j.State == "queued" && ReferenceEquals(j.Short, s)) is { } waiting)
+        {
+            waiting.Langs = langs.Union(waiting.Langs).ToList();
+            waiting.Row.SubItems[1].Text = LangsText(waiting.Langs);
+            Log($"\"{s.Title}\" is already waiting in the render queue; it renders {LangsText(waiting.Langs)}.");
+            return;
+        }
+        var job = new RenderJob { Short = s, Langs = langs };
+        job.Row = new ListViewItem(new[] { s.Title, LangsText(langs), "Waiting" }) { Tag = job, ForeColor = Theme.TextMuted };
+        _renderJobs.Add(job);
+        _renders.Items.Add(job.Row);
+        Log($"Render queued: \"{s.Title}\" ({LangsText(langs)}).");
+        PumpRenders();
+        UpdateRenders();
+    }
+
+    private void SetRenderRow(RenderJob j, string status, Color color)
+    {
+        if (j.Row.ListView is null) return;
+        j.Row.SubItems[2].Text = status;
+        j.Row.ForeColor = color;
+    }
+
+    /// <summary>Starts the next waiting render when nothing else runs (a transcription, a download or another render).</summary>
+    private void PumpRenders()
+    {
+        if (_currentRender is not null || IsDisposed) return;
+        var next = _renderJobs.FirstOrDefault(j => j.State == "queued");
+        if (next is null) return;
+        if (_cts is not null)
+        {
+            foreach (var j in _renderJobs.Where(j => j.State == "queued")) SetRenderRow(j, $"Waiting for {(_busyTitle.Length > 0 ? _busyTitle.ToLowerInvariant() : "the current task")}", Theme.TextMuted);
+            return; // RunBusyAsync pumps again when it ends
+        }
+        _currentRender = next;
+        next.State = "running";
+        next.Started = DateTime.Now;
+        SetRenderRow(next, "Starting...", Theme.Purple);
+        _ = RunRenderAsync(next);
+    }
+
+    private async Task RunRenderAsync(RenderJob j)
+    {
+        UpdateRenders();
+        try
+        {
+            if (_video is null || _suggestions is null || !_suggestions.Shorts.Contains(j.Short))
+            {
+                j.State = "failed";
+                SetRenderRow(j, "Failed: the short is no longer in this project", Theme.Danger);
+                return;
+            }
+            _lastBusyOutcome = ""; // GenerateAsync can stop before it starts (no transcript, say)
+            await GenerateAsync(new[] { j.Short }, j.Langs, openVideos: true);
+            var made = _generated.Count(g => (g.ShortTitle ?? g.Title) == j.Short.Title && g.When >= j.Started && File.Exists(g.Path));
+            if (_lastBusyOutcome == "cancelled") { j.State = "cancelled"; SetRenderRow(j, "Cancelled", Theme.Warning); }
+            else if (made > 0 && _lastBusyOutcome == "done")
+            {
+                j.State = "done";
+                SetRenderRow(j, $"Done: {made} video{(made == 1 ? "" : "s")} (double-click to play), listed on Publish", Theme.Success);
+            }
+            else { j.State = "failed"; SetRenderRow(j, "Failed: see Activity for the details", Theme.Danger); }
+        }
+        catch (Exception ex)
+        {
+            j.State = "failed";
+            SetRenderRow(j, "Failed: " + ex.Message, Theme.Danger);
+        }
+        finally
+        {
+            _currentRender = null;
+            UpdateRenders();
+            PumpRenders();
+        }
+    }
+
+    private void CancelRender(RenderJob j)
+    {
+        if (j.State == "queued") { j.State = "cancelled"; SetRenderRow(j, "Cancelled before it started", Theme.TextMuted); }
+        else if (j.State == "running" && ReferenceEquals(j, _currentRender)) { SetRenderRow(j, "Cancelling...", Theme.Warning); _cts?.Cancel(); }
+        UpdateRenders();
+    }
+
+    private IEnumerable<RenderJob> SelectedRenders() => _renders.SelectedItems.Cast<ListViewItem>().Select(i => i.Tag).OfType<RenderJob>();
+
+    private void UpdateRenders()
+    {
+        int running = _renderJobs.Count(j => j.State == "running"), waiting = _renderJobs.Count(j => j.State == "queued");
+        int done = _renderJobs.Count(j => j.State == "done"), failed = _renderJobs.Count(j => j.State is "failed" or "cancelled");
+        var parts = new List<string>();
+        if (running > 0) parts.Add($"{running} rendering");
+        if (waiting > 0) parts.Add($"{waiting} waiting");
+        if (done > 0) parts.Add($"{done} done");
+        if (failed > 0) parts.Add($"{failed} failed or cancelled");
+        _rendersCounts.Text = string.Join("  ·  ", parts);
+        _rendersCounts.ForeColor = running + waiting > 0 ? Theme.Purple : failed > 0 ? Theme.Danger : Theme.TextMuted;
+        _rendersEmpty.Visible = _renderJobs.Count == 0;
+        _renderCancel.Enabled = SelectedRenders().Any(j => j.IsOpen);
+        _renderClear.Enabled = _renderJobs.Any(j => !j.IsOpen);
+        // the button says what it will do: render now, or join the queue behind a running render
+        _renderPreview.Text = running + waiting > 0 || _cts is not null ? "Add to render queue" : "Render preview";
     }
 
     /// <summary>Dev convenience: shows the Render preview language question for the short in the editor.</summary>
@@ -3004,16 +3190,19 @@ public sealed class MainForm : Form
         {
             await work(_cts.Token);
             _status.Text = title + " - done";
+            _lastBusyOutcome = "done";
         }
         catch (OperationCanceledException)
         {
             Log($"{title} cancelled.");
             _status.Text = title + " - cancelled";
+            _lastBusyOutcome = "cancelled";
         }
         catch (Exception ex)
         {
             Log($"ERROR: {ex.Message}");
             _status.Text = title + " - failed";
+            _lastBusyOutcome = "failed";
             AppDialog.Show(this, ex.Message, title + " failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
@@ -3021,6 +3210,9 @@ public sealed class MainForm : Form
             _cts.Dispose();
             _cts = null;
             SetBusy(false, "");
+            // a render waiting behind this task starts now (after the current call stack unwinds)
+            if (_currentRender is null && _renderJobs.Any(j => j.State == "queued") && IsHandleCreated) BeginInvoke(PumpRenders);
+            if (IsHandleCreated) BeginInvoke(UpdateRenders);
         }
     }
 
@@ -3053,6 +3245,8 @@ public sealed class MainForm : Form
         int pct = (int)Math.Clamp(p * 100, 0, 100);
         _progress.Value = pct;
         _status.Text = _busyTitle.Length == 0 ? $"{pct}%" : $"{_busyTitle} - {pct}%";
+        if (_currentRender is { State: "running" } r)
+            SetRenderRow(r, $"Rendering{(_busyTitle.EndsWith("(EN)", StringComparison.Ordinal) ? " English" : r.Langs.Count > 1 ? " original" : "")} {pct}%", Theme.Purple);
     });
 
     private void Log(string message)
