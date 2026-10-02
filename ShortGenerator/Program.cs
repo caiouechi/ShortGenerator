@@ -40,7 +40,7 @@ internal static class Program
                     details: new[] { "Guardiola apareceu no quarto de Neymar de madrugada\n      to Instagram @futebolbrasileiroclipes", "[EN] Guardiola showed up at Neymar's hotel room\n      to TikTok Al Samurai Sensei (direct)" },
                     notes: new[] { "Posts go live right away and are visible to followers.", "Uploads run in the queue on the left; you can keep working and publish other videos meanwhile." });
             if (Array.IndexOf(args, "--settings") >= 0)
-                using (var dlg = new SettingsForm(SettingsStore.Load())) dlg.ShowDialog(form);
+                form.OpenSettingsPreview();
         };
         Application.Run(form);
     }

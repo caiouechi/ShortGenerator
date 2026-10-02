@@ -718,6 +718,9 @@ public sealed class PublishPanel : UserControl
         await RefreshStorageAsync();
     }
 
+    /// <summary>True while an upload waits or runs: the files on disk must stay until it is done.</summary>
+    public bool IsPublishing => _jobs.Any(j => j.IsOpen);
+
     private IEnumerable<PublishJob> SelectedJobs() => _queue.SelectedItems.Cast<ListViewItem>().Select(i => i.Tag).OfType<PublishJob>();
 
     /// <summary>Counts in the queue header and the queue's buttons.</summary>

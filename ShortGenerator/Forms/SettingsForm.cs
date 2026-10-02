@@ -25,6 +25,16 @@ public sealed class SettingsForm : Form
     private readonly FancyButton _glSignIn = new() { Text = "Sign in", Width = 120, Glyph = "" };
     private readonly FancyButton _glRefresh = new() { Text = "Refresh", Width = 110, Glyph = "" };
     private readonly FancyButton _glSignOut = new() { Text = "Sign out", Width = 110 };
+    // disk space: rendered shorts, covers and generated thumbnails on this computer
+    private readonly Label _diskStatus = new() { AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(440, 0) };
+    private readonly FancyButton _diskClean = new() { Text = "Delete rendered shorts and thumbnails", AutoSize = true, Glyph = "\uE74D", Kind = ButtonKind.Danger };
+
+    /// <summary>Describes what the clean-up would delete (MainForm knows the projects); null hides the section.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public Func<string>? DescribeLocalFiles { get; set; }
+    /// <summary>Asks and deletes; returns false when the user said no or nothing could run.</summary>
+    [System.ComponentModel.Browsable(false), System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public Func<IWin32Window, bool>? CleanLocalFiles { get; set; }
 
     public SettingsForm(AppSettings settings)
     {
@@ -39,7 +49,7 @@ public sealed class SettingsForm : Form
 
         // the table grows with its rows; the host scrolls when the screen is short
         var host = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
-        var table = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+        var table = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(0, 0, 0, 16) };
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
@@ -92,6 +102,14 @@ public sealed class SettingsForm : Form
         glRow.Controls.Add(_glSignOut);
         Add("", glRow);
 
+        // ---- disk space ----
+        Add("", new Label { Text = "Disk space", AutoSize = true, Font = Theme.Body(10.5f), ForeColor = Theme.Heading, Margin = new Padding(0, 14, 0, 0) });
+        Add("", new Label { Text = "Deletes every rendered short, its exported cover, the thumbnail images your shorts use (generated or picked), and temporary files. Downloaded videos, transcripts and suggestions stay.", AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(440, 0) });
+        Add("On this computer", _diskStatus);
+        _diskClean.AutoSize = false;
+        _diskClean.Size = new Size(TextRenderer.MeasureText(_diskClean.Text, _diskClean.Font).Width + 60, 36);
+        Add("", _diskClean);
+
         var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Bottom, Height = 40 };
         var ok = new FancyButton { Text = "Save", Width = 90, DialogResult = DialogResult.OK };
         var cancel = new FancyButton { Text = "Cancel", Width = 90, DialogResult = DialogResult.Cancel };
@@ -125,6 +143,13 @@ public sealed class SettingsForm : Form
             else await RefreshGaliLunaAsync();
         };
         _glRefresh.Click += async (_, _) => await RefreshGaliLunaAsync();
+        _diskClean.Click += (_, _) =>
+        {
+            if (CleanLocalFiles is null) return;
+            CleanLocalFiles(this);
+            ShowDiskStatus();
+        };
+        Shown += (_, _) => ShowDiskStatus();
         _glSignOut.Click += async (_, _) => await SignOutGaliLunaAsync();
         _ = RefreshGaliLunaAsync();
 
@@ -179,6 +204,19 @@ public sealed class SettingsForm : Form
     }
 
     /// <summary>Re-reads the accounts. A 401 means the key was revoked or replaced on galiluna: keep it and ask to sign in again.</summary>
+    private void ShowDiskStatus()
+    {
+        if (DescribeLocalFiles is null) { _diskStatus.Text = ""; _diskClean.Enabled = false; return; }
+        _diskStatus.Text = "Measuring...";
+        try
+        {
+            var text = DescribeLocalFiles();
+            _diskStatus.Text = text;
+            _diskClean.Enabled = !text.StartsWith("Nothing", StringComparison.Ordinal);
+        }
+        catch (Exception ex) { _diskStatus.Text = ex.Message; _diskClean.Enabled = false; }
+    }
+
     private async Task RefreshGaliLunaAsync()
     {
         var client = SettingsStore.CreateGaliLunaClient(_settings);

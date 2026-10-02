@@ -1223,7 +1223,11 @@ public sealed class MainForm : Form
 
     private void OpenSettings()
     {
-        using var dlg = new SettingsForm(_settings);
+        using var dlg = new SettingsForm(_settings)
+        {
+            DescribeLocalFiles = () => DescribeLocal(ScanLocalFiles()),
+            CleanLocalFiles = owner => CleanLocalFiles(owner),
+        };
         if (dlg.ShowDialog(this) == DialogResult.OK)
         {
             _settings = SettingsStore.Load();
@@ -2535,6 +2539,9 @@ public sealed class MainForm : Form
     }
 
     /// <summary>Dev convenience: shows the translation dialog for the ticked shorts without applying anything.</summary>
+    /// <summary>Dev convenience ("--settings"): the real Settings dialog, wired like the side nav opens it.</summary>
+    public void OpenSettingsPreview() => OpenSettings();
+
     public void ShowTranslateDialogPreview()
     {
         if (_transcript is null) return;
@@ -3077,6 +3084,180 @@ public sealed class MainForm : Form
         // Most players ignore a start offset via the shell, so just open the file.
         OpenPath(_video.FilePath);
         Log($"Opened video. Segment starts at {Fmt(start)}.");
+    }
+
+    // ---- disk space: rendered shorts, covers, generated thumbnails, temporary files ----
+
+    /// <summary>What "Delete rendered shorts and thumbnails" removes. Downloaded videos, transcripts and suggestions stay.</summary>
+    /// <param name="Picked">Cover images the user picked for a short (made in ChatGPT, say), wherever they are: only
+    /// the exact files a suggestion points at, named in the confirmation.</param>
+    private sealed record LocalFiles(List<string> Shorts, List<string> Covers, List<string> Thumbnails, List<string> Picked, List<string> Temp, List<string> TempDirs, List<string> Projects)
+    {
+        public IEnumerable<string> AllFiles => Shorts.Concat(Covers).Concat(Thumbnails).Concat(Picked).Concat(Temp);
+    }
+
+    private static long SizeOf(string path) { try { return new FileInfo(path).Length; } catch { return 0; } }
+    private static long SizeOfDir(string dir) { try { return Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Sum(SizeOf); } catch { return 0; } }
+    private static string Bytes(long b) => b >= 1024L * 1024 * 1024 ? $"{b / (1024.0 * 1024 * 1024):0.0} GB" : $"{Math.Max(b > 0 ? 1 : 0, b / (1024 * 1024))} MB";
+
+    /// <summary>Every project next to the downloaded videos (and the open one), and what they and the shorts folders hold.</summary>
+    private LocalFiles ScanLocalFiles()
+    {
+        var cmp = StringComparer.OrdinalIgnoreCase;
+        var shorts = new HashSet<string>(cmp); var covers = new HashSet<string>(cmp); var thumbs = new HashSet<string>(cmp); var picked = new HashSet<string>(cmp);
+        var projects = new HashSet<string>(cmp);
+        void AddProject(string p) { if (File.Exists(p)) projects.Add(p); }
+        if (Directory.Exists(_settings.DownloadFolder))
+            foreach (var p in Directory.EnumerateFiles(_settings.DownloadFolder, "*.shortgen.json", SearchOption.AllDirectories)) AddProject(p);
+        if (_video is not null) AddProject(ProjectPath(_video.FilePath));
+
+        foreach (var p in projects)
+        {
+            ProjectFile? project = null;
+            try { project = JsonSerializer.Deserialize<ProjectFile>(File.ReadAllText(p)); } catch { }
+            if (project is null) continue;
+            foreach (var g in project.Generated ?? new())
+            {
+                if (File.Exists(g.Path)) shorts.Add(g.Path);
+                if (g.CoverPath is { } c && File.Exists(c) && IsOurCover(c)) covers.Add(c);
+            }
+            foreach (var s in project.Suggestions?.Shorts ?? new())
+                foreach (var img in new[] { s.CoverImage, s.CoverImageEn })
+                    if (img is not null && File.Exists(img))
+                        (img.EndsWith(".higgsfield.jpg", StringComparison.OrdinalIgnoreCase) ? thumbs : picked).Add(img);
+            // every Higgsfield thumbnail saved next to the video, even ones no suggestion points at any more
+            var coversDir = Path.Combine(Path.GetDirectoryName(p)!, "covers");
+            if (Directory.Exists(coversDir))
+                foreach (var f in Directory.EnumerateFiles(coversDir, "*.higgsfield.jpg")) thumbs.Add(f);
+        }
+        // Renders no project remembers any more: only inside the per-video folders this app creates in the Shorts
+        // folder (Shorts\<video title>\...), never loose files in it, and never a folder picked on the Generate step,
+        // which could be any folder of the user's.
+        if (!string.IsNullOrWhiteSpace(_settings.OutputFolder) && Directory.Exists(_settings.OutputFolder))
+            foreach (var sub in Directory.EnumerateDirectories(_settings.OutputFolder))
+                foreach (var f in Directory.EnumerateFiles(sub))
+                {
+                    if (f.EndsWith(".cover.jpg", StringComparison.OrdinalIgnoreCase)) covers.Add(f);
+                    else if (f.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase)) shorts.Add(f);
+                }
+
+        // temporary work: previews, cover frames, face analysis, TikTok copies
+        var tmp = Path.GetTempPath();
+        var temp = new List<string>(); var tempDirs = new List<string>();
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(tmp, "shortgen_*")) temp.Add(f);
+            foreach (var d in Directory.EnumerateDirectories(tmp, "shortgen_*")) tempDirs.Add(d);
+            var own = Path.Combine(tmp, "ShortGenerator");
+            if (Directory.Exists(own)) tempDirs.Add(own);
+        }
+        catch { }
+        picked.ExceptWith(thumbs);
+        return new LocalFiles(shorts.ToList(), covers.ToList(), thumbs.ToList(), picked.ToList(), temp, tempDirs, projects.ToList());
+    }
+
+    /// <summary>A cover this app exported (next to a rendered short); a cover picked from elsewhere is the user's own file.</summary>
+    private static bool IsOurCover(string path) => path.EndsWith(".cover.jpg", StringComparison.OrdinalIgnoreCase);
+
+    private static string DescribeLocal(LocalFiles f)
+    {
+        long total = f.AllFiles.Sum(SizeOf) + f.TempDirs.Sum(SizeOfDir);
+        int thumbs = f.Thumbnails.Count + f.Picked.Count;
+        if (f.Shorts.Count + f.Covers.Count + thumbs + f.Temp.Count + f.TempDirs.Count == 0) return "Nothing to delete.";
+        return $"{f.Shorts.Count} rendered short{(f.Shorts.Count == 1 ? "" : "s")}, {f.Covers.Count} exported cover{(f.Covers.Count == 1 ? "" : "s")}, " +
+               $"{thumbs} thumbnail image{(thumbs == 1 ? "" : "s")} and temporary files: {Bytes(total)}.";
+    }
+
+    /// <summary>Asks, deletes, and forgets the deleted files in every project so no list points at a missing file.</summary>
+    private bool CleanLocalFiles(IWin32Window owner)
+    {
+        if (_publishPanel.IsPublishing)
+        {
+            AppDialog.Alert(owner, "Uploads still running", "Wait for the publishing queue to finish: it is still sending files from this computer.", AppDialog.Kind.Warning);
+            return false;
+        }
+        if (_cts is not null)
+        {
+            AppDialog.Alert(owner, "Something is still running", "Wait for the current render or task to finish, or cancel it, then try again.", AppDialog.Kind.Warning);
+            return false;
+        }
+        var f = ScanLocalFiles();
+        long shortsBytes = f.Shorts.Sum(SizeOf), coverBytes = f.Covers.Sum(SizeOf) + f.Thumbnails.Sum(SizeOf) + f.Picked.Sum(SizeOf), tempBytes = f.Temp.Sum(SizeOf) + f.TempDirs.Sum(SizeOfDir);
+        int thumbCount = f.Thumbnails.Count + f.Picked.Count;
+        if (shortsBytes + coverBytes + tempBytes == 0 && f.Shorts.Count + f.Covers.Count + thumbCount == 0)
+        {
+            AppDialog.Alert(owner, "Nothing to delete", "There are no rendered shorts, covers or generated thumbnails on this computer.");
+            return false;
+        }
+        var details = new List<string>
+        {
+            $"{f.Shorts.Count} rendered short{(f.Shorts.Count == 1 ? "" : "s")}\n{Bytes(shortsBytes)}, original and English versions",
+            $"{f.Covers.Count} exported cover{(f.Covers.Count == 1 ? "" : "s")} and {thumbCount} thumbnail image{(thumbCount == 1 ? "" : "s")}\n{Bytes(coverBytes)}",
+            $"Temporary files\n{Bytes(tempBytes)} of previews and work files",
+        };
+        if (f.Picked.Count > 0)
+        {
+            // images outside this app's folders: name them, so nobody loses a file by surprise
+            var names = f.Picked.Take(5).Select(Path.GetFileName).ToList();
+            var where = f.Picked.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1 ? Path.GetDirectoryName(f.Picked[0]) : "several folders";
+            details.Add($"Thumbnail images you picked, in {where}\n{string.Join(", ", names)}{(f.Picked.Count > 5 ? $" and {f.Picked.Count - 5} more" : "")}");
+        }
+        if (!AppDialog.Confirm(owner, "Delete rendered shorts and thumbnails?", "This frees disk space on this computer:", "Delete all", danger: true, details: details,
+                notes: new[]
+                {
+                    "Downloaded videos, transcripts, suggestions and your edits stay: you can render any short again.",
+                    "Published posts stay online. To publish a short again, render it again first.",
+                    "This cannot be undone.",
+                })) return false;
+
+        if (_player is not null) _ = _player.PauseAsync(); // a preview may hold a rendered file open
+        var deleted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int failed = 0;
+        foreach (var file in f.AllFiles) { if (TryDelete(file)) deleted.Add(file); else if (File.Exists(file)) failed++; }
+        foreach (var d in f.TempDirs) { try { Directory.Delete(d, recursive: true); } catch { } }
+        // empty per-video folders left in the shorts folders
+        foreach (var sub in deleted.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).ToList())
+            try { if (sub is not null && Directory.Exists(sub) && !Directory.EnumerateFileSystemEntries(sub).Any()
+                      && string.Equals(Path.GetDirectoryName(sub), _settings.OutputFolder.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) Directory.Delete(sub); } catch { }
+
+        // forget them in every project: the open one in memory, the others on disk
+        string? openProject = _video is null ? null : ProjectPath(_video.FilePath);
+        foreach (var p in f.Projects)
+        {
+            if (openProject is not null && string.Equals(p, openProject, StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                var project = JsonSerializer.Deserialize<ProjectFile>(File.ReadAllText(p));
+                if (project is null) continue;
+                project.Generated?.RemoveAll(g => !File.Exists(g.Path));
+                foreach (var s in project.Suggestions?.Shorts ?? new()) ForgetDeletedCovers(s, deleted);
+                File.WriteAllText(p, JsonSerializer.Serialize(project, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch (Exception ex) { Log($"Could not update {Path.GetFileName(p)}: {ex.Message}"); }
+        }
+        if (_video is not null)
+        {
+            _generated.RemoveAll(g => !File.Exists(g.Path));
+            foreach (var s in _suggestions?.Shorts ?? new()) ForgetDeletedCovers(s, deleted);
+            SaveProject();
+        }
+        foreach (ListViewItem it in _results.Items.Cast<ListViewItem>().ToList())
+            if (it.Tag is string path && !File.Exists(path)) _results.Items.Remove(it);
+        _publishPanel.RefreshList();
+        RefreshLibrary();
+
+        long freed = shortsBytes + coverBytes + tempBytes;
+        Log($"Disk clean-up: {deleted.Count} file(s) deleted, about {Bytes(freed)} freed" + (failed > 0 ? $"; {failed} in use and kept." : "."));
+        AppDialog.Alert(owner, "Disk space freed", $"{deleted.Count} file{(deleted.Count == 1 ? "" : "s")} deleted, about {Bytes(freed)}." +
+            (failed > 0 ? $" {failed} {(failed == 1 ? "file was" : "files were")} in use and kept; close any player showing them and try again." : ""), AppDialog.Kind.Success);
+        return true;
+    }
+
+    /// <summary>A suggestion whose cover image was deleted goes back to a frame of the video.</summary>
+    private static void ForgetDeletedCovers(ShortSuggestion s, HashSet<string> deleted)
+    {
+        if (s.CoverImage is { } a && deleted.Contains(a)) s.CoverImage = null;
+        if (s.CoverImageEn is { } b && deleted.Contains(b)) s.CoverImageEn = null;
     }
 
     // ---- project persistence: <video>.shortgen.json next to the video ----
