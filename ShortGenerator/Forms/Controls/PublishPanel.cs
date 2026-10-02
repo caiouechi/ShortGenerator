@@ -724,6 +724,60 @@ public sealed class PublishPanel : UserControl
         await RefreshStorageAsync();
     }
 
+    /// <summary>galiluna's connected accounts, once loaded (null when not signed in).</summary>
+    public GaliLunaClient.Accounts? Accounts => _accounts;
+
+    /// <summary>Loads the accounts when they were never asked for (Publish not opened yet in this session).</summary>
+    public async Task EnsureAccountsAsync()
+    {
+        if (_accounts is null && ClientFactory() is not null) await LoadAccountsAsync();
+    }
+
+    /// <summary>How TikTok posts go right now, from the TikTok card ("post directly, PUBLIC_TO_EVERYONE" or "to drafts").</summary>
+    public string? TikTokHow => _networkCards.FirstOrDefault(c => c.Network == "tiktok")?.How();
+
+    /// <summary>
+    /// Queues a rendered file for the given accounts without asking: Render preview's "publish when ready". Each post
+    /// uses the text written for its network, the cover and the options set on the cards (TikTok mode, YouTube privacy).
+    /// Returns how many uploads were queued.
+    /// </summary>
+    public int QueueAutomatic(GeneratedFile file, IReadOnlyList<AutoDestination> destinations)
+    {
+        var client = ClientFactory();
+        if (client is null || _accounts is null || destinations.Count == 0) return 0;
+        RefreshList();
+        var item = _list.Items.Cast<ListViewItem>().FirstOrDefault(i => ReferenceEquals(i.Tag, file)) ?? new ListViewItem(new[] { "", "", "" });
+        int queued = 0;
+        foreach (var d in destinations)
+        {
+            var card = _networkCards.FirstOrDefault(c => c.Network == d.Network);
+            if (card is null) { Log($"Auto publish: {d.Network} is not connected on galiluna any more; skipped."); continue; }
+            var account = d.Network == "tiktok" ? (_accounts.Tiktok?.Label ?? d.Label) : d.Label;
+            var key = $"{file.Path}|{card.Network}|{account}";
+            if (_inFlight.Contains(key)) continue;
+            var t = file.PostFor(card.Network);
+            var j = new PublishJob
+            {
+                Item = item, File = file, Card = card, Account = account, Options = card.OptionsFor(d.Id), Key = key,
+                Text = new NetworkPost { Title = t.Title, Description = t.Description, Tags = t.Tags.ToList() },
+            };
+            _inFlight.Add(key);
+            j.Row = new ListViewItem(new[] { (file.Language == "en" ? "[EN] " : "") + file.Title, $"{card.Title} · {account}", "Waiting (published when rendered)" }) { Tag = j, ForeColor = Theme.TextMuted };
+            _jobs.Add(j);
+            _queue.Items.Add(j.Row);
+            if (item.ListView is not null) item.SubItems[2].Text = $"{card.Title} ({account}): waiting in the queue";
+            queued++;
+        }
+        if (queued > 0)
+        {
+            Log($"Auto publish: \"{file.Title}\" queued for {queued} account(s).");
+            Pump(client);
+            UpdateQueue();
+            UpdateButtons();
+        }
+        return queued;
+    }
+
     /// <summary>True while an upload waits or runs: the files on disk must stay until it is done.</summary>
     public bool IsPublishing => _jobs.Any(j => j.IsOpen);
 
@@ -933,6 +987,21 @@ public sealed class PublishPanel : UserControl
             }
             return list;
         }
+
+        /// <summary>The send options for one account of this network, with the card's current settings.</summary>
+        public GaliLunaClient.SendOptions OptionsFor(int accountId)
+        {
+            var none = Array.Empty<int>();
+            return Network switch
+            {
+                "instagram" => new GaliLunaClient.SendOptions(new[] { accountId }, "off", null, false, none, "public"),
+                "youtube" => new GaliLunaClient.SendOptions(none, "off", null, false, new[] { accountId }, _privacy.SelectedItem as string ?? "public"),
+                _ => new GaliLunaClient.SendOptions(none, _mode.SelectedIndex == 1 ? "direct" : "drafts", _privacy.SelectedItem as string, false, none, "public"),
+            };
+        }
+
+        /// <summary>TikTok only: "post directly, PUBLIC_TO_EVERYONE" or "to drafts".</summary>
+        public string How() => _mode.SelectedIndex == 1 ? $"post directly, {_privacy.SelectedItem}" : "to drafts";
 
         public string Describe() => Network switch
         {

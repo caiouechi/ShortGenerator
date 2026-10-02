@@ -2683,16 +2683,23 @@ public sealed class MainForm : Form
         if (_video is null || _editing is null) return;
         var s = _editing;
         await _player.PauseAsync();
-        var langs = new List<string> { "original" };
-        if (s.TranslateEnglish)
+        // which versions to render and, optionally, where each one is published once it is ready
+        await _publishPanel.EnsureAccountsAsync();
+        int missing = s.TranslateEnglish ? SegmentsOf(s).Count(x => string.IsNullOrWhiteSpace(x.English)) : 0;
+        using var dlg = new RenderPublishDialog(s.Title, s.TranslateEnglish, missing, _publishPanel.Accounts, _publishPanel.TikTokHow, _settings.AutoPublish);
+        if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Languages.Count == 0) return;
+        var langs = dlg.Languages;
+        if (_publishPanel.Accounts is not null)
         {
-            langs = AskPreviewLanguages(s);
-            if (langs.Count == 0) return;
+            // remembered per version for next time (only the versions rendered now change)
+            foreach (var (lang, dests) in dlg.Publish) _settings.AutoPublish[lang] = dests.Select(d => d.Key).ToList();
+            SettingsStore.Save(_settings);
         }
+        var publish = dlg.Publish.Where(kv => kv.Value.Count > 0).ToDictionary(kv => kv.Key, kv => kv.Value);
         // Render preview makes the real files: saved in the shorts folder with their covers and post texts and
         // listed on Publish, one per language. It goes into the render queue, so another short can be queued
         // while this one renders; the videos open as each render finishes.
-        EnqueueRender(s, langs);
+        EnqueueRender(s, langs, publish);
     }
 
     // ------------------------------------------------------------------ render queue
@@ -2702,6 +2709,8 @@ public sealed class MainForm : Form
     {
         public required ShortSuggestion Short { get; init; }
         public required List<string> Langs { get; set; }
+        /// <summary>Per version: the accounts it is published to once rendered ("publish when ready").</summary>
+        public Dictionary<string, List<AutoDestination>> Publish { get; set; } = new();
         public ListViewItem Row { get; set; } = null!;
         /// <summary>queued | running | done | failed | cancelled</summary>
         public string State { get; set; } = "queued";
@@ -2716,18 +2725,24 @@ public sealed class MainForm : Form
 
     private static string LangsText(IEnumerable<string> langs) => string.Join(" + ", langs.Select(l => l == "en" ? "English" : "Original"));
 
-    private void EnqueueRender(ShortSuggestion s, List<string> langs)
+    /// <summary>"Original → @a · English → @b, TikTok" for the Captions column.</summary>
+    private static string PlanText(RenderJob j) => string.Join("  ·  ", j.Langs.Select(l =>
+        (l == "en" ? "English" : "Original") + (j.Publish.TryGetValue(l, out var d) && d.Count > 0 ? " → " + string.Join(", ", d.Select(x => x.Network == "tiktok" ? "TikTok" : x.Label)) : "")));
+
+    private void EnqueueRender(ShortSuggestion s, List<string> langs, Dictionary<string, List<AutoDestination>>? publish = null)
     {
+        publish ??= new();
         // the same short still waiting: just update what it renders, never twice in a row
         if (_renderJobs.FirstOrDefault(j => j.State == "queued" && ReferenceEquals(j.Short, s)) is { } waiting)
         {
             waiting.Langs = langs.Union(waiting.Langs).ToList();
-            waiting.Row.SubItems[1].Text = LangsText(waiting.Langs);
+            foreach (var (lang, dests) in publish) waiting.Publish[lang] = dests; // the latest choice for a version wins
+            waiting.Row.SubItems[1].Text = PlanText(waiting);
             Log($"\"{s.Title}\" is already waiting in the render queue; it renders {LangsText(waiting.Langs)}.");
             return;
         }
-        var job = new RenderJob { Short = s, Langs = langs };
-        job.Row = new ListViewItem(new[] { s.Title, LangsText(langs), "Waiting" }) { Tag = job, ForeColor = Theme.TextMuted };
+        var job = new RenderJob { Short = s, Langs = langs, Publish = publish };
+        job.Row = new ListViewItem(new[] { s.Title, PlanText(job), "Waiting" }) { Tag = job, ForeColor = Theme.TextMuted };
         _renderJobs.Add(job);
         _renders.Items.Add(job.Row);
         Log($"Render queued: \"{s.Title}\" ({LangsText(langs)}).");
@@ -2778,7 +2793,15 @@ public sealed class MainForm : Form
             else if (made > 0 && _lastBusyOutcome == "done")
             {
                 j.State = "done";
-                SetRenderRow(j, $"Done: {made} video{(made == 1 ? "" : "s")} (double-click to play), listed on Publish", Theme.Success);
+                // "publish when ready": each new file goes to the accounts chosen for its version
+                int posts = 0;
+                foreach (var (lang, dests) in j.Publish)
+                {
+                    var file = _generated.LastOrDefault(g => (g.ShortTitle ?? g.Title) == j.Short.Title && g.When >= j.Started && File.Exists(g.Path)
+                                                             && (g.Language == "en") == (lang == "en"));
+                    if (file is not null) posts += _publishPanel.QueueAutomatic(file, dests);
+                }
+                SetRenderRow(j, $"Done: {made} video{(made == 1 ? "" : "s")}" + (posts > 0 ? $", {posts} post{(posts == 1 ? "" : "s")} publishing (see Publish)" : ", listed on Publish") + ". Double-click to play.", Theme.Success);
             }
             else { j.State = "failed"; SetRenderRow(j, "Failed: see Activity for the details", Theme.Danger); }
         }
@@ -2823,41 +2846,13 @@ public sealed class MainForm : Form
     }
 
     /// <summary>Dev convenience: shows the Render preview language question for the short in the editor.</summary>
-    public void ShowPreviewLanguagesPreview() { var s = _editing ?? _suggestions?.Shorts.FirstOrDefault(); if (s is not null) AskPreviewLanguages(s); }
-
-    /// <summary>Asks which caption languages to render (both ticked); returns "original" and/or "en", empty when cancelled.</summary>
-    private List<string> AskPreviewLanguages(ShortSuggestion s)
+    public async void ShowPreviewLanguagesPreview()
     {
-        int missing = SegmentsOf(s).Count(x => string.IsNullOrWhiteSpace(x.English));
-        using var f = new Form
-        {
-            Text = "Render preview", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
-            StartPosition = FormStartPosition.CenterParent, AutoScaleMode = AutoScaleMode.Dpi, ClientSize = new Size(400, 210), BackColor = Theme.Bg,
-        };
-        var original = new CheckBox { Text = "Original captions", Checked = true, AutoSize = true, Location = new Point(24, 58) };
-        var english = new CheckBox { Text = "English captions", Checked = true, AutoSize = true, Location = new Point(24, 88) };
-        var note = new Label
-        {
-            AutoSize = true, MaximumSize = new Size(350, 0), Location = new Point(24, 118), ForeColor = Theme.TextMuted,
-            Text = missing > 0 ? $"{missing} line(s) have no English yet and will show the original text." : "One preview video is rendered per language.",
-        };
-        var render = new FancyButton { Text = "Render", Width = 110, Height = 34, Location = new Point(270, 160) };
-        var cancel = new FancyButton { Text = "Cancel", Width = 100, Height = 34, Location = new Point(160, 160) };
-        f.Controls.Add(new Label { Text = "Which captions should the preview have?", AutoSize = true, Location = new Point(24, 20), Font = Theme.HeadingFont(10.5f), ForeColor = Theme.Heading });
-        f.Controls.AddRange(new Control[] { original, english, note, render, cancel });
-        void Sync() => render.Enabled = original.Checked || english.Checked;
-        original.CheckedChanged += (_, _) => Sync();
-        english.CheckedChanged += (_, _) => Sync();
-        render.Click += (_, _) => { f.DialogResult = DialogResult.OK; f.Close(); };
-        cancel.Click += (_, _) => { f.DialogResult = DialogResult.Cancel; f.Close(); };
-        f.AcceptButton = render; f.CancelButton = cancel;
-        Theme.Primary(render);
-        Theme.Apply(f);
-        if (f.ShowDialog(this) != DialogResult.OK) return new List<string>();
-        var langs = new List<string>();
-        if (original.Checked) langs.Add("original");
-        if (english.Checked) langs.Add("en");
-        return langs;
+        var s = _editing ?? _suggestions?.Shorts.FirstOrDefault();
+        if (s is null) return;
+        await _publishPanel.EnsureAccountsAsync();
+        using var dlg = new RenderPublishDialog(s.Title, s.TranslateEnglish, 0, _publishPanel.Accounts, _publishPanel.TikTokHow, _settings.AutoPublish);
+        dlg.ShowDialog(this); // shown only, nothing is rendered
     }
 
     // ------------------------------------------------------------------ step 4: suggestions

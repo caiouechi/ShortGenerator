@@ -16,6 +16,8 @@ public sealed class AppSettings
     public string CaptionLanguage { get; set; } = "both";
     /// <summary>Publish: which videos each account receives, keyed "instagram:41" / "youtube:51" / "tiktok": "original", "en" or "both".</summary>
     public Dictionary<string, string> AccountLanguages { get; set; } = new();
+    /// <summary>Render preview's "publish when ready" ticks, per caption version ("original" / "en"): "network:id".</summary>
+    public Dictionary<string, List<string>> AutoPublish { get; set; } = new();
     public bool DetectReactions { get; set; } = true;
     /// <summary>Networks the AI writes post text for (title / description / keywords per platform).</summary>
     public bool PostTextYouTube { get; set; } = true;
