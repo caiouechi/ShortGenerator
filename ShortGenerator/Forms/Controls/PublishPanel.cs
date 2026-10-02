@@ -45,9 +45,9 @@ public sealed class PublishPanel : UserControl
 
     // left: shorts
     private readonly SplitContainer _split = new() { Dock = DockStyle.Fill, Orientation = Orientation.Vertical };
-    private readonly ListView _list = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, CheckBoxes = true, HideSelection = false, MultiSelect = false };
+    private readonly ListView _list = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, CheckBoxes = false, HideSelection = false, MultiSelect = false };
     private readonly EmptyState _empty = new("empty-shorts.png", "Nothing to publish yet", "Generate shorts first. They show up here, ready to send to the accounts you connected on galiluna.");
-    private readonly Label _listTitle = new() { Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, Padding = new Padding(4, 0, 0, 0), Text = "Tick the shorts to publish (double-click to play)" };
+    private readonly Label _listTitle = new() { Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, Padding = new Padding(4, 0, 0, 0), Text = "Select the short to publish (double-click to play)" };
     private readonly FancyButton _deleteShort = new() { Text = "Delete short", Width = 120, Enabled = false, Glyph = "\uE74D" };
     private readonly FancyButton _openFolder = new() { Text = "Open folder", Width = 120, Glyph = "\uE8B7" };
     private readonly FancyButton _cancelPublish = new() { Text = "Cancel all", Width = 150, Height = 36, Visible = false, Glyph = "\uE711" };
@@ -65,7 +65,7 @@ public sealed class PublishPanel : UserControl
     // right: destinations
     private readonly Panel _right = new() { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(12, 0, 4, 8) };
     private readonly Label _summary = new() { AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(600, 0) };
-    private readonly FancyButton _publishAll = new() { Text = "Publish to all", Width = 170, Height = 36, Enabled = false, Glyph = "" };
+    private readonly FancyButton _publishAll = new() { Text = "Queue all", Width = 170, Height = 36, Enabled = false, Glyph = "" };
     private readonly PictureBox _cover = new() { Width = 54, Height = 96, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(19, 24, 52) };
     private readonly Label _editingTitle = new() { AutoSize = true, MaximumSize = new Size(600, 0) };
     private readonly Label _editingHint = new() { AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(600, 0) };
@@ -218,7 +218,6 @@ public sealed class PublishPanel : UserControl
         _gateSignIn.Click += async (_, _) => { if (OpenSignIn()) await LoadAccountsAsync(); };
         _refreshLink.LinkClicked += async (_, _) => await LoadAccountsAsync();
         _publishAll.Click += async (_, _) => await PublishAsync(_networkCards.Where(c => c.HasTarget).ToList());
-        _list.ItemChecked += (_, _) => UpdateButtons();
         _list.SelectedIndexChanged += (_, _) => ShowSelected();
         _deleteShort.Click += (_, _) =>
         {
@@ -269,7 +268,6 @@ public sealed class PublishPanel : UserControl
         foreach (var f in Files())
         {
             var item = new ListViewItem(new[] { (f.Language == "en" ? "[EN] " : "") + f.Title, File.Exists(f.Path) ? f.When.ToString("MMM d HH:mm") : "file missing", Describe(f) }) { Tag = f };
-            item.Checked = !f.Sent && File.Exists(f.Path);
             if (!File.Exists(f.Path)) item.ForeColor = Color.Gray;
             _list.Items.Add(item);
             if (f.Path == selectedPath) item.Selected = true;
@@ -421,21 +419,24 @@ public sealed class PublishPanel : UserControl
         catch { }
     }
 
-    private int TickedCount => _populating ? 0 : _list.Items.Cast<ListViewItem>().Count(i => i is { Checked: true });
+    /// <summary>The one short every publish button acts on: the selected row, when its file still exists.</summary>
+    private (ListViewItem Item, GeneratedFile File)? Current =>
+        !_populating && _list.SelectedItems.Count == 1 && _list.SelectedItems[0].Tag is GeneratedFile f && File.Exists(f.Path)
+            ? (_list.SelectedItems[0], f) : null;
 
     private void UpdateButtons()
     {
         if (_populating) return; // ItemChecked fires mid-population, when the collection can still hand out nulls
-        int ticked = TickedCount;
-        bool any = _accounts is not null && ticked > 0;
+        var current = Current;
+        bool any = _accounts is not null && current is not null;
         // publishing runs in the background, so the buttons stay usable while uploads are in flight
         int destinations = 0, uploads = 0;
         foreach (var c in _networkCards)
         {
             int accounts = c.Sends().Count;
-            uploads += ticked * accounts;
+            uploads += any ? accounts : 0;
             if (accounts > 0) destinations++;
-            c.SetEnabled(any && accounts > 0, ticked);
+            c.SetEnabled(any && accounts > 0, 1);
         }
         _publishAll.Enabled = any && uploads > 0;
         // a video still uploading cannot be deleted
@@ -444,11 +445,11 @@ public sealed class PublishPanel : UserControl
         int open = _jobs.Count(j => j.IsOpen);
         _cancelPublish.Visible = open > 0;
         _cancelPublish.Text = open > 1 ? $"Cancel all ({open})" : "Cancel all";
-        _publishAll.Text = uploads > 1 ? $"Publish to all ({uploads})" : "Publish to all";
-        _summary.Text = _accounts is null ? "" : ticked == 0 ? "Tick at least one short on the left." :
+        _publishAll.Text = uploads > 1 ? $"Queue all ({uploads})" : "Queue all";
+        _summary.Text = _accounts is null ? "" : current is null ? "Select a short on the left." :
             uploads == 0 ? "Tick the accounts to publish to in a card below." :
-            $"{ticked} video{(ticked == 1 ? "" : "s")} ticked, {uploads} upload{(uploads == 1 ? "" : "s")} to {destinations} network{(destinations == 1 ? "" : "s")}." +
-            (open > 0 ? $" {open} upload{(open == 1 ? "" : "s")} in the queue on the left: you can tick another video and publish it meanwhile." : "");
+            $"Queue all sends this short to {uploads} destination{(uploads == 1 ? "" : "s")} on {destinations} network{(destinations == 1 ? "" : "s")}." +
+            (open > 0 ? $" {open} upload{(open == 1 ? "" : "s")} in the queue on the left: you can select another short and queue it meanwhile." : "");
     }
 
     // ------------------------------------------------------------------ publishing
@@ -479,15 +480,15 @@ public sealed class PublishPanel : UserControl
     }
 
     /// <summary>
-    /// Queues the ticked videos for the ticked accounts of the given networks. Nothing waits for the upload: the jobs
-    /// go into the queue on the left, run two at a time, and another video can be ticked and queued meanwhile.
+    /// Queues the selected short for the ticked accounts of the given networks. Nothing waits for the upload: the jobs
+    /// go into the queue on the left, run two at a time, and another short can be selected and queued meanwhile.
     /// </summary>
     private Task PublishAsync(IReadOnlyList<NetworkCard> targets)
     {
         var client = ClientFactory();
         if (client is null || _accounts is null || targets.Count == 0) return Task.CompletedTask;
-        var files = _list.Items.Cast<ListViewItem>().Where(i => i is { Checked: true }).Select(i => (Item: i, File: (GeneratedFile)i.Tag!)).ToList();
-        if (files.Count == 0) return Task.CompletedTask;
+        if (Current is not { } current) return Task.CompletedTask;
+        var files = new[] { current };
 
         var jobs = new List<PublishJob>();
         int skipped = 0;
@@ -506,7 +507,7 @@ public sealed class PublishPanel : UserControl
                 }
         if (jobs.Count == 0)
         {
-            AppDialog.Alert(this, "Nothing to publish", skipped > 0 ? "Those videos are already in the queue for those accounts." : "Tick at least one account to publish to.");
+            AppDialog.Alert(this, "Nothing to publish", skipped > 0 ? "This short is already in the queue for those accounts." : "Tick at least one account to publish to.");
             return Task.CompletedTask;
         }
 
@@ -525,9 +526,6 @@ public sealed class PublishPanel : UserControl
         if (!AppDialog.Confirm(this, title, "galiluna sends the video, its cover and its text to:", jobs.Count == 1 ? "Publish" : $"Publish {jobs.Count}",
                 details: details, notes: notes)) return Task.CompletedTask;
 
-        _populating = true;
-        foreach (var (item, _) in files) item.Checked = false; // ticked again only on purpose
-        _populating = false;
         foreach (var j in jobs)
         {
             _inFlight.Add(j.Key);
