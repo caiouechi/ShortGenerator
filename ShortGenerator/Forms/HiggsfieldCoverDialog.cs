@@ -48,7 +48,7 @@ public sealed class HiggsfieldCoverDialog : Form
 
         var stack = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Margin = Padding.Empty };
         stack.Controls.Add(new Label { Text = s.Title, AutoSize = true, Font = Theme.HeadingFont(11f), ForeColor = Theme.Heading, MaximumSize = new Size(560, 0), Margin = new Padding(0, 0, 0, 2) });
-        stack.Controls.Add(new Label { Text = $"Higgsfield ({modelName}) redraws the cover as a 9:16 thumbnail. The viral-creator brief and the publishing specs (1080x1920, headline in the upper third, bottom 20% free) are always included.", AutoSize = true, ForeColor = Theme.TextMuted, MaximumSize = new Size(560, 0), Margin = new Padding(0, 0, 0, 12) });
+        stack.Controls.Add(new Label { Text = $"Higgsfield ({modelName}) redraws the cover as a 9:16 thumbnail. The viral-creator brief and the publishing specs (1080x1920, headline and face inside the middle 3:4 area the TikTok and Instagram grids show) are always included.", AutoSize = true, ForeColor = Theme.TextMuted, MaximumSize = new Size(560, 0), Margin = new Padding(0, 0, 0, 12) });
         _useReference.Margin = new Padding(0, 0, 0, 2);
         stack.Controls.Add(_useReference);
         stack.Controls.Add(new Label { Text = "Ticked: the same person, face and scene are kept. Unticked: Higgsfield invents a fitting scene from the brief alone.", AutoSize = true, ForeColor = Theme.TextMuted, MaximumSize = new Size(560, 0), Margin = new Padding(0, 0, 0, 12) });

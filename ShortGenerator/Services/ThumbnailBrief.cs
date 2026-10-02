@@ -30,7 +30,13 @@ public static class ThumbnailBrief
             $"Why it could go viral: {s.WhyViral}\n\n" +
             "Publishing specs: vertical 9:16, 1080x1920 pixels, JPEG, safe for Instagram Reels, TikTok and YouTube Shorts covers. " +
             "One clear focal point on the face, exaggerated but natural expression, high contrast and saturated but clean colours, simplified background, " +
-            $"a big bold headline of 2 to 5 words in {language} with a thick outline placed in the upper third, leave the bottom 20% free for the platform UI, " +
+            $"a big bold headline of 2 to 5 words in {language} with a thick outline. " +
+            // Profile grids on TikTok and Instagram show the 9:16 cover as a 3:4 tile cut from the middle (1080x1440),
+            // so anything in the top or bottom 240 px disappears there; the full-screen view puts the caption UI low.
+            "Layout safe zone, mandatory: the cover is also shown cropped to a centred 3:4 tile (the middle 1080x1440 px) in the TikTok and Instagram profile grids, " +
+            "so keep the whole headline, the face and every important detail inside that middle area. Nothing important in the top 15% or the bottom 22% of the image " +
+            "(those strips are only background). Put the headline in the upper half of the safe area (roughly 15% to 40% from the top), never touching the top edge, " +
+            "with side margins of at least 8%; keep the face between about 30% and 75% from the top; " +
             "no logos, no watermarks, no extra text, photorealistic, sharp.\n\n" +
             "The ideal thumbnail will be: " + (string.IsNullOrWhiteSpace(ideal) ? AutoIdeal(s) : ideal);
     }
