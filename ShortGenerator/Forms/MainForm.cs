@@ -1438,13 +1438,33 @@ public sealed class MainForm : Form
     private bool DeleteGenerated(GeneratedFile file)
     {
         var published = file.Publications.Any(p => p.Status is "published" or "drafted");
+        // everything this row produced: the video, the cover exported next to it, and the thumbnail image the short
+        // uses in this language (generated or picked), unless another short or language still uses that image
+        var suggestion = _suggestions?.Shorts.FirstOrDefault(s => s.Title == (file.ShortTitle ?? file.Title));
+        var lang = file.Language == "en" ? "en" : null;
+        string? thumbnail = suggestion?.CoverFor(lang).Image;
+        if (thumbnail is not null && (!File.Exists(thumbnail) || string.Equals(thumbnail, file.CoverPath, StringComparison.OrdinalIgnoreCase))) thumbnail = null;
+        if (thumbnail is not null && _suggestions!.Shorts.Any(s =>
+                (!ReferenceEquals(s, suggestion) || lang == "en") && string.Equals(s.CoverImage, thumbnail, StringComparison.OrdinalIgnoreCase)
+                || (!ReferenceEquals(s, suggestion) || lang != "en") && string.Equals(s.CoverImageEn, thumbnail, StringComparison.OrdinalIgnoreCase)))
+            thumbnail = null; // shared with another short or the other language: keep it
+        var files = new List<string> { file.Path };
+        if (file.CoverPath is { } cover && File.Exists(cover)) files.Add(cover);
+        if (thumbnail is not null) files.Add(thumbnail);
+        var details = files.Where(File.Exists).Select(f => $"{Path.GetFileName(f)}\n{Path.GetDirectoryName(f)}").ToList();
+
         var notes = new List<string>();
-        if (published) notes.Add("It was already published: the posts stay online, only the local file and its record are removed.");
+        if (published) notes.Add("It was already published: the posts stay online, only the local files and the record are removed.");
+        if (thumbnail is not null) notes.Add("The short goes back to a frame of the video as its cover; you can pick or generate a new one in Edit & preview.");
         notes.Add("This cannot be undone.");
-        if (!AppDialog.Confirm(this, "Delete this short?", $"\"{file.Title}\" and its cover image will be deleted from this computer.", "Delete short",
-                danger: true, notes: notes)) return false;
-        TryDelete(file.Path);
-        TryDelete(file.CoverPath);
+        if (!AppDialog.Confirm(this, "Delete this short?", $"\"{file.Title}\" and everything made for it are deleted from this computer:", "Delete short",
+                danger: true, details: details, notes: notes)) return false;
+        if (_player is not null) _ = _player.PauseAsync(); // a preview may hold the file open
+        foreach (var f in files) TryDelete(f);
+        if (thumbnail is not null && suggestion is not null)
+        {
+            if (lang == "en") suggestion.CoverImageEn = null; else suggestion.CoverImage = null;
+        }
         _generated.Remove(file);
         foreach (ListViewItem it in _results.Items) if (it.Tag as string == file.Path) { _results.Items.Remove(it); break; }
         SaveProject();

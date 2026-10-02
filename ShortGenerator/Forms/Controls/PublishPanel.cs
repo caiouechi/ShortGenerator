@@ -226,9 +226,15 @@ public sealed class PublishPanel : UserControl
         _list.SelectedIndexChanged += (_, _) => ShowSelected();
         _deleteShort.Click += (_, _) =>
         {
-            if (_list.SelectedItems.Count != 1 || _list.SelectedItems[0].Tag is not GeneratedFile f) return;
-            if (Delete(f)) RefreshList();
+            if (_list.SelectedItems.Count != 1 || _list.SelectedItems[0].Tag is not GeneratedFile f || !_deleteShort.Enabled) return;
+            if (!Delete(f)) return;
+            // its finished rows leave the queue too (a row still uploading keeps the file from being deleted at all)
+            foreach (var j in _jobs.Where(j => ReferenceEquals(j.File, f) && !j.IsOpen).ToList()) { _jobs.Remove(j); _queue.Items.Remove(j.Row); }
+            UpdateQueue();
+            RefreshList();
         };
+        // the Delete key does the same on the selected short
+        _list.KeyDown += (_, e) => { if (e.KeyCode == Keys.Delete) { e.Handled = true; _deleteShort.PerformClick(); } };
         _openFolder.Click += (_, _) =>
         {
             var f = _list.SelectedItems.Count == 1 ? _list.SelectedItems[0].Tag as GeneratedFile : Files().FirstOrDefault();
