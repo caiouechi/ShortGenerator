@@ -206,6 +206,24 @@ public sealed class GaliLunaClient : IDisposable
         return await ReadAsync<ShortInfo>(response, ct);
     }
 
+    /// <summary>What galiluna still stores of this organization's shorts (videos with covers); Busy may still be publishing.</summary>
+    public sealed record StorageInfo(int Shorts, long Bytes, int Busy);
+    public sealed record ClearInfo(int Removed, long Bytes, int Kept);
+
+    /// <summary>GET /api/shorts/storage.</summary>
+    public async Task<StorageInfo> GetStorageAsync(CancellationToken ct)
+    {
+        using var response = await _http.GetAsync("api/shorts/storage", ct);
+        return await ReadAsync<StorageInfo>(response, ct);
+    }
+
+    /// <summary>POST /api/shorts/storage/clear: deletes every stored short video and cover except those still publishing.</summary>
+    public async Task<ClearInfo> ClearStorageAsync(CancellationToken ct)
+    {
+        using var response = await _http.PostAsync("api/shorts/storage/clear", new StringContent(""), ct);
+        return await ReadAsync<ClearInfo>(response, ct);
+    }
+
     // ------------------------------------------------------------------ plumbing
 
     private static async Task<T> ReadAsync<T>(HttpResponseMessage response, CancellationToken ct)

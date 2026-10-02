@@ -50,6 +50,9 @@ public sealed class PublishPanel : UserControl
     private readonly Label _listTitle = new() { Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, Padding = new Padding(4, 0, 0, 0), Text = "Select the short to publish (double-click to play)" };
     private readonly FancyButton _deleteShort = new() { Text = "Delete short", Width = 120, Enabled = false, Glyph = "\uE74D" };
     private readonly FancyButton _openFolder = new() { Text = "Open folder", Width = 120, Glyph = "\uE8B7" };
+    /// <summary>Deletes the videos and covers galiluna keeps for publishing; nothing there is ever deleted without it.</summary>
+    private readonly FancyButton _clearStorage = new() { Text = "Clear galiluna storage", Width = 200, Enabled = false, Visible = false, Glyph = "\uE74D" };
+    private GaliLunaClient.StorageInfo? _storage;
     private readonly FancyButton _cancelPublish = new() { Text = "Cancel all", Width = 150, Height = 36, Visible = false, Glyph = "\uE711" };
 
     // left, under the shorts: the publishing queue (what is running, waiting, done)
@@ -89,9 +92,11 @@ public sealed class PublishPanel : UserControl
         _list.Columns.Add("Published", 300);
         Theme.FillColumn(_list, 2);
         var listHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 6, 0) };
-        var listBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(0, 8, 0, 0), WrapContents = false };
+        var listBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(0, 8, 0, 0), WrapContents = true };
+        foreach (var b in new[] { _deleteShort, _openFolder, _clearStorage }) b.Margin = new Padding(0, 0, 8, 6);
         listBar.Controls.Add(_deleteShort);
         listBar.Controls.Add(_openFolder);
+        listBar.Controls.Add(_clearStorage);
         listHost.Controls.Add(_list);
         listHost.Controls.Add(listBar);
         listHost.Controls.Add(_empty);
@@ -248,6 +253,7 @@ public sealed class PublishPanel : UserControl
             UpdateQueue();
         };
         _queue.SelectedIndexChanged += (_, _) => UpdateQueue();
+        _clearStorage.Click += async (_, _) => await ClearStorageAsync();
         _publishAll.Visible = true;
         _list.DoubleClick += (_, _) => { if (_list.SelectedItems.Count == 1 && _list.SelectedItems[0].Tag is GeneratedFile f && File.Exists(f.Path)) TryOpen(f.Path); };
     }
@@ -314,6 +320,7 @@ public sealed class PublishPanel : UserControl
             _accounts = await client.GetAccountsAsync(CancellationToken.None);
             SetGate(false, GaliLunaSignInForm.Summary(_accounts) + $"  ({client.BaseUrl})");
             _connection.ForeColor = Theme.Success;
+            _ = RefreshStorageAsync();
         }
         catch (GaliLunaClient.GaliLunaException ex) when (ex.StatusCode == 401)
         {
@@ -627,6 +634,7 @@ public sealed class PublishPanel : UserControl
             UpdateQueue();
             UpdateButtons();
             if (_running == 0 && ReferenceEquals(_editing, j.File)) ShowSelected();
+            if (_running == 0) _ = RefreshStorageAsync();
         }
     }
 
@@ -649,6 +657,67 @@ public sealed class PublishPanel : UserControl
         UpdateButtons();
     }
 
+    // ------------------------------------------------------------------ galiluna storage
+
+    private static string Size(long bytes) => bytes >= 1024L * 1024 * 1024 ? $"{bytes / (1024.0 * 1024 * 1024):0.0} GB" : $"{Math.Max(1, bytes / (1024 * 1024))} MB";
+
+    /// <summary>Asks galiluna what it still stores; the button hides on a galiluna that does not offer it yet.</summary>
+    private async Task RefreshStorageAsync()
+    {
+        var client = ClientFactory();
+        if (client is null) { _storage = null; UpdateStorageButton(); return; }
+        try { _storage = await client.GetStorageAsync(CancellationToken.None); }
+        catch { _storage = null; }
+        UpdateStorageButton();
+    }
+
+    private void UpdateStorageButton()
+    {
+        if (IsDisposed) return;
+        _clearStorage.Visible = _storage is not null;
+        if (_storage is null) return;
+        int stored = _storage.Shorts;
+        _clearStorage.Text = stored == 0 ? "galiluna storage is empty" : $"Clear galiluna storage ({stored} · {Size(_storage.Bytes)})";
+        _clearStorage.Width = TextRenderer.MeasureText(_clearStorage.Text, _clearStorage.Font).Width + 56;
+        // never while this app is still uploading: those files are being fetched by the networks
+        _clearStorage.Enabled = stored > _storage.Busy && !_jobs.Any(j => j.IsOpen);
+    }
+
+    private async Task ClearStorageAsync()
+    {
+        var client = ClientFactory();
+        if (client is null || _storage is null) return;
+        if (_jobs.Any(j => j.IsOpen))
+        {
+            AppDialog.Alert(this, "Uploads still running", "Wait for the queue to finish: the networks are still fetching those videos from galiluna.", AppDialog.Kind.Warning);
+            return;
+        }
+        int clearable = _storage.Shorts - _storage.Busy;
+        var details = new List<string> { $"{clearable} video{(clearable == 1 ? "" : "s")} with {(clearable == 1 ? "its cover" : "their covers")}\nabout {Size(_storage.Bytes)} on galiluna's server" };
+        var notes = new List<string>
+        {
+            "The posts stay online: Instagram, TikTok and YouTube keep their own copy.",
+            "Your files on this computer are not touched, and publishing a short again uploads it again.",
+        };
+        if (_storage.Busy > 0) notes.Add($"{_storage.Busy} short{(_storage.Busy == 1 ? "" : "s")} that may still be publishing {(_storage.Busy == 1 ? "is" : "are")} kept.");
+        if (!AppDialog.Confirm(this, "Clear galiluna storage?", "Deletes the short videos and covers galiluna keeps for publishing:", "Clear storage",
+                danger: true, details: details, notes: notes)) return;
+        _clearStorage.Enabled = false;
+        _clearStorage.Text = "Clearing...";
+        try
+        {
+            var r = await client.ClearStorageAsync(CancellationToken.None);
+            Log($"galiluna storage cleared: {r.Removed} short(s), {Size(r.Bytes)}" + (r.Kept > 0 ? $"; {r.Kept} kept (still publishing)." : "."));
+            AppDialog.Alert(this, "Storage cleared", $"{r.Removed} video{(r.Removed == 1 ? "" : "s")} and cover{(r.Removed == 1 ? "" : "s")} deleted from galiluna, about {Size(r.Bytes)}." +
+                (r.Kept > 0 ? $" {r.Kept} still publishing {(r.Kept == 1 ? "was" : "were")} kept." : ""), AppDialog.Kind.Success);
+        }
+        catch (Exception ex)
+        {
+            AppDialog.Show(this, ex.Message, "Could not clear storage", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        await RefreshStorageAsync();
+    }
+
     private IEnumerable<PublishJob> SelectedJobs() => _queue.SelectedItems.Cast<ListViewItem>().Select(i => i.Tag).OfType<PublishJob>();
 
     /// <summary>Counts in the queue header and the queue's buttons.</summary>
@@ -665,6 +734,7 @@ public sealed class PublishPanel : UserControl
         _queueCounts.ForeColor = running + waiting > 0 ? Theme.Purple : failed > 0 ? Theme.Danger : Theme.TextMuted;
         _queueEmpty.Visible = _jobs.Count == 0;
         _cancelJob.Enabled = SelectedJobs().Any(j => j.IsOpen);
+        UpdateStorageButton();
         _clearDone.Enabled = _jobs.Any(j => !j.IsOpen);
     }
 
