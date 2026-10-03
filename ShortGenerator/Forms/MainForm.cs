@@ -60,8 +60,8 @@ public sealed class MainForm : Form
     private readonly Label _rendersCounts = new() { AutoSize = true, ForeColor = Theme.TextMuted, Margin = new Padding(0, 12, 0, 0) };
     private readonly Label _rendersEmpty = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Theme.TextMuted, BackColor = Theme.Elevated,
         Text = "No renders yet. Render preview adds the short here; while one renders you can select another short and queue it." };
-    private readonly FancyButton _renderCancel = new() { Text = "Cancel selected", Width = 150, Enabled = false, Glyph = "\uE711" };
-    private readonly FancyButton _renderClear = new() { Text = "Clear finished", Width = 140, Enabled = false, Glyph = "\uE894" };
+    private readonly FancyButton _renderCancel = new() { Text = "Cancel", Width = 96, Enabled = false, Glyph = "\uE711" };
+    private readonly FancyButton _renderClear = new() { Text = "Clear done", Width = 116, Enabled = false, Glyph = "\uE894" };
     // cover / thumbnail for the short
     private readonly PictureBox _coverPreview = new() { Width = 96, Height = 170, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(19, 24, 52), BorderStyle = BorderStyle.None };
     private readonly FancyButton _setCover = new() { Text = "Use this frame", Width = 170, Glyph = "" };
@@ -789,7 +789,7 @@ public sealed class MainForm : Form
 
         // render queue under the images
         _renders.Columns.Add("Short", 200);
-        _renders.Columns.Add("Captions", 110);
+        _renders.Columns.Add("Version", 150);
         _renders.Columns.Add("Status", 200);
         Theme.FillColumn(_renders, 2);
         var rendersHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 6, 0, 6) };
@@ -1154,7 +1154,8 @@ public sealed class MainForm : Form
         _renders.DoubleClick += (_, _) =>
         {
             if (SelectedRenders().FirstOrDefault() is { State: "done" } j)
-                foreach (var g in _generated.Where(g => (g.ShortTitle ?? g.Title) == j.Short.Title && File.Exists(g.Path) && g.When >= j.Started)) OpenPath(g.Path);
+                foreach (var g in _generated.Where(g => (g.ShortTitle ?? g.Title) == j.Short.Title && File.Exists(g.Path) && g.When >= j.Started
+                                                        && j.Langs.Contains(g.Language == "en" ? "en" : "original"))) OpenPath(g.Path);
         };
         _editSegments.CellEndEdit += (_, e) => OnSegmentEdited(e.RowIndex, e.ColumnIndex);
         _editSegments.CellDoubleClick += async (_, e) => { if (e.RowIndex >= 0 && e.ColumnIndex != 2) await PlayFromRowAsync(e.RowIndex); };
@@ -2728,22 +2729,26 @@ public sealed class MainForm : Form
     private static string PlanText(RenderJob j) => string.Join("  ·  ", j.Langs.Select(l =>
         (l == "en" ? "English" : "Original") + (j.Publish.TryGetValue(l, out var d) && d.Count > 0 ? " → " + string.Join(", ", d.Select(x => x.Network == "tiktok" ? "TikTok" : x.Label)) : "")));
 
+    /// <summary>Queues one row per caption version: the original and the English render each show their own progress.</summary>
     private void EnqueueRender(ShortSuggestion s, List<string> langs, Dictionary<string, List<AutoDestination>>? publish = null)
     {
         publish ??= new();
-        // the same short still waiting: just update what it renders, never twice in a row
-        if (_renderJobs.FirstOrDefault(j => j.State == "queued" && ReferenceEquals(j.Short, s)) is { } waiting)
+        foreach (var lang in langs)
         {
-            waiting.Langs = langs.Union(waiting.Langs).ToList();
-            foreach (var (lang, dests) in publish) waiting.Publish[lang] = dests; // the latest choice for a version wins
-            waiting.Row.SubItems[1].Text = PlanText(waiting);
-            Log($"\"{s.Title}\" is already waiting in the render queue; it renders {LangsText(waiting.Langs)}.");
-            return;
+            var dests = publish.TryGetValue(lang, out var d) ? d : new List<AutoDestination>();
+            // this version of this short still waiting: update where it goes, never queue it twice
+            if (_renderJobs.FirstOrDefault(j => j.State == "queued" && ReferenceEquals(j.Short, s) && j.Langs.SequenceEqual(new[] { lang })) is { } waiting)
+            {
+                waiting.Publish = new() { [lang] = dests };
+                waiting.Row.SubItems[1].Text = PlanText(waiting);
+                Log($"\"{s.Title}\" ({LangsText(new[] { lang })}) is already waiting in the render queue.");
+                continue;
+            }
+            var job = new RenderJob { Short = s, Langs = new List<string> { lang }, Publish = new() { [lang] = dests } };
+            job.Row = new ListViewItem(new[] { s.Title, PlanText(job), "Waiting" }) { Tag = job, ForeColor = Theme.TextMuted };
+            _renderJobs.Add(job);
+            _renders.Items.Add(job.Row);
         }
-        var job = new RenderJob { Short = s, Langs = langs, Publish = publish };
-        job.Row = new ListViewItem(new[] { s.Title, PlanText(job), "Waiting" }) { Tag = job, ForeColor = Theme.TextMuted };
-        _renderJobs.Add(job);
-        _renders.Items.Add(job.Row);
         Log($"Render queued: \"{s.Title}\" ({LangsText(langs)}).");
         PumpRenders();
         UpdateRenders();
@@ -2787,7 +2792,8 @@ public sealed class MainForm : Form
             }
             _lastBusyOutcome = ""; // GenerateAsync can stop before it starts (no transcript, say)
             await GenerateAsync(new[] { j.Short }, j.Langs, openVideos: true);
-            var made = _generated.Count(g => (g.ShortTitle ?? g.Title) == j.Short.Title && g.When >= j.Started && File.Exists(g.Path));
+            var made = _generated.Count(g => (g.ShortTitle ?? g.Title) == j.Short.Title && g.When >= j.Started && File.Exists(g.Path)
+                                             && j.Langs.Contains(g.Language == "en" ? "en" : "original"));
             if (_lastBusyOutcome == "cancelled") { j.State = "cancelled"; SetRenderRow(j, "Cancelled", Theme.Warning); }
             else if (made > 0 && _lastBusyOutcome == "done")
             {
@@ -2800,7 +2806,7 @@ public sealed class MainForm : Form
                                                              && (g.Language == "en") == (lang == "en"));
                     if (file is not null) posts += _publishPanel.QueueAutomatic(file, dests);
                 }
-                SetRenderRow(j, $"Done: {made} video{(made == 1 ? "" : "s")}" + (posts > 0 ? $", {posts} post{(posts == 1 ? "" : "s")} publishing (see Publish)" : ", listed on Publish") + ". Double-click to play.", Theme.Success);
+                SetRenderRow(j, "Done" + (posts > 0 ? $", {posts} post{(posts == 1 ? "" : "s")} publishing (see Publish)" : ", listed on Publish") + ". Double-click to play.", Theme.Success);
             }
             else { j.State = "failed"; SetRenderRow(j, "Failed: see Activity for the details", Theme.Danger); }
         }
@@ -3240,7 +3246,7 @@ public sealed class MainForm : Form
         _progress.Value = pct;
         _status.Text = _busyTitle.Length == 0 ? $"{pct}%" : $"{_busyTitle} - {pct}%";
         if (_currentRender is { State: "running" } r)
-            SetRenderRow(r, $"Rendering{(_busyTitle.EndsWith("(EN)", StringComparison.Ordinal) ? " English" : r.Langs.Count > 1 ? " original" : "")} {pct}%", Theme.Purple);
+            SetRenderRow(r, $"Rendering {pct}%", Theme.Purple);
     });
 
     private void Log(string message)
