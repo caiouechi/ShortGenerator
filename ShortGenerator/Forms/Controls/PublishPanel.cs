@@ -603,7 +603,8 @@ public sealed class PublishPanel : UserControl
             j.Item.SubItems[2].Text = $"{j.Card.Title} ({j.Account}): " + (at is { } s3 ? $"scheduled for {When(s3)}" : "waiting in the queue");
         }
         Log(at is { } s4 ? $"Scheduled {jobs.Count} upload(s) for {s4:ddd d MMM HH:mm}." : $"Queued {jobs.Count} upload(s).");
-        if (at is not null) { SaveSchedule(); _scheduleOn.Checked = false; }
+        // the schedule stays ticked with its time: the same short often goes to another network for the same moment
+        if (at is not null) SaveSchedule();
         Pump(client);
         UpdateQueue();
         UpdateButtons();
