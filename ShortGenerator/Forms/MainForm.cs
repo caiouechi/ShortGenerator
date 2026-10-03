@@ -1950,8 +1950,7 @@ public sealed class MainForm : Form
             opts.CaptionLanguage = lang ?? "original";
             var path = await _renderer.ExportCoverAsync(_video, s, opts, tmp, CancellationToken.None);
             if (path is null || !ReferenceEquals(_editing, s) || CoverLanguage != lang) return; // switched short or language meanwhile
-            using var fs = File.OpenRead(path);
-            var img = Image.FromStream(fs);
+            var img = Theme.ReadImage(path); // a copy: the file is deleted next, and the stream must not outlive it
             var old = _coverPreview.Image;
             _coverPreview.Image = img;
             old?.Dispose();

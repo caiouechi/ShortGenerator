@@ -75,6 +75,24 @@ public static class Theme
 
     private static readonly Dictionary<string, Image?> ImageCache = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Reads an image into memory that no longer depends on the stream. Image.FromStream needs its stream open for
+    /// the image's whole life; once the stream is disposed, GDI+ can read freed memory the next time the image is
+    /// painted and throw SEHException ("External component has thrown an exception") from deep in the message loop.
+    /// </summary>
+    public static Bitmap ReadImage(Stream stream)
+    {
+        using var source = Image.FromStream(stream);
+        return new Bitmap(source);
+    }
+
+    /// <summary>Reads an image file without keeping it open or locked.</summary>
+    public static Bitmap ReadImage(string path)
+    {
+        using var fs = File.OpenRead(path);
+        return ReadImage(fs);
+    }
+
     public static Image? LoadImage(string name)
     {
         if (ImageCache.TryGetValue(name, out var cached)) return cached;
@@ -86,7 +104,7 @@ public static class Theme
             if (res is not null)
             {
                 using var s = asm.GetManifestResourceStream(res);
-                if (s is not null) img = Image.FromStream(s);
+                if (s is not null) img = ReadImage(s);
             }
         }
         catch { img = null; }

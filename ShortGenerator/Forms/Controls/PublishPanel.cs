@@ -426,8 +426,7 @@ public sealed class PublishPanel : UserControl
         if (path is null || !File.Exists(path)) return;
         try
         {
-            using var fs = File.OpenRead(path);
-            _cover.Image = Image.FromStream(fs);
+            _cover.Image = Theme.ReadImage(path);
         }
         catch { }
     }
