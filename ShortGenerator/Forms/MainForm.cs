@@ -1167,6 +1167,15 @@ public sealed class MainForm : Form
         _segPlay.Click += async (_, _) => { if (_editSegments.CurrentRow is not null) await PlayFromRowAsync(_editSegments.CurrentRow.Index); };
         _segDelete.Click += (_, _) => DeleteSegmentRow();
         Shown += (_, _) => RefreshLibrary();
+        // posts scheduled before the app closed come back (and missed ones are offered)
+        Shown += async (_, _) => { try { await _publishPanel.RestoreScheduledAsync(); } catch (Exception ex) { Log("Could not restore scheduled posts: " + ex.Message); } };
+        FormClosing += (_, e) =>
+        {
+            int n = _publishPanel.ScheduledCount;
+            if (n == 0 || e.CloseReason != CloseReason.UserClosing) return;
+            if (!AppDialog.Confirm(this, "Posts are scheduled", $"{n} scheduled post{(n == 1 ? "" : "s")} only go out while Short Generator is open. They are kept: next time it opens, any that came due are offered to publish.",
+                    "Close anyway", "Keep it open", kind: AppDialog.Kind.Warning)) e.Cancel = true;
+        };
         _cancel.Click += (_, _) => _cts?.Cancel();
 
         _openFile.Click += (_, _) => { if (_video is not null) OpenPath(_video.FilePath); };

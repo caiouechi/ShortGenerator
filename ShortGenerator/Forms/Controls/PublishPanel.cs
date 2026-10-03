@@ -54,6 +54,12 @@ public sealed class PublishPanel : UserControl
     private readonly FancyButton _clearStorage = new() { Text = "Clear galiluna storage", Width = 200, Enabled = false, Visible = false, Glyph = "\uE74D" };
     private GaliLunaClient.StorageInfo? _storage;
     private readonly FancyButton _cancelPublish = new() { Text = "Cancel all", Width = 150, Height = 36, Visible = false, Glyph = "\uE711" };
+    // scheduling: "Schedule for" + date and time; the publish buttons then schedule instead of sending now
+    private readonly CheckBox _scheduleOn = new() { Text = "Schedule for", AutoSize = true, Margin = new Padding(0, 10, 6, 0) };
+    private readonly DateTimePicker _scheduleAt = new() { Format = DateTimePickerFormat.Custom, CustomFormat = "ddd d MMM yyyy   HH:mm", Width = 210, Enabled = false, Margin = new Padding(0, 6, 14, 0) };
+    /// <summary>Checks every 15 s for scheduled posts that are due.</summary>
+    private readonly System.Windows.Forms.Timer _scheduleTimer = new() { Interval = 15_000 };
+    private bool _restored;
 
     // left, under the shorts: the publishing queue (what is running, waiting, done)
     private readonly SplitContainer _leftSplit = new() { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
@@ -151,6 +157,8 @@ public sealed class PublishPanel : UserControl
         _cancelPublish.Margin = new Padding(0, 2, 8, 0); _cancelPublish.Kind = ButtonKind.Danger;
         _publishAll.Margin = new Padding(0, 2, 0, 0);
         headerButtons.Controls.Add(_cancelPublish);
+        headerButtons.Controls.Add(_scheduleOn);
+        headerButtons.Controls.Add(_scheduleAt);
         headerButtons.Controls.Add(_publishAll);
         header.Controls.Add(headerButtons, 1, 0);
         _summary.Margin = new Padding(0, 2, 0, 0);
@@ -259,6 +267,15 @@ public sealed class PublishPanel : UserControl
             UpdateQueue();
         };
         _queue.SelectedIndexChanged += (_, _) => UpdateQueue();
+        _scheduleAt.Value = NextHalfHour();
+        _scheduleOn.CheckedChanged += (_, _) =>
+        {
+            _scheduleAt.Enabled = _scheduleOn.Checked;
+            if (_scheduleOn.Checked && _scheduleAt.Value <= DateTime.Now) _scheduleAt.Value = NextHalfHour();
+            UpdateButtons();
+        };
+        _scheduleTimer.Tick += (_, _) => StartDueScheduled();
+        _scheduleTimer.Start();
         _clearStorage.Click += async (_, _) => await ClearStorageAsync();
         _publishAll.Visible = true;
         _list.DoubleClick += (_, _) => { if (_list.SelectedItems.Count == 1 && _list.SelectedItems[0].Tag is GeneratedFile f && File.Exists(f.Path)) TryOpen(f.Path); };
@@ -457,7 +474,8 @@ public sealed class PublishPanel : UserControl
         int open = _jobs.Count(j => j.IsOpen);
         _cancelPublish.Visible = open > 0;
         _cancelPublish.Text = open > 1 ? $"Cancel all ({open})" : "Cancel all";
-        _publishAll.Text = uploads > 1 ? $"Queue all ({uploads})" : "Queue all";
+        _publishAll.Text = _scheduleOn.Checked ? (uploads > 1 ? $"Schedule all ({uploads})" : "Schedule all") : uploads > 1 ? $"Queue all ({uploads})" : "Queue all";
+        foreach (var c in _networkCards) c.SetScheduling(_scheduleOn.Checked);
         _summary.Text = _accounts is null ? "" : current is null ? "Select a short on the left." :
             uploads == 0 ? "Tick the accounts to publish to in a card below." :
             $"Queue all sends this short to {uploads} destination{(uploads == 1 ? "" : "s")} on {destinations} network{(destinations == 1 ? "" : "s")}." +
@@ -486,10 +504,27 @@ public sealed class PublishPanel : UserControl
         public required string Key { get; init; }
         public ListViewItem Row { get; set; } = null!;
         public CancellationTokenSource Cts { get; } = new();
-        /// <summary>queued | running | done | failed | cancelled</summary>
+        /// <summary>scheduled | queued | running | done | failed | cancelled</summary>
         public string State { get; set; } = "queued";
-        public bool IsOpen => State is "queued" or "running";
+        public bool IsOpen => State is "scheduled" or "queued" or "running";
+        /// <summary>When a scheduled post goes out; null for "now".</summary>
+        public DateTime? ScheduledAt { get; set; }
+        /// <summary>A scheduled post that came due: it waits until no upload is running, then goes.</summary>
+        public bool FromSchedule { get; set; }
+        public string ScheduleId { get; set; } = Guid.NewGuid().ToString("N");
     }
+
+    private static DateTime NextHalfHour()
+    {
+        var n = DateTime.Now.AddMinutes(30);
+        return new DateTime(n.Year, n.Month, n.Day, n.Hour, n.Minute < 30 ? 30 : 0, 0).AddHours(n.Minute < 30 ? 0 : 1);
+    }
+
+    private static string When(DateTime at) =>
+        at.Date == DateTime.Today ? $"today {at:HH:mm}" : at.Date == DateTime.Today.AddDays(1) ? $"tomorrow {at:HH:mm}" : at.ToString("ddd d MMM HH:mm");
+
+    /// <summary>Scheduled posts waiting for their time.</summary>
+    public int ScheduledCount => _jobs.Count(j => j.State == "scheduled");
 
     /// <summary>
     /// Queues the selected short for the ticked accounts of the given networks. Nothing waits for the upload: the jobs
@@ -534,19 +569,41 @@ public sealed class PublishPanel : UserControl
         notes.Add("Uploads run in the queue on the left; you can keep working and publish other videos meanwhile.");
         if (skipped > 0) notes.Add($"{skipped} upload{(skipped == 1 ? "" : "s")} already in the queue {(skipped == 1 ? "is" : "are")} skipped.");
         if (again.Count > 0) notes.Add("!Already posted before, will be posted again: " + string.Join(", ", again) + ".");
-        var title = jobs.Count == 1 ? "Publish this short?" : $"Publish {jobs.Count} uploads?";
-        if (!AppDialog.Confirm(this, title, "galiluna sends the video, its cover and its text to:", jobs.Count == 1 ? "Publish" : $"Publish {jobs.Count}",
-                details: details, notes: notes)) return Task.CompletedTask;
+        DateTime? at = _scheduleOn.Checked ? _scheduleAt.Value : null;
+        if (at is { } a && a <= DateTime.Now.AddSeconds(30))
+        {
+            AppDialog.Alert(this, "Pick a later time", "The scheduled time has to be in the future. Untick \"Schedule for\" to publish now.", AppDialog.Kind.Warning);
+            return Task.CompletedTask;
+        }
+        string title;
+        if (at is { } when)
+        {
+            notes.RemoveAll(n => n.StartsWith("Posts go live right away", StringComparison.Ordinal) || n.StartsWith("Uploads run in the queue", StringComparison.Ordinal));
+            notes.Insert(0, "!Short Generator sends them: keep it open and the computer on at that time. It keeps the computer from sleeping until then.");
+            notes.Insert(1, "If something is still uploading at that time, they wait their turn in the queue and go right after it.");
+            title = jobs.Count == 1 ? $"Schedule this short for {When(when)}?" : $"Schedule {jobs.Count} uploads for {When(when)}?";
+            if (!AppDialog.Confirm(this, title, $"On {when:dddd d MMMM, HH:mm} galiluna sends the video, its cover and its text to:",
+                    jobs.Count == 1 ? "Schedule" : $"Schedule {jobs.Count}", details: details, notes: notes)) return Task.CompletedTask;
+        }
+        else
+        {
+            title = jobs.Count == 1 ? "Publish this short?" : $"Publish {jobs.Count} uploads?";
+            if (!AppDialog.Confirm(this, title, "galiluna sends the video, its cover and its text to:", jobs.Count == 1 ? "Publish" : $"Publish {jobs.Count}",
+                    details: details, notes: notes)) return Task.CompletedTask;
+        }
 
         foreach (var j in jobs)
         {
             _inFlight.Add(j.Key);
-            j.Row = new ListViewItem(new[] { (j.File.Language == "en" ? "[EN] " : "") + j.File.Title, $"{j.Card.Title} · {j.Account}", "Waiting" }) { Tag = j, ForeColor = Theme.TextMuted };
+            if (at is { } t) { j.State = "scheduled"; j.ScheduledAt = t; }
+            var status = at is { } s2 ? $"Scheduled for {When(s2)}" : "Waiting";
+            j.Row = new ListViewItem(new[] { (j.File.Language == "en" ? "[EN] " : "") + j.File.Title, $"{j.Card.Title} · {j.Account}", status }) { Tag = j, ForeColor = at is null ? Theme.TextMuted : Theme.CosmicBlue };
             _jobs.Add(j);
             _queue.Items.Add(j.Row);
-            j.Item.SubItems[2].Text = $"{j.Card.Title} ({j.Account}): waiting in the queue";
+            j.Item.SubItems[2].Text = $"{j.Card.Title} ({j.Account}): " + (at is { } s3 ? $"scheduled for {When(s3)}" : "waiting in the queue");
         }
-        Log($"Queued {jobs.Count} upload(s).");
+        Log(at is { } s4 ? $"Scheduled {jobs.Count} upload(s) for {s4:ddd d MMM HH:mm}." : $"Queued {jobs.Count} upload(s).");
+        if (at is not null) { SaveSchedule(); _scheduleOn.Checked = false; }
         Pump(client);
         UpdateQueue();
         UpdateButtons();
@@ -556,7 +613,8 @@ public sealed class PublishPanel : UserControl
     /// <summary>Starts waiting jobs while fewer than <see cref="MaxParallel"/> run.</summary>
     private void Pump(GaliLunaClient client)
     {
-        while (_running < MaxParallel && _jobs.FirstOrDefault(j => j.State == "queued") is { } next)
+        // a scheduled post that came due waits until nothing is uploading, then goes: it never runs alongside
+        while (_running < MaxParallel && _jobs.FirstOrDefault(j => j.State == "queued" && (!j.FromSchedule || _running == 0)) is { } next)
         {
             next.State = "running";
             _running++;
@@ -645,10 +703,12 @@ public sealed class PublishPanel : UserControl
 
     private void CancelJob(PublishJob j)
     {
-        if (j.State == "queued")
+        if (j.State is "queued" or "scheduled")
         {
             // never started: nothing reached galiluna
+            bool wasScheduled = j.ScheduledAt is not null;
             j.State = "cancelled";
+            if (wasScheduled) SaveSchedule();
             _inFlight.Remove(j.Key);
             SetJob(j, "Cancelled before it started", Theme.TextMuted);
             if (!j.Item.ListView?.IsDisposed ?? false) j.Item.SubItems[2].Text = Describe(j.File);
@@ -777,6 +837,103 @@ public sealed class PublishPanel : UserControl
         return queued;
     }
 
+    // ------------------------------------------------------------------ scheduling
+
+    /// <summary>Every 15 s: scheduled posts whose time has come join the end of the queue (after anything running).</summary>
+    private void StartDueScheduled()
+    {
+        KeepAwake(ScheduledCount > 0);
+        var due = _jobs.Where(j => j.State == "scheduled" && j.ScheduledAt <= DateTime.Now).ToList();
+        if (due.Count == 0) return;
+        var client = ClientFactory();
+        if (client is null) { foreach (var j in due) SetJob(j, "Due, but not signed in to galiluna", Theme.Warning); return; }
+        foreach (var j in due) QueueDue(j);
+        SaveSchedule();
+        Log($"{due.Count} scheduled upload(s) are due" + (_running > 0 ? "; they go after the upload in progress." : "."));
+        Pump(client);
+        UpdateQueue();
+        UpdateButtons();
+    }
+
+    private void QueueDue(PublishJob j)
+    {
+        j.State = "queued";
+        j.FromSchedule = true;
+        // to the end of the queue: it goes after whatever was queued or running before its time came
+        _jobs.Remove(j); _jobs.Add(j);
+        if (j.Row.ListView is not null) { _queue.Items.Remove(j.Row); _queue.Items.Add(j.Row); }
+        SetJob(j, _running > 0 ? $"Due {j.ScheduledAt:HH:mm}: waiting for the upload in progress" : $"Due {j.ScheduledAt:HH:mm}: starting", Theme.Purple);
+    }
+
+    /// <summary>Writes the posts still waiting for their time, so a restart keeps them.</summary>
+    private void SaveSchedule() => ScheduleStore.Save(_jobs.Where(j => j.State == "scheduled").Select(j => new ScheduleStore.ScheduledPost
+    {
+        Id = j.ScheduleId, At = j.ScheduledAt!.Value, Path = j.File.Path, Title = j.File.Title, Language = j.File.Language,
+        CoverPath = j.File.CoverPath, CoverTimeSeconds = j.File.CoverTimeSeconds, Network = j.Card.Network, Account = j.Account,
+        Options = j.Options, Text = j.Text,
+    }));
+
+    /// <summary>
+    /// At start-up: brings back the posts scheduled before the app closed. Those whose time passed while it was
+    /// closed are offered to publish now or drop. Needs the galiluna accounts (the cards), so it loads them.
+    /// </summary>
+    public async Task RestoreScheduledAsync()
+    {
+        if (_restored) return;
+        var saved = ScheduleStore.Load();
+        if (saved.Count == 0) { _restored = true; return; }
+        await EnsureAccountsAsync();
+        if (_accounts is null) { Log($"{saved.Count} scheduled post(s) wait for you to sign in to galiluna."); return; }
+        _restored = true;
+        var restored = new List<PublishJob>();
+        foreach (var p in saved)
+        {
+            var card = _networkCards.FirstOrDefault(c => c.Network == p.Network);
+            if (card is null || !File.Exists(p.Path)) { Log($"Scheduled \"{p.Title}\" ({p.Network}, {p.Account}) dropped: " + (card is null ? "the network is not connected any more." : "the video file is gone.")); continue; }
+            var file = Files().FirstOrDefault(f => string.Equals(f.Path, p.Path, StringComparison.OrdinalIgnoreCase))
+                       ?? new GeneratedFile { Path = p.Path, Title = p.Title, Language = p.Language, CoverPath = p.CoverPath, CoverTimeSeconds = p.CoverTimeSeconds };
+            var key = $"{file.Path}|{card.Network}|{p.Account}";
+            if (_inFlight.Contains(key)) continue;
+            var item = _list.Items.Cast<ListViewItem>().FirstOrDefault(i => ReferenceEquals(i.Tag, file)) ?? new ListViewItem(new[] { "", "", "" });
+            var j = new PublishJob { Item = item, File = file, Card = card, Account = p.Account, Options = p.Options, Text = p.Text, Key = key, State = "scheduled", ScheduledAt = p.At, ScheduleId = p.Id };
+            _inFlight.Add(key);
+            j.Row = new ListViewItem(new[] { (file.Language == "en" ? "[EN] " : "") + file.Title, $"{card.Title} · {p.Account}", $"Scheduled for {When(p.At)}" }) { Tag = j, ForeColor = Theme.CosmicBlue };
+            _jobs.Add(j);
+            _queue.Items.Add(j.Row);
+            restored.Add(j);
+        }
+        var missed = restored.Where(j => j.ScheduledAt <= DateTime.Now).ToList();
+        if (missed.Count > 0)
+        {
+            var details = missed.Select(j => $"{j.File.Title}\nwas due {When(j.ScheduledAt!.Value)}, to {j.Card.Title} {j.Account}").ToList();
+            if (AppDialog.Confirm(this, "Scheduled posts were missed", "These came due while Short Generator was closed:", missed.Count == 1 ? "Publish now" : $"Publish {missed.Count} now",
+                    "Cancel them", details: details))
+            {
+                foreach (var j in missed) QueueDue(j);
+                if (ClientFactory() is { } c) Pump(c);
+            }
+            else foreach (var j in missed) CancelJob(j);
+        }
+        SaveSchedule();
+        Log($"Restored {restored.Count} scheduled post(s).");
+        UpdateQueue();
+        UpdateButtons();
+        KeepAwake(ScheduledCount > 0);
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern uint SetThreadExecutionState(uint flags);
+    private bool _keepingAwake;
+
+    /// <summary>While posts are scheduled the computer is kept from sleeping on its own (a closed lid still sleeps it).</summary>
+    private void KeepAwake(bool on)
+    {
+        if (on == _keepingAwake) return;
+        _keepingAwake = on;
+        const uint Continuous = 0x80000000, SystemRequired = 0x00000001;
+        try { SetThreadExecutionState(on ? Continuous | SystemRequired : Continuous); } catch { }
+    }
+
     /// <summary>True while an upload waits or runs: the files on disk must stay until it is done.</summary>
     public bool IsPublishing => _jobs.Any(j => j.IsOpen);
 
@@ -788,6 +945,8 @@ public sealed class PublishPanel : UserControl
         int running = _jobs.Count(j => j.State == "running"), waiting = _jobs.Count(j => j.State == "queued");
         int done = _jobs.Count(j => j.State == "done"), failed = _jobs.Count(j => j.State is "failed" or "cancelled");
         var parts = new List<string>();
+        int scheduled = _jobs.Count(j => j.State == "scheduled");
+        if (scheduled > 0) parts.Add($"{scheduled} scheduled");
         if (running > 0) parts.Add($"{running} running");
         if (waiting > 0) parts.Add($"{waiting} waiting");
         if (done > 0) parts.Add($"{done} done");
@@ -1033,5 +1192,6 @@ public sealed class PublishPanel : UserControl
         /// <param name="files">How many of the ticked videos this network will receive (after the language filter).</param>
         public void SetEnabled(bool enabled, int files) { _publish.Enabled = enabled; _publish.Text = files > 1 && enabled ? $"Publish {files} to {Title}" : $"Publish to {Title}"; }
         public void SetOutcome(string text, Color color) { _outcome.Text = text; _outcome.ForeColor = color; }
+        public void SetScheduling(bool on) => _publish.Text = (on ? "Schedule for " : "Publish to ") + Title;
     }
 }
