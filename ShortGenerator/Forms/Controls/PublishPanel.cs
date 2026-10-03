@@ -801,8 +801,14 @@ public sealed class PublishPanel : UserControl
     /// uses the text written for its network, the cover and the options set on the cards (TikTok mode, YouTube privacy).
     /// Returns how many uploads were queued.
     /// </summary>
-    public int QueueAutomatic(GeneratedFile file, IReadOnlyList<AutoDestination> destinations)
+    /// <param name="at">When to send; null (or a time already past) = now.</param>
+    public int QueueAutomatic(GeneratedFile file, IReadOnlyList<AutoDestination> destinations, DateTime? at = null)
     {
+        if (at is { } passed && passed <= DateTime.Now)
+        {
+            Log($"Auto publish: the time set for \"{file.Title}\" ({passed:HH:mm}) passed while it rendered; publishing now.");
+            at = null;
+        }
         var client = ClientFactory();
         if (client is null || _accounts is null || destinations.Count == 0) return 0;
         RefreshList();
@@ -822,15 +828,18 @@ public sealed class PublishPanel : UserControl
                 Text = new NetworkPost { Title = t.Title, Description = t.Description, Tags = t.Tags.ToList() },
             };
             _inFlight.Add(key);
-            j.Row = new ListViewItem(new[] { (file.Language == "en" ? "[EN] " : "") + file.Title, $"{card.Title} · {account}", "Waiting (published when rendered)" }) { Tag = j, ForeColor = Theme.TextMuted };
+            if (at is { } t1) { j.State = "scheduled"; j.ScheduledAt = t1; }
+            j.Row = new ListViewItem(new[] { (file.Language == "en" ? "[EN] " : "") + file.Title, $"{card.Title} · {account}", at is { } t2 ? $"Scheduled for {When(t2)}" : "Waiting (published when rendered)" })
+                { Tag = j, ForeColor = at is null ? Theme.TextMuted : Theme.CosmicBlue };
             _jobs.Add(j);
             _queue.Items.Add(j.Row);
-            if (item.ListView is not null) item.SubItems[2].Text = $"{card.Title} ({account}): waiting in the queue";
+            if (item.ListView is not null) item.SubItems[2].Text = $"{card.Title} ({account}): " + (at is { } t3 ? $"scheduled for {When(t3)}" : "waiting in the queue");
             queued++;
         }
         if (queued > 0)
         {
-            Log($"Auto publish: \"{file.Title}\" queued for {queued} account(s).");
+            Log(at is { } t4 ? $"Auto publish: \"{file.Title}\" scheduled for {t4:ddd d MMM HH:mm} on {queued} account(s)." : $"Auto publish: \"{file.Title}\" queued for {queued} account(s).");
+            if (at is not null) { SaveSchedule(); KeepAwake(true); }
             Pump(client);
             UpdateQueue();
             UpdateButtons();

@@ -20,12 +20,16 @@ public sealed class RenderPublishDialog : Form
     public List<string> Languages { get; } = new();
     /// <summary>Per version ("original" / "en"): where it goes once rendered. Empty = render only.</summary>
     public Dictionary<string, List<AutoDestination>> Publish { get; } = new();
+    /// <summary>Per version: when its posts go out; null = as soon as it is rendered.</summary>
+    public Dictionary<string, DateTime?> PublishAt { get; } = new();
 
     private sealed class Version
     {
         public required string Lang { get; init; }
         public required CheckBox Render { get; init; }
         public List<(CheckBox Box, AutoDestination Dest)> Targets { get; } = new();
+        public CheckBox? ScheduleOn { get; set; }
+        public DateTimePicker? ScheduleAt { get; set; }
     }
 
     private readonly List<Version> _versions = new();
@@ -79,8 +83,21 @@ public sealed class RenderPublishDialog : Form
                 }
                 if (dests.Count == 0)
                     body.Controls.Add(new Label { Text = "No account is connected on galiluna yet.", AutoSize = true, ForeColor = Theme.TextMuted, Margin = new Padding(20, 2, 0, 2) });
+                else
+                {
+                    // when: as soon as it is rendered, or at a set time (this version only)
+                    var when = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(20, 6, 0, 0), BackColor = Theme.Elevated };
+                    var on = new CheckBox { Text = "Schedule for", AutoSize = true, Margin = new Padding(0, 6, 6, 0) };
+                    var at = new DateTimePicker { Format = DateTimePickerFormat.Custom, CustomFormat = "ddd d MMM yyyy   HH:mm", Width = 210, Enabled = false, Value = NextHalfHour(), Margin = new Padding(0, 2, 0, 0) };
+                    var hint = new Label { Text = "or when rendered", AutoSize = true, ForeColor = Theme.TextMuted, Margin = new Padding(8, 7, 0, 0) };
+                    on.CheckedChanged += (_, _) => { at.Enabled = on.Checked && on.Enabled; hint.Visible = !on.Checked; if (on.Checked && at.Value <= DateTime.Now) at.Value = NextHalfHour(); Sync(); };
+                    when.Controls.Add(on); when.Controls.Add(at); when.Controls.Add(hint);
+                    body.Controls.Add(when);
+                    v.ScheduleOn = on; v.ScheduleAt = at;
+                }
             }
             render.CheckedChanged += (_, _) => { foreach (var (b, _) in v.Targets) b.Enabled = render.Checked; Sync(); };
+            foreach (var (b, _) in v.Targets) b.CheckedChanged += (_, _) => Sync();
             card.Controls.Add(body);
             body.SizeChanged += (_, _) => card.Height = body.Height + card.Padding.Vertical;
             // clip to the rounded shape so no square corner shows against the page
@@ -95,7 +112,8 @@ public sealed class RenderPublishDialog : Form
             : new[]
             {
                 "Each post uses the text written for that network; to change a caption or hashtags, edit it on Publish before rendering, or publish from there.",
-                "Posts go out as soon as the render finishes and show in the Publishing queue on Publish.",
+                "Posts go out as soon as the render finishes, or at the time you schedule, and show in the Publishing queue on Publish.",
+                "A scheduled post is sent by this app: keep it open and the computer on at that time.",
             };
         foreach (var n in notes)
             root.Controls.Add(new Label { Text = n, AutoSize = true, MaximumSize = new Size(textWidth, 0), ForeColor = Theme.TextMuted, Margin = new Padding(0, 0, 0, 4) });
@@ -110,10 +128,18 @@ public sealed class RenderPublishDialog : Form
 
         _go.Click += (_, _) =>
         {
+            // a schedule must lie ahead (a render takes minutes, so a time a minute away is already tight)
+            var past = _versions.FirstOrDefault(v => v.Render.Checked && v.Targets.Any(t => t.Box.Checked) && v.ScheduleOn is { Checked: true } && v.ScheduleAt!.Value <= DateTime.Now.AddMinutes(1));
+            if (past is not null)
+            {
+                AppDialog.Alert(this, "Pick a later time", $"The {(past.Lang == "en" ? "English" : "original")} version is scheduled for a time that has already passed. Pick a later time, or untick \"Schedule for\" to post it as soon as it is rendered.", AppDialog.Kind.Warning);
+                return;
+            }
             foreach (var v in _versions.Where(v => v.Render.Checked))
             {
                 Languages.Add(v.Lang);
                 Publish[v.Lang] = v.Targets.Where(t => t.Box.Checked).Select(t => t.Dest).ToList();
+                PublishAt[v.Lang] = v.ScheduleOn is { Checked: true } ? v.ScheduleAt!.Value : null;
             }
             DialogResult = DialogResult.OK;
             Close();
@@ -122,7 +148,9 @@ public sealed class RenderPublishDialog : Form
         AcceptButton = _go; CancelButton = cancel;
         Theme.Apply(this);
         Theme.Primary(_go);
-        foreach (Control c in root.Controls) if (c is Card k) foreach (Control inner in k.Controls) inner.BackColor = Theme.Elevated;
+        // the theme tints nested panels; everything inside a white card stays white
+        static void Whiten(Control c) { foreach (Control x in c.Controls) { if (x is Panel or Label or CheckBox) x.BackColor = Theme.Elevated; Whiten(x); } }
+        foreach (Control c in root.Controls) if (c is Card k) Whiten(k);
         Sync();
         Load += (_, _) =>
         {
@@ -131,13 +159,29 @@ public sealed class RenderPublishDialog : Form
         };
     }
 
-    /// <summary>The main button says what will happen: render, or render and publish N posts.</summary>
+    private static DateTime NextHalfHour()
+    {
+        var n = DateTime.Now.AddMinutes(30);
+        return new DateTime(n.Year, n.Month, n.Day, n.Hour, n.Minute < 30 ? 30 : 0, 0).AddHours(n.Minute < 30 ? 0 : 1);
+    }
+
+    /// <summary>The main button says what will happen: render, render and publish, or render and schedule.</summary>
     public void Sync()
     {
         int renders = _versions.Count(v => v.Render.Checked);
-        int posts = _versions.Where(v => v.Render.Checked).Sum(v => v.Targets.Count(t => t.Box.Checked));
+        var posting = _versions.Where(v => v.Render.Checked && v.Targets.Any(t => t.Box.Checked)).ToList();
+        int posts = posting.Sum(v => v.Targets.Count(t => t.Box.Checked));
+        // the schedule row only matters for a version that posts somewhere
+        foreach (var v in _versions)
+        {
+            if (v.ScheduleOn is null) continue;
+            bool posts1 = v.Render.Checked && v.Targets.Any(t => t.Box.Checked);
+            v.ScheduleOn.Enabled = posts1;
+            v.ScheduleAt!.Enabled = posts1 && v.ScheduleOn.Checked;
+        }
+        bool anyScheduled = posting.Any(v => v.ScheduleOn is { Checked: true });
         _go.Enabled = renders > 0;
-        _go.Text = posts > 0 ? $"Render & publish ({posts})" : renders > 1 ? "Render both" : "Render";
+        _go.Text = posts > 0 ? $"Render & {(anyScheduled ? "schedule" : "publish")} ({posts})" : renders > 1 ? "Render both" : "Render";
         _go.Width = TextRenderer.MeasureText(_go.Text, _go.Font).Width + 48;
     }
 }

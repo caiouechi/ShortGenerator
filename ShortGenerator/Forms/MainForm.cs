@@ -2705,10 +2705,11 @@ public sealed class MainForm : Form
             SettingsStore.Save(_settings);
         }
         var publish = dlg.Publish.Where(kv => kv.Value.Count > 0).ToDictionary(kv => kv.Key, kv => kv.Value);
+        var publishAt = new Dictionary<string, DateTime?>(dlg.PublishAt);
         // Render preview makes the real files: saved in the shorts folder with their covers and post texts and
         // listed on Publish, one per language. It goes into the render queue, so another short can be queued
         // while this one renders; the videos open as each render finishes.
-        EnqueueRender(s, langs, publish);
+        EnqueueRender(s, langs, publish, publishAt);
     }
 
     // ------------------------------------------------------------------ render queue
@@ -2720,6 +2721,8 @@ public sealed class MainForm : Form
         public required List<string> Langs { get; set; }
         /// <summary>Per version: the accounts it is published to once rendered ("publish when ready").</summary>
         public Dictionary<string, List<AutoDestination>> Publish { get; set; } = new();
+        /// <summary>Per version: when its posts go out (null = as soon as it is rendered).</summary>
+        public Dictionary<string, DateTime?> PublishAt { get; set; } = new();
         public ListViewItem Row { get; set; } = null!;
         /// <summary>queued | running | done | failed | cancelled</summary>
         public string State { get; set; } = "queued";
@@ -2736,12 +2739,17 @@ public sealed class MainForm : Form
 
     /// <summary>"Original → @a · English → @b, TikTok" for the Captions column.</summary>
     private static string PlanText(RenderJob j) => string.Join("  ·  ", j.Langs.Select(l =>
-        (l == "en" ? "English" : "Original") + (j.Publish.TryGetValue(l, out var d) && d.Count > 0 ? " → " + string.Join(", ", d.Select(x => x.Network == "tiktok" ? "TikTok" : x.Label)) : "")));
+        (l == "en" ? "English" : "Original") + (j.Publish.TryGetValue(l, out var d) && d.Count > 0
+            ? " → " + string.Join(", ", d.Select(x => x.Network == "tiktok" ? "TikTok" : x.Label))
+              + (j.PublishAt.TryGetValue(l, out var at) && at is { } t ? $" at {t:ddd HH:mm}" : "")
+            : "")));
 
     /// <summary>Queues one row per caption version: the original and the English render each show their own progress.</summary>
-    private void EnqueueRender(ShortSuggestion s, List<string> langs, Dictionary<string, List<AutoDestination>>? publish = null)
+    private void EnqueueRender(ShortSuggestion s, List<string> langs, Dictionary<string, List<AutoDestination>>? publish = null,
+        Dictionary<string, DateTime?>? publishAt = null)
     {
         publish ??= new();
+        publishAt ??= new();
         foreach (var lang in langs)
         {
             var dests = publish.TryGetValue(lang, out var d) ? d : new List<AutoDestination>();
@@ -2749,11 +2757,12 @@ public sealed class MainForm : Form
             if (_renderJobs.FirstOrDefault(j => j.State == "queued" && ReferenceEquals(j.Short, s) && j.Langs.SequenceEqual(new[] { lang })) is { } waiting)
             {
                 waiting.Publish = new() { [lang] = dests };
+                waiting.PublishAt = new() { [lang] = publishAt.GetValueOrDefault(lang) };
                 waiting.Row.SubItems[1].Text = PlanText(waiting);
                 Log($"\"{s.Title}\" ({LangsText(new[] { lang })}) is already waiting in the render queue.");
                 continue;
             }
-            var job = new RenderJob { Short = s, Langs = new List<string> { lang }, Publish = new() { [lang] = dests } };
+            var job = new RenderJob { Short = s, Langs = new List<string> { lang }, Publish = new() { [lang] = dests }, PublishAt = new() { [lang] = publishAt.GetValueOrDefault(lang) } };
             job.Row = new ListViewItem(new[] { s.Title, PlanText(job), "Waiting" }) { Tag = job, ForeColor = Theme.TextMuted };
             _renderJobs.Add(job);
             _renders.Items.Add(job.Row);
@@ -2813,9 +2822,10 @@ public sealed class MainForm : Form
                 {
                     var file = _generated.LastOrDefault(g => (g.ShortTitle ?? g.Title) == j.Short.Title && g.When >= j.Started && File.Exists(g.Path)
                                                              && (g.Language == "en") == (lang == "en"));
-                    if (file is not null) posts += _publishPanel.QueueAutomatic(file, dests);
+                    if (file is not null) posts += _publishPanel.QueueAutomatic(file, dests, j.PublishAt.GetValueOrDefault(lang));
                 }
-                SetRenderRow(j, "Done" + (posts > 0 ? $", {posts} post{(posts == 1 ? "" : "s")} publishing (see Publish)" : ", listed on Publish") + ". Double-click to play.", Theme.Success);
+                var when = j.Langs.Select(l => j.PublishAt.GetValueOrDefault(l)).FirstOrDefault(t => t is not null && t > DateTime.Now);
+                SetRenderRow(j, "Done" + (posts > 0 ? $", {posts} post{(posts == 1 ? "" : "s")} " + (when is { } w ? $"scheduled for {w:ddd HH:mm}" : "publishing") + " (see Publish)" : ", listed on Publish") + ". Double-click to play.", Theme.Success);
             }
             else { j.State = "failed"; SetRenderRow(j, "Failed: see Activity for the details", Theme.Danger); }
         }
