@@ -9,6 +9,12 @@ public sealed class VideoInfo
     public string Url { get; set; } = "";
     public string Title { get; set; } = "";
     public string Uploader { get; set; } = "";
+    /// <summary>The channel's display name (YouTube "channel"), when it differs from the uploader.</summary>
+    public string? Channel { get; set; }
+    /// <summary>The channel's handle, like "@DiarioAS", when the site has one.</summary>
+    public string? Handle { get; set; }
+    /// <summary>The channel's page, for a credit link.</summary>
+    public string? ChannelUrl { get; set; }
     public double DurationSeconds { get; set; }
     public string FilePath { get; set; } = "";
     public VideoSource Source { get; set; } = VideoSource.Other;

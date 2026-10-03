@@ -625,6 +625,7 @@ public sealed class PublishPanel : UserControl
 
     private void SetJob(PublishJob j, string status, Color color)
     {
+        JobStatusChanged?.Invoke(j.Key, status, color, j.State);
         if (j.Row.ListView is not null) { j.Row.SubItems[2].Text = status; j.Row.ForeColor = color; }
         if (!j.Item.ListView?.IsDisposed ?? false) j.Item.SubItems[2].Text = $"{j.Card.Title} ({j.Account}): {status}";
         j.Card.SetOutcome($"{j.Account}: {status}", color == Theme.TextMuted ? Theme.TextMuted : color);
@@ -784,6 +785,15 @@ public sealed class PublishPanel : UserControl
         await RefreshStorageAsync();
     }
 
+    /// <summary>Every status change of a queued upload: key (file|network|account), text, colour and state.</summary>
+    public event Action<string, string, Color, string>? JobStatusChanged;
+
+    /// <summary>Cancels the upload with this key (waiting, scheduled or running).</summary>
+    public void CancelByKey(string key)
+    {
+        if (_jobs.FirstOrDefault(j => j.Key == key && j.IsOpen) is { } j) CancelJob(j);
+    }
+
     /// <summary>galiluna's connected accounts, once loaded (null when not signed in).</summary>
     public GaliLunaClient.Accounts? Accounts => _accounts;
 
@@ -802,15 +812,16 @@ public sealed class PublishPanel : UserControl
     /// Returns how many uploads were queued.
     /// </summary>
     /// <param name="at">When to send; null (or a time already past) = now.</param>
-    public int QueueAutomatic(GeneratedFile file, IReadOnlyList<AutoDestination> destinations, DateTime? at = null)
+    public List<(AutoDestination Dest, string Key, bool Scheduled)> QueueAutomatic(GeneratedFile file, IReadOnlyList<AutoDestination> destinations, DateTime? at = null)
     {
+        var handed = new List<(AutoDestination Dest, string Key, bool Scheduled)>();
         if (at is { } passed && passed <= DateTime.Now)
         {
             Log($"Auto publish: the time set for \"{file.Title}\" ({passed:HH:mm}) passed while it rendered; publishing now.");
             at = null;
         }
         var client = ClientFactory();
-        if (client is null || _accounts is null || destinations.Count == 0) return 0;
+        if (client is null || _accounts is null || destinations.Count == 0) return handed;
         RefreshList();
         var item = _list.Items.Cast<ListViewItem>().FirstOrDefault(i => ReferenceEquals(i.Tag, file)) ?? new ListViewItem(new[] { "", "", "" });
         int queued = 0;
@@ -834,6 +845,7 @@ public sealed class PublishPanel : UserControl
             _jobs.Add(j);
             _queue.Items.Add(j.Row);
             if (item.ListView is not null) item.SubItems[2].Text = $"{card.Title} ({account}): " + (at is { } t3 ? $"scheduled for {When(t3)}" : "waiting in the queue");
+            handed.Add((d, key, at is not null));
             queued++;
         }
         if (queued > 0)
@@ -844,7 +856,7 @@ public sealed class PublishPanel : UserControl
             UpdateQueue();
             UpdateButtons();
         }
-        return queued;
+        return handed;
     }
 
     // ------------------------------------------------------------------ scheduling

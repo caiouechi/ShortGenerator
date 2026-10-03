@@ -511,7 +511,10 @@ public sealed class MainForm : Form
         bar.Controls.Add(_gptBuild);
         bar.Controls.Add(new Label { Text = "Shorts:", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         bar.Controls.Add(_gptCount);
-        _gptAuto.CheckedChanged += (_, _) => _gptCount.Enabled = !_gptAuto.Checked;
+        // the AI picks how many shorts by default; the number only shows when it is unticked
+        _gptAuto.Checked = true;
+        _gptCount.Visible = false;
+        _gptAuto.CheckedChanged += (_, _) => { _gptCount.Enabled = _gptCount.Visible = !_gptAuto.Checked; };
         bar.Controls.Add(_gptAuto);
         bar.Controls.Add(new Label { Text = "Length (s):", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         bar.Controls.Add(_gptMin);
@@ -572,7 +575,9 @@ public sealed class MainForm : Form
         bar.Controls.Add(_analyze);
         bar.Controls.Add(new Label { Text = "Shorts:", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         bar.Controls.Add(_count);
-        _autoCount.CheckedChanged += (_, _) => _count.Enabled = !_autoCount.Checked;
+        _autoCount.Checked = true;
+        _count.Visible = false;
+        _autoCount.CheckedChanged += (_, _) => { _count.Enabled = _count.Visible = !_autoCount.Checked; };
         bar.Controls.Add(_autoCount);
         bar.Controls.Add(new Label { Text = "Length (s):", AutoSize = true, Margin = new Padding(12, 7, 4, 0) });
         bar.Controls.Add(_minSec);
@@ -738,7 +743,6 @@ public sealed class MainForm : Form
         // label and dropdown wrap together, never apart
         _previewLangGroup.Controls.Add(_previewLangLabel);
         _previewLangGroup.Controls.Add(_previewLang);
-        segBar.Controls.Add(_previewLangGroup);
         _retranslate.Margin = new Padding(4, 0, 0, 0);
         segBar.Controls.Add(_retranslate);
         right.Controls.Add(_editSegments);
@@ -797,7 +801,7 @@ public sealed class MainForm : Form
         rendersHead.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         rendersHead.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         rendersHead.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        rendersHead.Controls.Add(new Label { Text = "Renders", AutoSize = true, Font = Theme.HeadingFont(10.5f), ForeColor = Theme.Heading, Margin = new Padding(0, 8, 10, 0) }, 0, 0);
+        rendersHead.Controls.Add(new Label { Text = "Renders and posts", AutoSize = true, Font = Theme.HeadingFont(10.5f), ForeColor = Theme.Heading, Margin = new Padding(0, 8, 10, 0) }, 0, 0);
         rendersHead.Controls.Add(_rendersCounts, 1, 0);
         var rendersButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 0) };
         rendersButtons.Controls.Add(_renderCancel);
@@ -850,6 +854,9 @@ public sealed class MainForm : Form
         // adding an illustration is one click from wherever the video is
         _addLayerHere.Margin = new Padding(0, 3, 16, 3); _addLayerHere.Height = _playPause.Height;
         actionsRow.Controls.Add(_playPause);
+        // which captions the player shows sits next to Play, where it is used
+        _previewLangGroup.Margin = new Padding(0, 3, 12, 3);
+        actionsRow.Controls.Add(_previewLangGroup);
         actionsRow.Controls.Add(_addLayerHere);
         var trim = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 3, 0, 3) };
         trim.Controls.Add(new Label { Text = "Start (s):", AutoSize = true, Margin = new Padding(0, 7, 4, 0) });
@@ -1145,12 +1152,23 @@ public sealed class MainForm : Form
         _clipEnd.ValueChanged += async (_, _) => await ApplyClipTimesAsync();
         _renderPreview.Click += async (_, _) => await RenderEditorPreviewAsync();
         _renders.SelectedIndexChanged += (_, _) => UpdateRenders();
-        _renderCancel.Click += (_, _) => { foreach (var j in SelectedRenders().ToList()) CancelRender(j); };
+        _renderCancel.Click += (_, _) =>
+        {
+            foreach (var j in SelectedRenders().ToList()) CancelRender(j);
+            foreach (var p in SelectedPosts().ToList()) CancelPost(p);
+        };
         _renderClear.Click += (_, _) =>
         {
-            foreach (var j in _renderJobs.Where(j => !j.IsOpen).ToList()) { _renderJobs.Remove(j); _renders.Items.Remove(j.Row); }
+            // a render leaves with its posts, once none of them is still on its way
+            foreach (var j in _renderJobs.Where(j => !j.IsOpen && j.Posts.All(p => !p.IsOpen)).ToList())
+            {
+                _renderJobs.Remove(j);
+                _renders.Items.Remove(j.Row);
+                foreach (var p in j.Posts) _renders.Items.Remove(p.Row);
+            }
             UpdateRenders();
         };
+        _publishPanel.JobStatusChanged += OnPublishJobStatus;
         _renders.DoubleClick += (_, _) =>
         {
             if (SelectedRenders().FirstOrDefault() is { State: "done" } j)
@@ -2723,11 +2741,65 @@ public sealed class MainForm : Form
         public Dictionary<string, List<AutoDestination>> Publish { get; set; } = new();
         /// <summary>Per version: when its posts go out (null = as soon as it is rendered).</summary>
         public Dictionary<string, DateTime?> PublishAt { get; set; } = new();
+        /// <summary>One row per post this render leads to, right under it.</summary>
+        public List<RenderPost> Posts { get; } = new();
         public ListViewItem Row { get; set; } = null!;
         /// <summary>queued | running | done | failed | cancelled</summary>
         public string State { get; set; } = "queued";
         public DateTime Started { get; set; }
         public bool IsOpen => State is "queued" or "running";
+    }
+
+    /// <summary>A post a render leads to: waits for the render, then mirrors its row in the Publishing queue.</summary>
+    private sealed class RenderPost
+    {
+        public required RenderJob Job { get; init; }
+        public required string Lang { get; init; }
+        public required AutoDestination Dest { get; init; }
+        public ListViewItem Row { get; set; } = null!;
+        /// <summary>The Publish queue's key once handed over (file|network|account).</summary>
+        public string? Key { get; set; }
+        /// <summary>waiting | scheduled | queued | running | done | failed | cancelled</summary>
+        public string State { get; set; } = "waiting";
+        public bool IsOpen => State is "waiting" or "scheduled" or "queued" or "running";
+    }
+
+    private static string NetworkName(string n) => n switch { "instagram" => "Instagram", "tiktok" => "TikTok", _ => "YouTube" };
+
+    private void SetPostRow(RenderPost p, string status, Color color)
+    {
+        if (p.Row.ListView is null) return;
+        p.Row.SubItems[2].Text = status;
+        p.Row.ForeColor = color;
+    }
+
+    /// <summary>The post rows of a render, inserted right under it (rebuilt when the waiting render's plan changes).</summary>
+    private void BuildPostRows(RenderJob job)
+    {
+        foreach (var old in job.Posts) _renders.Items.Remove(old.Row);
+        job.Posts.Clear();
+        int at = _renders.Items.IndexOf(job.Row) + 1;
+        foreach (var lang in job.Langs)
+            foreach (var d in job.Publish.GetValueOrDefault(lang) ?? new())
+            {
+                var when = job.PublishAt.GetValueOrDefault(lang);
+                var post = new RenderPost { Job = job, Lang = lang, Dest = d };
+                post.Row = new ListViewItem(new[] { "      ↳ post", $"{NetworkName(d.Network)} · {d.Label}", when is { } w ? $"After the render, scheduled for {w:ddd HH:mm}" : "After the render" })
+                    { Tag = post, ForeColor = Theme.TextMuted };
+                _renders.Items.Insert(at++, post.Row);
+                job.Posts.Add(post);
+            }
+    }
+
+    /// <summary>Publish queue rows report here, so the post rows under a render follow them.</summary>
+    private void OnPublishJobStatus(string key, string status, Color color, string state)
+    {
+        foreach (var p in _renderJobs.SelectMany(j => j.Posts).Where(p => p.Key == key))
+        {
+            p.State = state switch { "done" => "done", "failed" => "failed", "cancelled" => "cancelled", "running" => "running", "scheduled" => "scheduled", _ => "queued" };
+            SetPostRow(p, status, color);
+        }
+        UpdateRenders();
     }
 
     private readonly List<RenderJob> _renderJobs = new();
@@ -2758,14 +2830,15 @@ public sealed class MainForm : Form
             {
                 waiting.Publish = new() { [lang] = dests };
                 waiting.PublishAt = new() { [lang] = publishAt.GetValueOrDefault(lang) };
-                waiting.Row.SubItems[1].Text = PlanText(waiting);
+                BuildPostRows(waiting);
                 Log($"\"{s.Title}\" ({LangsText(new[] { lang })}) is already waiting in the render queue.");
                 continue;
             }
             var job = new RenderJob { Short = s, Langs = new List<string> { lang }, Publish = new() { [lang] = dests }, PublishAt = new() { [lang] = publishAt.GetValueOrDefault(lang) } };
-            job.Row = new ListViewItem(new[] { s.Title, PlanText(job), "Waiting" }) { Tag = job, ForeColor = Theme.TextMuted };
+            job.Row = new ListViewItem(new[] { s.Title, LangsText(job.Langs) + " video", "Waiting" }) { Tag = job, ForeColor = Theme.TextMuted };
             _renderJobs.Add(job);
             _renders.Items.Add(job.Row);
+            BuildPostRows(job);
         }
         Log($"Render queued: \"{s.Title}\" ({LangsText(langs)}).");
         PumpRenders();
@@ -2812,7 +2885,7 @@ public sealed class MainForm : Form
             await GenerateAsync(new[] { j.Short }, j.Langs, openVideos: true);
             var made = _generated.Count(g => (g.ShortTitle ?? g.Title) == j.Short.Title && g.When >= j.Started && File.Exists(g.Path)
                                              && j.Langs.Contains(g.Language == "en" ? "en" : "original"));
-            if (_lastBusyOutcome == "cancelled") { j.State = "cancelled"; SetRenderRow(j, "Cancelled", Theme.Warning); }
+            if (_lastBusyOutcome == "cancelled") { j.State = "cancelled"; SetRenderRow(j, "Cancelled", Theme.Warning); PostsNotSent(j, "Not posted: the render was cancelled"); }
             else if (made > 0 && _lastBusyOutcome == "done")
             {
                 j.State = "done";
@@ -2822,12 +2895,24 @@ public sealed class MainForm : Form
                 {
                     var file = _generated.LastOrDefault(g => (g.ShortTitle ?? g.Title) == j.Short.Title && g.When >= j.Started && File.Exists(g.Path)
                                                              && (g.Language == "en") == (lang == "en"));
-                    if (file is not null) posts += _publishPanel.QueueAutomatic(file, dests, j.PublishAt.GetValueOrDefault(lang));
+                    // only the posts still wanted (a post row cancelled while rendering is left out)
+                    var wanted = j.Posts.Where(p => p.Lang == lang && p.State == "waiting").ToList();
+                    if (file is null) { foreach (var p in wanted) { p.State = "failed"; SetPostRow(p, "Not posted: the video was not found", Theme.Danger); } continue; }
+                    var keys = _publishPanel.QueueAutomatic(file, wanted.Select(p => p.Dest).ToList(), j.PublishAt.GetValueOrDefault(lang));
+                    foreach (var p in wanted)
+                    {
+                        var k = keys.FirstOrDefault(x => x.Dest == p.Dest);
+                        if (k.Key is null) { p.State = "failed"; SetPostRow(p, "Not posted: already in the queue or not connected", Theme.Warning); continue; }
+                        p.Key = k.Key;
+                        p.State = k.Scheduled ? "scheduled" : "queued";
+                        SetPostRow(p, k.Scheduled ? $"Scheduled for {j.PublishAt.GetValueOrDefault(lang):ddd HH:mm}" : "In the publishing queue", Theme.CosmicBlue);
+                        posts++;
+                    }
                 }
                 var when = j.Langs.Select(l => j.PublishAt.GetValueOrDefault(l)).FirstOrDefault(t => t is not null && t > DateTime.Now);
                 SetRenderRow(j, "Done" + (posts > 0 ? $", {posts} post{(posts == 1 ? "" : "s")} " + (when is { } w ? $"scheduled for {w:ddd HH:mm}" : "publishing") + " (see Publish)" : ", listed on Publish") + ". Double-click to play.", Theme.Success);
             }
-            else { j.State = "failed"; SetRenderRow(j, "Failed: see Activity for the details", Theme.Danger); }
+            else { j.State = "failed"; SetRenderRow(j, "Failed: see Activity for the details", Theme.Danger); PostsNotSent(j, "Not posted: the render failed"); }
         }
         catch (Exception ex)
         {
@@ -2842,14 +2927,28 @@ public sealed class MainForm : Form
         }
     }
 
+    private void PostsNotSent(RenderJob j, string why)
+    {
+        foreach (var p in j.Posts.Where(p => p.State == "waiting")) { p.State = "cancelled"; SetPostRow(p, why, Theme.TextMuted); }
+    }
+
+    /// <summary>A post row: before the render it is dropped from the plan; after, its upload is cancelled on Publish.</summary>
+    private void CancelPost(RenderPost p)
+    {
+        if (p.State == "waiting") { p.State = "cancelled"; SetPostRow(p, "Cancelled: it will not be posted", Theme.TextMuted); }
+        else if (p.IsOpen && p.Key is not null) _publishPanel.CancelByKey(p.Key);
+        UpdateRenders();
+    }
+
     private void CancelRender(RenderJob j)
     {
-        if (j.State == "queued") { j.State = "cancelled"; SetRenderRow(j, "Cancelled before it started", Theme.TextMuted); }
+        if (j.State == "queued") { j.State = "cancelled"; SetRenderRow(j, "Cancelled before it started", Theme.TextMuted); PostsNotSent(j, "Not posted: the render was cancelled"); }
         else if (j.State == "running" && ReferenceEquals(j, _currentRender)) { SetRenderRow(j, "Cancelling...", Theme.Warning); _cts?.Cancel(); }
         UpdateRenders();
     }
 
     private IEnumerable<RenderJob> SelectedRenders() => _renders.SelectedItems.Cast<ListViewItem>().Select(i => i.Tag).OfType<RenderJob>();
+    private IEnumerable<RenderPost> SelectedPosts() => _renders.SelectedItems.Cast<ListViewItem>().Select(i => i.Tag).OfType<RenderPost>();
 
     private void UpdateRenders()
     {
@@ -2860,11 +2959,15 @@ public sealed class MainForm : Form
         if (waiting > 0) parts.Add($"{waiting} waiting");
         if (done > 0) parts.Add($"{done} done");
         if (failed > 0) parts.Add($"{failed} failed or cancelled");
+        var posts = _renderJobs.SelectMany(j => j.Posts).ToList();
+        int postsOpen = posts.Count(p => p.IsOpen), postsDone = posts.Count(p => p.State == "done");
+        if (postsOpen > 0) parts.Add($"{postsOpen} post{(postsOpen == 1 ? "" : "s")} to go");
+        if (postsDone > 0) parts.Add($"{postsDone} posted");
         _rendersCounts.Text = string.Join("  ·  ", parts);
-        _rendersCounts.ForeColor = running + waiting > 0 ? Theme.Purple : failed > 0 ? Theme.Danger : Theme.TextMuted;
+        _rendersCounts.ForeColor = running + waiting + postsOpen > 0 ? Theme.Purple : failed > 0 ? Theme.Danger : Theme.TextMuted;
         _rendersEmpty.Visible = _renderJobs.Count == 0;
-        _renderCancel.Enabled = SelectedRenders().Any(j => j.IsOpen);
-        _renderClear.Enabled = _renderJobs.Any(j => !j.IsOpen);
+        _renderCancel.Enabled = SelectedRenders().Any(j => j.IsOpen) || SelectedPosts().Any(p => p.IsOpen);
+        _renderClear.Enabled = _renderJobs.Any(j => !j.IsOpen && j.Posts.All(p => !p.IsOpen));
         // the button says what it will do: render now, or join the queue behind a running render
         _renderPreview.Text = running + waiting > 0 || _cts is not null ? "Add to render queue" : "Render preview";
     }
@@ -3179,8 +3282,9 @@ public sealed class MainForm : Form
                         Path = r.OutputPath, When = DateTime.Now,
                         // Carried along so the Publish step has the post text without finding the suggestion again;
                         // the English file carries the English texts.
-                        Caption = ep?.Caption ?? s.SuggestedCaption, Hashtags = (ep?.Hashtags ?? s.Hashtags)?.ToList(),
-                        Youtube = ep is null ? s.Youtube : ep.Youtube, Tiktok = ep is null ? s.Tiktok : ep.Tiktok, Instagram = ep is null ? s.Instagram : ep.Instagram,
+                        Caption = WithCredit(ep?.Caption ?? s.SuggestedCaption, en), Hashtags = (ep?.Hashtags ?? s.Hashtags)?.ToList(),
+                        Youtube = WithCredit(ep is null ? s.Youtube : ep.Youtube, en), Tiktok = WithCredit(ep is null ? s.Tiktok : ep.Tiktok, en),
+                        Instagram = WithCredit(ep is null ? s.Instagram : ep.Instagram, en),
                         // Cover / thumbnail exported next to the video so publishing can send it along.
                         CoverPath = await _renderer.ExportCoverAsync(_video, s, opt, r.OutputPath, ct),
                         CoverTimeSeconds = ShortRenderer.CoverFrameTime(s, opt.CaptionLanguage),
@@ -3197,6 +3301,34 @@ public sealed class MainForm : Form
             if (openVideos) foreach (var path in rendered) OpenPath(path);
         });
     }
+
+    // ------------------------------------------------------------------ credit to the source
+
+    /// <summary>
+    /// "🎥 Credit: Diario AS (@DiarioAS)": the channel the clip comes from, added to every rendered short's post text so
+    /// the source is always credited. "Créditos" for a Portuguese original. Null when the source has no known channel.
+    /// </summary>
+    private string? CreditLine(bool english)
+    {
+        if (_video is null) return null;
+        var who = (_video.Channel ?? _video.Uploader)?.Trim();
+        if (string.IsNullOrWhiteSpace(who)) return null;
+        bool portuguese = !english && (_transcript?.Language?.StartsWith("pt", StringComparison.OrdinalIgnoreCase) ?? false);
+        var handle = _video.Handle is { } h && !who.Replace(" ", "").Contains(h.TrimStart('@'), StringComparison.OrdinalIgnoreCase) ? $" ({h})" : "";
+        return $"🎥 {(portuguese ? "Créditos" : "Credit")}: {who}{handle}";
+    }
+
+    /// <summary>The text with the credit line under it, unless it already names the channel.</summary>
+    private string WithCredit(string? text, bool english)
+    {
+        var credit = CreditLine(english);
+        text ??= "";
+        if (credit is null || (_video is { } v && text.Contains((v.Channel ?? v.Uploader).Trim(), StringComparison.OrdinalIgnoreCase))) return text;
+        return text.Length == 0 ? credit : text.TrimEnd() + "\n\n" + credit;
+    }
+
+    private NetworkPost? WithCredit(NetworkPost? post, bool english) => post is null ? null
+        : new NetworkPost { Title = post.Title, Description = WithCredit(post.Description, english), Tags = post.Tags.ToList() };
 
     // ------------------------------------------------------------------ helpers
 

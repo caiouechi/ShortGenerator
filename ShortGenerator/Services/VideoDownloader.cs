@@ -52,6 +52,13 @@ public sealed class VideoDownloader
         {
             info.Title = meta.Data.Title ?? "";
             info.Uploader = meta.Data.Uploader ?? "";
+            // who to credit in the post text: the channel name, its @handle and page when the site gives them
+            info.Channel = string.IsNullOrWhiteSpace(meta.Data.Channel) ? null : meta.Data.Channel;
+            var handle = meta.Data.UploaderID;
+            info.Handle = !string.IsNullOrWhiteSpace(handle) && handle.StartsWith('@') ? handle : null;
+            info.ChannelUrl = meta.Data.ChannelUrl ?? meta.Data.UploaderUrl;
+            if (!string.IsNullOrWhiteSpace(info.Channel ?? info.Uploader))
+                log.Report($"Channel: {info.Channel ?? info.Uploader}" + (info.Handle is null ? "" : $" ({info.Handle})"));
             info.DurationSeconds = meta.Data.Duration ?? 0;
             log.Report($"Found: {info.Title} ({TimeSpan.FromSeconds(info.DurationSeconds):mm\\:ss})");
         }
