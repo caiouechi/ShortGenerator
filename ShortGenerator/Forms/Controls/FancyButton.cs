@@ -40,6 +40,11 @@ public class FancyButton : Button
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public int Radius { get; set; } = 10;
 
+    private Image? _picture;
+    /// <summary>Optional colour icon (the Higgsfield set) drawn before the text instead of the glyph; faded when disabled.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Image? Picture { get => _picture; set { _picture = value; Invalidate(); } }
+
     protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { _hover = false; _down = false; Invalidate(); base.OnMouseLeave(e); }
     protected override void OnMouseDown(MouseEventArgs e) { _down = true; Invalidate(); base.OnMouseDown(e); }
@@ -107,14 +112,30 @@ public class FancyButton : Button
         var textSize = TextRenderer.MeasureText(g, Text, Font, Size.Empty, TextFormatFlags.NoPadding);
         int glyphW = 0;
         Font? glyphFont = null;
-        if (!string.IsNullOrEmpty(_glyph))
+        int pic = _picture is null ? 0 : Math.Clamp(Height - 14, 16, 24);
+        if (pic > 0) glyphW = pic + 8;
+        else if (!string.IsNullOrEmpty(_glyph))
         {
             glyphFont = Theme.IconFont(Font.Size + 2);
             glyphW = TextRenderer.MeasureText(g, _glyph, glyphFont, Size.Empty, TextFormatFlags.NoPadding).Width + 8;
         }
         int total = textSize.Width + glyphW;
         int x = Math.Max(6, (Width - total) / 2);
-        if (glyphFont is not null)
+        if (pic > 0)
+        {
+            var dest = new Rectangle(x, (Height - pic) / 2, pic, pic);
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            if (Enabled) g.DrawImage(_picture!, dest);
+            else
+            {
+                using var faded = new System.Drawing.Imaging.ImageAttributes();
+                faded.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = 0.35f });
+                g.DrawImage(_picture!, dest, 0, 0, _picture!.Width, _picture.Height, GraphicsUnit.Pixel, faded);
+            }
+            x += glyphW;
+        }
+        else if (glyphFont is not null)
         {
             TextRenderer.DrawText(g, _glyph, glyphFont, new Rectangle(x, 0, glyphW - 8, Height), fore,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);

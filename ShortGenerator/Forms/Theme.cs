@@ -93,6 +93,9 @@ public static class Theme
         return ReadImage(fs);
     }
 
+    /// <summary>One of the app's Higgsfield icons (Assets/icons/&lt;name&gt;.png, glossy brand gradient, transparent).</summary>
+    public static Image? Icon(string name) => LoadImage("icons." + name + ".png");
+
     public static Image? LoadImage(string name)
     {
         if (ImageCache.TryGetValue(name, out var cached)) return cached;

@@ -401,6 +401,24 @@ public sealed class MainForm : Form
     private void ApplyTheme()
     {
         foreach (var b in new[] { _download, _downloadTranscribe, _transcribe, _analyze, _generate, _continueToGenerate, _libraryTranscribe, _gptBuild, _gptCopy, _gptImport, _playPause, _renderPreview }) Theme.Primary(b);
+        // the editor's white buttons carry the Higgsfield icon set (gradient buttons keep their white glyphs)
+        foreach (var (b, icon) in new (FancyButton, string)[]
+        {
+            (_autoCamera, "auto-camera"), (_changeCamera, "change-camera"), (_setCover, "use-frame"), (_pickCoverImage, "choose-image"),
+            (_clearCover, "reset"), (_copyCover, "copy-image"), (_copyCoverPrompt, "copy-prompt"), (_generateCover, "ai-magic"),
+            (_keyframeDelete, "delete"), (_keyframeClear, "clear"), (_removeLayer, "delete"),
+            (_addLayer, "choose-image"), (_pasteLayer, "copy-image"), (_segDelete, "delete"), (_retranslate, "ai-magic"),
+            (_segPlay, "render"), (_renderClear, "clear"),
+        })
+            b.Picture = Theme.Icon(icon);
+        // icon + label must fit (never a truncated label); measured once every label is final
+        Load += (_, _) => FitPictureButtons(this);
+        if (Theme.Icon("camera-mode") is { } modeIcon)
+        {
+            _cameraMode.Image = new Bitmap(modeIcon, new Size(20, 20));
+            _cameraMode.TextImageRelation = TextImageRelation.ImageBeforeText;
+            _cameraMode.ImageAlign = ContentAlignment.MiddleCenter;
+        }
         Theme.Apply(this);
         _videoInfo.Font = Theme.Body(10f);
         _videoInfo.ForeColor = Theme.TextSecondary;
@@ -644,11 +662,9 @@ public sealed class MainForm : Form
         var leftSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
         SplitWhenSized(leftSplit, 170);
         var clipsHost = new Panel { Dock = DockStyle.Fill };
-        var clipsBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(2, 8, 0, 0), WrapContents = false };
-        clipsBar.Controls.Add(_removeFromSelection);
+        // no "Remove from selected" button: the Delete key removes the selected short from this list
         clipsHost.Controls.Add(_editClips);
-        clipsHost.Controls.Add(clipsBar);
-        clipsHost.Controls.Add(new Label { Text = "Selected shorts", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray });
+        clipsHost.Controls.Add(new Label { Text = "Selected shorts  (Delete key removes one)", Dock = DockStyle.Top, Height = 26, ForeColor = Color.DimGray, UseMnemonic = false });
 
         // actions for the current short: one primary, a row of two, the mode toggle, then the cover
         var actions = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Padding = new Padding(0, 8, 0, 4) };
@@ -803,11 +819,13 @@ public sealed class MainForm : Form
         rendersHead.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         rendersHead.Controls.Add(new Label { Text = "Renders and posts", AutoSize = true, Font = Theme.HeadingFont(10.5f), ForeColor = Theme.Heading, Margin = new Padding(0, 8, 10, 0) }, 0, 0);
         rendersHead.Controls.Add(_rendersCounts, 1, 0);
-        var rendersButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 0) };
+        // the buttons sit on their own line under the title, so a narrow column never makes them overlap it
+        var rendersButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Margin = new Padding(0, 4, 0, 0) };
         rendersButtons.Controls.Add(_renderCancel);
         _renderClear.Margin = Padding.Empty;
         rendersButtons.Controls.Add(_renderClear);
-        rendersHead.Controls.Add(rendersButtons, 2, 0);
+        rendersHead.Controls.Add(rendersButtons, 0, 1);
+        rendersHead.SetColumnSpan(rendersButtons, 3);
         var rendersBody = new Panel { Dock = DockStyle.Fill };
         rendersBody.Controls.Add(_renders);
         rendersBody.Controls.Add(_rendersEmpty);
@@ -1038,7 +1056,8 @@ public sealed class MainForm : Form
         // editor tab
         _editClips.SelectedIndexChanged += async (_, _) => await LoadClipInEditorAsync();
         _playPause.Click += async (_, _) => await _player.TogglePlayAsync();
-        _player.PlayingChanged += playing => _playPause.Text = playing ? "Pause" : "Play";
+        // the button shows what a click does: Play with the play icon while paused, Pause with the pause icon while playing
+        _player.PlayingChanged += playing => { _playPause.Text = playing ? "Pause" : "Play"; _playPause.Glyph = playing ? "" : ""; };
         _player.TimeChanged += OnPlayerTime;
         _player.Status += s => Log("Player: " + s);
         _player.CaptionMoved += (x, y, t) => BeginInvoke(() => OnCaptionMoved(x, y, t));
@@ -3309,6 +3328,17 @@ public sealed class MainForm : Form
                 if (openVideos) foreach (var path in rendered) OpenPath(path);
             }
         });
+    }
+
+    /// <summary>Widens every button with an icon picture so its icon and label fit.</summary>
+    private static void FitPictureButtons(Control root)
+    {
+        foreach (Control c in root.Controls)
+        {
+            if (c is FancyButton { Picture: not null } b && b.Dock != DockStyle.Fill)
+                b.Width = Math.Max(b.Width, TextRenderer.MeasureText(b.Text, b.Font).Width + 24 + 8 + 30);
+            FitPictureButtons(c);
+        }
     }
 
     // ------------------------------------------------------------------ credit to the source
