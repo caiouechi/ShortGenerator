@@ -2806,6 +2806,8 @@ public sealed class MainForm : Form
     private RenderJob? _currentRender;
     /// <summary>How the last RunBusyAsync ended: done | cancelled | failed.</summary>
     private string _lastBusyOutcome = "";
+    /// <summary>The message of the last failed busy task, shown in the render row.</summary>
+    private string _lastBusyError = "";
 
     private static string LangsText(IEnumerable<string> langs) => string.Join(" + ", langs.Select(l => l == "en" ? "English" : "Original"));
 
@@ -2882,7 +2884,8 @@ public sealed class MainForm : Form
                 return;
             }
             _lastBusyOutcome = ""; // GenerateAsync can stop before it starts (no transcript, say)
-            await GenerateAsync(new[] { j.Short }, j.Langs, openVideos: true);
+            _lastBusyError = "";
+            await GenerateAsync(new[] { j.Short }, j.Langs, openVideos: false, fromQueue: true);
             var made = _generated.Count(g => (g.ShortTitle ?? g.Title) == j.Short.Title && g.When >= j.Started && File.Exists(g.Path)
                                              && j.Langs.Contains(g.Language == "en" ? "en" : "original"));
             if (_lastBusyOutcome == "cancelled") { j.State = "cancelled"; SetRenderRow(j, "Cancelled", Theme.Warning); PostsNotSent(j, "Not posted: the render was cancelled"); }
@@ -2912,7 +2915,7 @@ public sealed class MainForm : Form
                 var when = j.Langs.Select(l => j.PublishAt.GetValueOrDefault(l)).FirstOrDefault(t => t is not null && t > DateTime.Now);
                 SetRenderRow(j, "Done" + (posts > 0 ? $", {posts} post{(posts == 1 ? "" : "s")} " + (when is { } w ? $"scheduled for {w:ddd HH:mm}" : "publishing") + " (see Publish)" : ", listed on Publish") + ". Double-click to play.", Theme.Success);
             }
-            else { j.State = "failed"; SetRenderRow(j, "Failed: see Activity for the details", Theme.Danger); PostsNotSent(j, "Not posted: the render failed"); }
+            else { j.State = "failed"; SetRenderRow(j, "Failed: " + (_lastBusyError.Length > 0 ? _lastBusyError : "see Activity for the details"), Theme.Danger); PostsNotSent(j, "Not posted: the render failed"); }
         }
         catch (Exception ex)
         {
@@ -3195,7 +3198,10 @@ public sealed class MainForm : Form
     /// <param name="only">Render just these shorts; null = all ticked shorts.</param>
     /// <param name="languages">Render exactly these caption languages ("original" / "en") instead of the Generate setting.</param>
     /// <param name="openVideos">Open the rendered videos afterwards (Render preview) instead of their folder.</param>
-    private async Task GenerateAsync(IReadOnlyList<ShortSuggestion>? only = null, IReadOnlyList<string>? languages = null, bool openVideos = false)
+    /// <param name="fromQueue">A render from the render queue: nothing opens afterwards (no player, no Explorer) and a
+    /// failure is reported in its row and the Activity log instead of an error box, which could land on top of a
+    /// dialog the user has open.</param>
+    private async Task GenerateAsync(IReadOnlyList<ShortSuggestion>? only = null, IReadOnlyList<string>? languages = null, bool openVideos = false, bool fromQueue = false)
     {
         if (_video is null || _suggestions is null) return;
         var selected = only?.ToList() ?? _suggestions.Shorts.Where(s => s.Selected).ToList();
@@ -3211,7 +3217,7 @@ public sealed class MainForm : Form
         options.OutputFolder = sub;
         _results.Items.Clear();
 
-        await RunBusyAsync("Generating shorts", async ct =>
+        await RunBusyAsync("Generating shorts", quiet: fromQueue, work: async ct =>
         {
             int i = 1, ok = 0;
             var rendered = new List<string>();
@@ -3297,8 +3303,11 @@ public sealed class MainForm : Form
             _publishPanel.RefreshList();
             RefreshQueue();
             Log($"Finished: {ok}/{selected.Count} shorts generated in {sub}" + (ok > 0 ? ". Open the Publish step to send them to your accounts." : ""));
-            if (ok > 0 && !openVideos) OpenPath(sub);
-            if (openVideos) foreach (var path in rendered) OpenPath(path);
+            if (!fromQueue)
+            {
+                if (ok > 0 && !openVideos) OpenPath(sub);
+                if (openVideos) foreach (var path in rendered) OpenPath(path);
+            }
         });
     }
 
@@ -3332,7 +3341,8 @@ public sealed class MainForm : Form
 
     // ------------------------------------------------------------------ helpers
 
-    private async Task RunBusyAsync(string title, Func<CancellationToken, Task> work)
+    /// <param name="quiet">No error box on failure (the caller reports it, like the render queue's row).</param>
+    private async Task RunBusyAsync(string title, Func<CancellationToken, Task> work, bool quiet = false)
     {
         if (_cts is not null) { AppDialog.Show(this, "Another operation is running. Cancel it first.", "Busy"); return; }
         _cts = new CancellationTokenSource();
@@ -3354,7 +3364,9 @@ public sealed class MainForm : Form
             Log($"ERROR: {ex.Message}");
             _status.Text = title + " - failed";
             _lastBusyOutcome = "failed";
-            AppDialog.Show(this, ex.Message, title + " failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            AppLog.Error(title, ex);
+            _lastBusyError = ex.Message;
+            if (!quiet) AppDialog.Show(this, ex.Message, title + " failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -3404,6 +3416,7 @@ public sealed class MainForm : Form
     {
         if (InvokeRequired) { BeginInvoke(() => Log(message)); return; }
         _log.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
+        AppLog.Write(message);
     }
 
     private static string Fmt(double seconds)

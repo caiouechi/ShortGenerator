@@ -10,8 +10,16 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        AppLog.Prune();
+        AppLog.Write("Short Generator started.");
         Application.ThreadException += (_, e) =>
-            AppDialog.Show(e.Exception.Message, "Unexpected error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        {
+            // the details go to the log file; the dialog says where to find them
+            AppLog.Error("UI thread", e.Exception);
+            AppDialog.Show(e.Exception.Message + "\n\nThe details are in the log: " + AppLog.Folder, "Unexpected error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => { if (e.ExceptionObject is Exception ex) AppLog.Error("background", ex); };
+        TaskScheduler.UnobservedTaskException += (_, e) => { AppLog.Error("task", e.Exception); e.SetObserved(); };
         var form = new MainForm();
         // Dev convenience: "ShortGenerator.exe --tab 3" opens on a given step (0-based).
         var args = Environment.GetCommandLineArgs();
