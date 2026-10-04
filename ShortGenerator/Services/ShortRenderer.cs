@@ -91,6 +91,11 @@ public sealed class ShortRenderer
             // the relative subtitle path avoids Windows drive-letter escaping problems inside the filter graph.
             string graph;
             var layers = s.Overlays.Where(o => File.Exists(o.Path) && o.End > o.Start + 0.1 && o.Start < s.Duration).OrderBy(o => o.Start).ToList();
+            // video clips need their source size for the crop
+            var sizes = new Dictionary<string, (int W, int H)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var o in layers.Where(o => o.IsVideo))
+                if (!sizes.ContainsKey(o.Path)) { var (w, h, _) = await _ffmpeg.ProbeAsync(o.Path, ct); sizes[o.Path] = (w, h); }
+            layers.RemoveAll(o => o.IsVideo && (sizes[o.Path].W <= 0 || sizes[o.Path].H <= 0));
             if (layers.Count == 0)
                 graph = main + (hasCaptions ? ",subtitles=captions.ass" : "");
             else
@@ -101,6 +106,33 @@ public sealed class ShortRenderer
                 {
                     var o = layers[i];
                     double a = Math.Max(0, o.Start), b = Math.Min(s.Duration, o.End);
+                    if (o.IsVideo)
+                    {
+                        // a moment of another video: cut from its source, cropped and scaled, shifted to its window;
+                        // its sound is not used (the short keeps the main audio), captions still go on top
+                        var (sw, sh) = sizes[o.Path];
+                        args.AddRange(new[] { "-ss", F(Math.Max(0, o.SourceStart)), "-t", F(b - a + 0.1), "-i", o.Path });
+                        string chain;
+                        string pos;
+                        if (o.FullFrame)
+                        {
+                            var r = o.CropRect(sw, sh, (double)outW / outH);
+                            chain = $"crop={r.W}:{r.H}:{r.X}:{r.Y},scale={outW}:{outH}:flags=lanczos";
+                            pos = "x=0:y=0";
+                        }
+                        else
+                        {
+                            var r = o.CropRect(sw, sh, o.Aspect > 0 ? o.Aspect : (double)sw / sh);
+                            int boxW = Math.Max(2, (int)Math.Round(o.Size / 100.0 * outW / 2) * 2);
+                            int border = o.Style == "plain" ? 0 : Math.Max(4, (int)Math.Round(boxW * 0.012 / 2) * 2);
+                            chain = $"crop={r.W}:{r.H}:{r.X}:{r.Y},scale={boxW - 2 * border}:-2:flags=lanczos" + (border > 0 ? $",pad=iw+{2 * border}:ih+{2 * border}:{border}:{border}:white" : "");
+                            pos = $"x='{F(o.X / 100.0 * outW)}-w/2':y='{F(o.Y / 100.0 * outH)}-h/2'";
+                        }
+                        sb.Append($";[{i + 1}:v]{chain},setsar=1,fps=30,setpts=PTS-STARTPTS+{F(a)}/TB[o{i}]");
+                        sb.Append($";[{prev}][o{i}]overlay={pos}:enable='between(t,{F(a)},{F(b)})':eof_action=pass[b{i}]");
+                        prev = $"b{i}";
+                        continue;
+                    }
                     var png = Path.Combine(workDir, $"layer{i}.png");
                     OverlayBaker.Bake(o, outW, png);
                     args.AddRange(new[] { "-loop", "1", "-framerate", "30", "-t", F(b + 0.3), "-i", png });

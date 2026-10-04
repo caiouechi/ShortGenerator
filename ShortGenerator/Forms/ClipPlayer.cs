@@ -37,6 +37,8 @@ public sealed class ClipPlayer : UserControl
     public event Action<string>? LayerSelected;
     /// <summary>User moved (percent centre), resized (percent width) or rotated (degrees) an image layer.</summary>
     public event Action<string, double, double, double, double>? LayerChanged;
+    /// <summary>User reframed a video clip (crop centre and zoom) or moved / resized its inset window.</summary>
+    public event Action<string, double, double, double, double, double, double>? VideoLayerChanged;
 
     public bool IsReady => _ready;
 
@@ -104,6 +106,9 @@ public sealed class ClipPlayer : UserControl
             if (root.TryGetProperty("ovSel", out var os)) LayerSelected?.Invoke(os.GetString() ?? "");
             if (root.TryGetProperty("ov", out var ov))
                 LayerChanged?.Invoke(ov.GetProperty("id").GetString() ?? "", ov.GetProperty("x").GetDouble(), ov.GetProperty("y").GetDouble(), ov.GetProperty("size").GetDouble(), ov.GetProperty("rot").GetDouble());
+            if (root.TryGetProperty("ovv", out var vv))
+                VideoLayerChanged?.Invoke(vv.GetProperty("id").GetString() ?? "", vv.GetProperty("cropX").GetDouble(), vv.GetProperty("cropY").GetDouble(),
+                    vv.GetProperty("zoom").GetDouble(), vv.GetProperty("x").GetDouble(), vv.GetProperty("y").GetDouble(), vv.GetProperty("size").GetDouble());
             if (root.TryGetProperty("edited", out var ed)) TextEdited?.Invoke(ed.GetProperty("t").GetDouble(), ed.GetProperty("text").GetString() ?? "");
         }
         catch { }
@@ -136,7 +141,8 @@ public sealed class ClipPlayer : UserControl
     public Task SetCameraModeAsync(bool on) => Exec($"setCameraMode({(on ? "true" : "false")})");
     /// <summary>Image layers of the clip (times relative to the clip start); <paramref name="selectedId"/> gets a dashed outline.</summary>
     public Task SetLayersAsync(IEnumerable<ImageOverlay> layers, string? selectedId) =>
-        Exec($"setLayers({JsonSerializer.Serialize(layers.Where(o => File.Exists(o.Path)).Select(o => new { id = o.Id, src = new Uri(Path.GetFullPath(o.Path)).AbsoluteUri, t = o.Start, end = o.End, x = o.X, y = o.Y, size = o.Size, rot = o.Rotation, style = o.Style, anim = o.Animation }))},{JsonSerializer.Serialize(selectedId)})");
+        Exec($"setLayers({JsonSerializer.Serialize(layers.Where(o => File.Exists(o.Path)).Select(o => new { id = o.Id, src = new Uri(Path.GetFullPath(o.Path)).AbsoluteUri, t = o.Start, end = o.End, x = o.X, y = o.Y, size = o.Size, rot = o.Rotation, style = o.Style, anim = o.Animation,
+            kind = o.Kind, srcStart = o.SourceStart, full = o.FullFrame, cropX = o.CropX, cropY = o.CropY, zoom = o.Zoom, aspect = o.Aspect }))},{JsonSerializer.Serialize(selectedId)})");
 
     /// <summary>Replays the entrance of an image layer once (the layer must be inside its window).</summary>
     public Task PreviewLayerAsync(string id) => Exec($"previewLayer({JsonSerializer.Serialize(id)})");
@@ -202,6 +208,13 @@ public sealed class ClipPlayer : UserControl
   #ovl .ov .pic.circle{border-style:solid;border-color:#fff;border-radius:50%;overflow:hidden;box-shadow:0 10px 26px rgba(0,0,0,.45)}
   #ovl .ov .pic.circle img{aspect-ratio:1/1;object-fit:cover;object-position:50% 33%}
   #ovl .ov.sel{outline:2px dashed #A855F7;outline-offset:4px}
+  #ovl .ov.vid .pic{position:relative;overflow:hidden;background:#000}
+  #ovl .ov.vid .pic video{position:absolute;max-width:none;pointer-events:none}
+  #ovl .ov.vid .h.r{display:none!important}
+  #ovl .ov.vfull{left:0!important;top:0!important;width:100%!important;height:100%!important;transform:none!important}
+  #ovl .ov.vfull .pic{width:100%;height:100%}
+  #ovl .ov.vfull .h{display:none!important}
+  #ovl .ov.vfull.sel{outline-offset:-3px}
   #ovl .ov .h{position:absolute;display:none;box-sizing:border-box;z-index:3}
   #ovl .ov.sel .h{display:block}
   #ovl .ov .h.c{width:14px;height:14px;background:#fff;border:2px solid #6A38FF;border-radius:3px}
@@ -342,7 +355,10 @@ const ovl=document.getElementById('ovl');let layers=[],layerSel=null,shown={},ov
 function layerEl(id){for(const d of ovl.children)if(d.dataset.id===id)return d;return null;}
 function makeLayer(o){
   const d=document.createElement('div');d.className='ov';d.dataset.id=o.id;
-  const pic=document.createElement('div');pic.className='pic';const im=document.createElement('img');pic.appendChild(im);d.appendChild(pic);
+  const pic=document.createElement('div');pic.className='pic';
+  const im=document.createElement(o.kind==='video'?'video':'img');
+  if(o.kind==='video'){im.muted=true;im.playsInline=true;im.preload='auto';im.addEventListener('loadedmetadata',()=>styleLayers());d.classList.add('vid');}
+  pic.appendChild(im);d.appendChild(pic);
   for(const h of ['nw','ne','sw','se'])d.appendChild(Object.assign(document.createElement('div'),{className:'h c '+h}));
   for(const h of ['rt','rb','rl','rr'])d.appendChild(Object.assign(document.createElement('div'),{className:'h r '+h}));
   d.addEventListener('pointerdown',e=>{
@@ -350,13 +366,18 @@ function makeLayer(o){
     layerSel=o.id;post({ovSel:o.id});
     const r=d.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
     const h=e.target.classList;const mode=h.contains('c')?'size':h.contains('r')?'rot':'move';
-    ovDrag={o,mode,x0:e.clientX,y0:e.clientY,ox:o.x,oy:o.y,size0:o.size,rot0:o.rot||0,cx,cy,
+    const cr=o.kind==='video'?cropOf(d,o):null;
+    ovDrag={o,mode,x0:e.clientX,y0:e.clientY,ox:o.x,oy:o.y,size0:o.size,rot0:o.rot||0,cx,cy,cx0:o.cropX,cy0:o.cropY,cr,
       dist0:Math.max(8,Math.hypot(e.clientX-cx,e.clientY-cy)),ang0:Math.atan2(e.clientY-cy,e.clientX-cx),moved:false};
     d.setPointerCapture(e.pointerId);styleLayers();});
   d.addEventListener('pointermove',e=>{
     const g=ovDrag;if(!g||g.o!==d._o)return;const fr=frame.getBoundingClientRect();if(fr.width<=0||fr.height<=0)return;
     if(Math.hypot(e.clientX-g.x0,e.clientY-g.y0)>3)g.moved=true;if(!g.moved)return;const o=g.o;
-    if(g.mode==='move'){o.x=Math.max(0,Math.min(100,g.ox+(e.clientX-g.x0)/fr.width*100));o.y=Math.max(0,Math.min(100,g.oy+(e.clientY-g.y0)/fr.height*100));}
+    if(g.mode==='move'&&o.kind==='video'&&o.full&&g.cr){
+      // dragging a full-screen clip moves the picture under the frame: the crop goes the other way
+      o.cropX=Math.max(0,Math.min(100,g.cx0-(e.clientX-g.x0)/fr.width*g.cr.fw*100));
+      o.cropY=Math.max(0,Math.min(100,g.cy0-(e.clientY-g.y0)/fr.height*g.cr.fh*100));}
+    else if(g.mode==='move'){o.x=Math.max(0,Math.min(100,g.ox+(e.clientX-g.x0)/fr.width*100));o.y=Math.max(0,Math.min(100,g.oy+(e.clientY-g.y0)/fr.height*100));}
     else if(g.mode==='size'){o.size=Math.max(8,Math.min(100,g.size0*Math.hypot(e.clientX-g.cx,e.clientY-g.cy)/g.dist0));}
     else{let a=g.rot0+(Math.atan2(e.clientY-g.cy,e.clientX-g.cx)-g.ang0)*180/Math.PI;a=((a+540)%360)-180;
       if(e.shiftKey)a=Math.round(a/15)*15;else if(Math.abs(a)<3)a=0;o.rot=a;}
@@ -366,26 +387,57 @@ function makeLayer(o){
   d.addEventListener('pointerup',end);d.addEventListener('pointercancel',end);
   d.addEventListener('click',e=>e.stopPropagation());
   d.addEventListener('wheel',e=>{e.preventDefault();e.stopPropagation();const o=d._o;if(!o)return;
-    if(e.shiftKey)o.rot=Math.max(-180,Math.min(180,(o.rot||0)+(e.deltaY<0?3:-3)));else o.size=Math.max(8,Math.min(100,o.size+(e.deltaY<0?2:-2)));
+    if(o.kind==='video'&&o.full)o.zoom=Math.max(1,Math.min(4,(o.zoom||1)+(e.deltaY<0?0.1:-0.1)));
+    else if(o.kind==='video'&&e.altKey)o.zoom=Math.max(1,Math.min(4,(o.zoom||1)+(e.deltaY<0?0.1:-0.1)));
+    else if(e.shiftKey&&o.kind!=='video')o.rot=Math.max(-180,Math.min(180,(o.rot||0)+(e.deltaY<0?3:-3)));else o.size=Math.max(8,Math.min(100,o.size+(e.deltaY<0?2:-2)));
     layerSel=o.id;styleLayers();clearTimeout(ovWheel);ovWheel=setTimeout(()=>commitLayer(o),300);},{passive:false});
   ovl.appendChild(d);return d;}
 function setLayers(list,sel){
   if(ovDrag){pendingLayers=[list,sel];return;}
   layers=list||[];layerSel=sel||null;
   for(const d of [...ovl.children])if(!layers.some(l=>l.id===d.dataset.id))d.remove();
-  for(const o of layers){const d=layerEl(o.id)||makeLayer(o);d._o=o;const pic=d.firstChild,im=pic.firstChild;
-    pic.className='pic '+(o.style||'frame');if(im.getAttribute('src')!==o.src)im.src=o.src;}
+  for(const o of layers){let d=layerEl(o.id);
+    // an image became a clip or the other way round: rebuild its element
+    if(d&&((o.kind==='video')!==d.classList.contains('vid'))){d.remove();d=null;}
+    d=d||makeLayer(o);d._o=o;const pic=d.firstChild,im=pic.firstChild;
+    pic.className='pic '+(o.kind==='video'?(o.full?'':(o.style==='plain'?'':'card')):(o.style||'frame'));
+    d.classList.toggle('vfull',o.kind==='video'&&!!o.full);
+    if(im.getAttribute('src')!==o.src)im.src=o.src;}
   styleLayers();}
-function commitLayer(o){if(!isFinite(o.x)||!isFinite(o.y)||!isFinite(o.size))return;post({ov:{id:o.id,x:+o.x.toFixed(1),y:+o.y.toFixed(1),size:+o.size.toFixed(1),rot:+(o.rot||0).toFixed(1)}});}
+function commitLayer(o){if(!isFinite(o.x)||!isFinite(o.y)||!isFinite(o.size))return;
+  if(o.kind==='video'){post({ovv:{id:o.id,cropX:+o.cropX.toFixed(1),cropY:+o.cropY.toFixed(1),zoom:+(o.zoom||1).toFixed(2),x:+o.x.toFixed(1),y:+o.y.toFixed(1),size:+o.size.toFixed(1)}});return;}
+  post({ov:{id:o.id,x:+o.x.toFixed(1),y:+o.y.toFixed(1),size:+o.size.toFixed(1),rot:+(o.rot||0).toFixed(1)}});}
 function styleLayers(){const fw=frame.clientWidth;
   for(const d of ovl.children){const o=d._o;if(!o)continue;const w=fw*o.size/100,pic=d.firstChild;
+    if(o.kind==='video'){styleClip(d,o,w);d.classList.toggle('sel',o.id===layerSel);continue;}
     d.style.width=w+'px';d.style.left=o.x+'%';d.style.top=o.y+'%';d.style.transform=`translate(-50%,-50%) rotate(${o.rot||0}deg)`;
     pic.style.padding='';pic.style.borderWidth='';pic.style.borderRadius='';
     if(o.style==='frame'){pic.style.padding=`${w*0.045}px ${w*0.045}px ${w*0.14}px ${w*0.045}px`;}
     else if(o.style==='card'){pic.style.borderWidth=Math.max(2,w*0.012)+'px';pic.style.borderRadius=(w*0.07)+'px';}
     else if(o.style==='circle'){pic.style.borderWidth=Math.max(3,w*0.03)+'px';}
     d.classList.toggle('sel',o.id===layerSel);}}
-function playEntrance(d,o){const base=`translate(-50%,-50%) rotate(${o.rot||0}deg)`;
+/** The crop of a clip in source pixels for its box (same rule as the render), as fractions of the source. */
+function cropOf(d,o){const vid=d.firstChild.firstChild,sw=vid.videoWidth,sh=vid.videoHeight;if(!sw||!sh)return null;
+  const aspect=o.full?frame.clientWidth/frame.clientHeight:(o.aspect>0?o.aspect:sw/sh);
+  let cw,ch;if(sw/sh>aspect){ch=sh;cw=sh*aspect;}else{cw=sw;ch=sw/aspect;}
+  const z=Math.max(1,Math.min(4,o.zoom||1));cw/=z;ch/=z;
+  const x0=Math.max(0,Math.min(sw-cw,o.cropX/100*sw-cw/2)),y0=Math.max(0,Math.min(sh-ch,o.cropY/100*sh-ch/2));
+  return {sw,sh,cw,ch,x0,y0,fw:cw/sw,fh:ch/sh};}
+function styleClip(d,o,w){const pic=d.firstChild,vid=pic.firstChild;
+  let bw,bh;
+  if(o.full){bw=frame.clientWidth;bh=frame.clientHeight;pic.style.borderWidth='';pic.style.borderRadius='';}
+  else{const ar=o.aspect>0?1/o.aspect:(vid.videoWidth&&vid.videoHeight?vid.videoHeight/vid.videoWidth:9/16);bw=w;bh=w*ar;
+    d.style.width=w+'px';d.style.left=o.x+'%';d.style.top=o.y+'%';d.style.transform='translate(-50%,-50%)';
+    pic.style.borderWidth=o.style==='plain'?'0':Math.max(2,w*0.012)+'px';pic.style.borderRadius='0';pic.style.height=bh+'px';}
+  const c=cropOf(d,o);if(!c)return;const inner=o.full?bw:bw-2*(parseFloat(pic.style.borderWidth)||0);const k=inner/c.cw;
+  vid.style.width=(c.sw*k)+'px';vid.style.height=(c.sh*k)+'px';vid.style.left=(-c.x0*k)+'px';vid.style.top=(-c.y0*k)+'px';}
+/** Keeps a clip's own time in step with the short: its source time = srcStart + time into its window. */
+function syncClip(d,o,rel,on){const vid=d.firstChild.firstChild;if(!vid||vid.tagName!=='VIDEO')return;
+  if(!on){if(!vid.paused)vid.pause();return;}
+  const want=(o.srcStart||0)+(rel-o.t);
+  if(Math.abs(vid.currentTime-want)>(v.paused?0.05:0.3))vid.currentTime=want;
+  if(!v.paused&&vid.paused)vid.play().catch(()=>{});else if(v.paused&&!vid.paused)vid.pause();}
+function playEntrance(d,o){if(o.kind==='video')return;const base=`translate(-50%,-50%) rotate(${o.rot||0}deg)`;
   if(o.anim==='pop')d.animate([{transform:base+' scale(.55)'},{transform:base+' scale(1)'}],{duration:220,easing:'cubic-bezier(.2,1.4,.4,1)'});
   else if(o.anim==='fade')d.animate([{opacity:0},{opacity:1}],{duration:300});
   else if(o.anim==='slide')d.animate([{opacity:0,transform:base+' translateY(8vh)'},{opacity:1,transform:base}],{duration:350,easing:'ease-out'});}
@@ -394,6 +446,7 @@ function previewLayer(id){const d=layerEl(id);if(!d||!d._o)return;d.style.displa
 function applyLayers(t){const rel=t-range.s;
   for(const d of ovl.children){const o=d._o;if(!o)continue;const on=!cameraMode&&((rel>=o.t&&rel<o.end)||(ovDrag&&ovDrag.o===o));
     d.style.display=on?'block':'none';
+    if(o.kind==='video')syncClip(d,o,rel,on);
     if(on&&!shown[o.id]&&!ovDrag)playEntrance(d,o);
     shown[o.id]=on;}}
 window.addEventListener('resize',styleLayers);

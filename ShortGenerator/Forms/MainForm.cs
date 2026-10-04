@@ -86,6 +86,8 @@ public sealed class MainForm : Form
     // under the player: one click adds an image at the playhead; the label follows the time
     private readonly FancyButton _addLayerHere = new() { Text = "Image at 00:00.0", Width = 150, Glyph = "\uE91B" };
     private const double DefaultLayerSeconds = 5;
+    /// <summary>Adds a moment of another video (the goal being talked about) over the short.</summary>
+    private readonly FancyButton _addVideoLayer = new() { Text = "Add video", Width = 120 };
     private readonly FancyButton _removeLayer = new() { Text = "Remove", Width = 96, Enabled = false, Glyph = "\uE74D" };
     private readonly NumericUpDown _layerFrom = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 64, Maximum = 100000 };
     private readonly NumericUpDown _layerTo = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 64, Maximum = 100000 };
@@ -408,7 +410,7 @@ public sealed class MainForm : Form
             (_clearCover, "reset"), (_copyCover, "copy-image"), (_copyCoverPrompt, "copy-prompt"), (_generateCover, "ai-magic"),
             (_keyframeDelete, "delete"), (_keyframeClear, "clear"), (_removeLayer, "delete"),
             (_addLayer, "choose-image"), (_pasteLayer, "copy-image"), (_segDelete, "delete"), (_retranslate, "ai-magic"),
-            (_segPlay, "render"), (_renderClear, "clear"),
+            (_segPlay, "render"), (_renderClear, "clear"), (_addVideoLayer, "use-frame"),
         })
             b.Picture = Theme.Icon(icon);
         // icon + label must fit (never a truncated label); measured once every label is final
@@ -793,6 +795,7 @@ public sealed class MainForm : Form
         var layerBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(2, 8, 0, 0), WrapContents = false };
         layerBar.Controls.Add(_addLayer);
         layerBar.Controls.Add(_pasteLayer);
+        layerBar.Controls.Add(_addVideoLayer);
         layerBar.Controls.Add(_removeLayer);
         _addLayer.Text = "Add"; _pasteLayer.Text = "Paste"; _addLayer.Width = 84; _pasteLayer.Width = 90; _removeLayer.Width = 100;
         foreach (Control c in new Control[] { layersHost, _layers })
@@ -805,7 +808,7 @@ public sealed class MainForm : Form
         layersHost.Controls.Add(props);
         layersHost.Controls.Add(layerBar);
         // AutoSize off + fixed height lets the hint wrap onto a second line instead of being cut off
-        layersHost.Controls.Add(new Label { Text = "Images. Right-click a transcript line to add one. On the video: drag to move, scroll to resize, Shift+scroll to rotate.", Dock = DockStyle.Top, Height = 40, AutoSize = false, ForeColor = Color.DimGray, UseMnemonic = false });
+        layersHost.Controls.Add(new Label { Text = "Images and video clips. Add video shows a moment of another video (double-click its row to change it); on the video, drag a full-screen clip to frame it and scroll to zoom.", Dock = DockStyle.Top, Height = 40, AutoSize = false, ForeColor = Color.DimGray, UseMnemonic = false });
 
         // render queue under the images
         _renders.Columns.Add("Short", 200);
@@ -1068,6 +1071,17 @@ public sealed class MainForm : Form
         _player.LayerSelected += id => BeginInvoke(() => SelectLayerRow(id));
         _player.LayerChanged += (id, x, y, size, rot) => BeginInvoke(() => OnLayerMovedOnVideo(id, x, y, size, rot));
         _addLayer.Click += async (_, _) => await PickAndAddLayerAsync(CurrentClipTime());
+        _addVideoLayer.Click += async (_, _) => await AddVideoLayerAsync(CurrentClipTime());
+        _layers.DoubleClick += async (_, _) => { if (SelectedLayer is { IsVideo: true } v) await EditVideoLayerAsync(v); };
+        _player.VideoLayerChanged += (id, cx, cy, zoom, x, y, size) => BeginInvoke(() =>
+        {
+            var o = _editing?.Overlays.FirstOrDefault(l => l.Id == id);
+            if (o is null) return;
+            o.CropX = cx; o.CropY = cy; o.Zoom = zoom; o.X = x; o.Y = y; o.Size = size;
+            SaveProject();
+            RefreshLayerList(o.Id);
+            _ = PushLayersAsync();
+        });
         _addLayerHere.Click += async (_, _) => await PickAndAddLayerAsync(CurrentClipTime());
         _pasteLayer.Click += async (_, _) => await PasteLayerAsync();
         _removeLayer.Click += async (_, _) => await RemoveLayerAsync();
@@ -2160,7 +2174,9 @@ public sealed class MainForm : Form
         if (_editing is not null)
             foreach (var o in _editing.Overlays.OrderBy(o => o.Start))
             {
-                var item = new ListViewItem(new[] { $"{o.Start:F1}s", $"{o.End:F1}s", Path.GetFileName(o.Path), ImageOverlay.StyleName(o.Style) }) { Tag = o };
+                var item = new ListViewItem(new[] { $"{o.Start:F1}s", $"{o.End:F1}s",
+                    o.IsVideo ? $"🎬 {Path.GetFileNameWithoutExtension(o.Path)} from {Fmt(o.SourceStart)}" : Path.GetFileName(o.Path),
+                    o.IsVideo ? (o.FullFrame ? "Full screen" : "Inset " + (ImageOverlay.InsetShapes.FirstOrDefault(x => Math.Abs(x.Aspect - o.Aspect) < 0.01).Name ?? "")) : ImageOverlay.StyleName(o.Style) }) { Tag = o };
                 if (!File.Exists(o.Path)) item.ForeColor = Theme.Danger;
                 if (o.Id == selectId) item.Selected = true;
                 _layers.Items.Add(item);
@@ -2178,6 +2194,11 @@ public sealed class MainForm : Form
         _loadingLayer = true;
         if (_layerPropsPanel is not null) _layerPropsPanel.Visible = o is not null;
         foreach (Control c in new Control[] { _layerFrom, _layerTo, _layerSize, _layerRot, _layerStyle, _layerAnim, _removeLayer }) c.Enabled = o is not null;
+        if (o is { IsVideo: true })
+        {
+            _layerRot.Enabled = _layerStyle.Enabled = _layerAnim.Enabled = false;
+            _layerSize.Enabled = !o.FullFrame;
+        }
         if (o is not null)
         {
             _layerFrom.Value = (decimal)Math.Round(Math.Max(0, o.Start), 1);
@@ -2250,6 +2271,61 @@ public sealed class MainForm : Form
             : $"{paths.Count} images added, 5 s each, from {Fmt(first.Start)}.";
     }
 
+
+    /// <summary>
+    /// Picks another video (the downloads folder first), then the moment and its framing, and shows it over the short
+    /// from the playhead for as long as the chosen clip. The short keeps its own sound and captions.
+    /// </summary>
+    private async Task AddVideoLayerAsync(double start)
+    {
+        if (_editing is null || _video is null) return;
+        await _player.PauseAsync();
+        using var pick = new OpenFileDialog
+        {
+            Title = "Choose the video with the moment to show",
+            Filter = "Videos|*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi|All files|*.*",
+            InitialDirectory = Directory.Exists(_settings.DownloadFolder) ? _settings.DownloadFolder : "",
+        };
+        if (pick.ShowDialog(this) != DialogResult.OK) return;
+        var s = _editing;
+        double room = Math.Max(0.5, s.Duration - Math.Min(start, s.Duration - 0.5));
+        using var dlg = new VideoClipDialog(pick.FileName, 0, Math.Min(5, room), true, 50, 50, 1, maxLength: room);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        double a = Math.Min(start, Math.Max(0, s.Duration - dlg.Length));
+        var o = new ImageOverlay
+        {
+            Kind = "video", Path = pick.FileName, SourceStart = Math.Round(dlg.SourceStart, 2),
+            Start = Math.Round(a, 2), End = Math.Round(Math.Min(s.Duration, a + dlg.Length), 2),
+            FullFrame = dlg.FullFrame, CropX = dlg.CropX, CropY = dlg.CropY, Zoom = dlg.Zoom, Aspect = dlg.Aspect,
+            // a vertical window starts narrower so it fits above the captions
+            X = 50, Y = 30, Size = dlg.Aspect is > 0 and < 1 ? 42 : 70, Style = "card", Animation = "none",
+        };
+        s.Overlays.Add(o);
+        SaveProject();
+        RefreshLayerList(o.Id);
+        await PushLayersAsync();
+        await _player.SeekAsync(s.StartSeconds + o.Start + 0.05);
+        _status.Text = $"Clip shown {Fmt(o.Start)} to {Fmt(o.End)}. " + (o.FullFrame ? "Drag it on the video to frame it, scroll to zoom." : "Drag it to place it, scroll to resize.") + " Double-click its row to pick another moment.";
+    }
+
+    /// <summary>Opens the clip dialog again on an existing clip: another moment, length or framing.</summary>
+    private async Task EditVideoLayerAsync(ImageOverlay o)
+    {
+        if (_editing is null || !File.Exists(o.Path)) return;
+        await _player.PauseAsync();
+        var s = _editing;
+        double room = Math.Max(0.5, s.Duration - o.Start);
+        using var dlg = new VideoClipDialog(o.Path, o.SourceStart, o.End - o.Start, o.FullFrame, o.CropX, o.CropY, o.Zoom, maxLength: room, aspect: o.Aspect);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        o.SourceStart = Math.Round(dlg.SourceStart, 2);
+        o.End = Math.Round(Math.Min(s.Duration, o.Start + dlg.Length), 2);
+        o.FullFrame = dlg.FullFrame; o.CropX = dlg.CropX; o.CropY = dlg.CropY; o.Zoom = dlg.Zoom; o.Aspect = dlg.Aspect;
+        SaveProject();
+        RefreshLayerList(o.Id);
+        await PushLayersAsync();
+        await _player.SeekAsync(s.StartSeconds + o.Start + 0.05);
+    }
+
     /// <summary>Pastes an image copied from a browser or an app (or a copied image file) at the playhead.</summary>
     private async Task PasteLayerAsync()
     {
@@ -2309,6 +2385,14 @@ public sealed class MainForm : Form
         o.Start = (double)_layerFrom.Value;
         o.End = Math.Max(o.Start + 0.5, (double)_layerTo.Value);
         o.Size = (double)_layerSize.Value;
+        if (o.IsVideo)
+        {
+            // a clip keeps its own look; only its window and (inset) size change here
+            SaveProject();
+            RefreshLayerList(o.Id);
+            await PushLayersAsync();
+            return;
+        }
         o.Rotation = (double)_layerRot.Value;
         o.Style = ImageOverlay.Styles[Math.Max(0, _layerStyle.SelectedIndex)].Id;
         o.Animation = ImageOverlay.Animations[Math.Max(0, _layerAnim.SelectedIndex)].Id;
