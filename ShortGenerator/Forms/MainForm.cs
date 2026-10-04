@@ -792,7 +792,8 @@ public sealed class MainForm : Form
         Prop(0, 0, "From (s)", _layerFrom); Prop(0, 1, "To (s)", _layerTo);
         Prop(1, 0, "Style", _layerStyle); Prop(1, 1, "Entrance", _layerAnim);
         Prop(2, 0, "Size %", _layerSize); Prop(2, 1, "Rotate", _layerRot);
-        var layerBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(2, 8, 0, 0), WrapContents = false };
+        // wraps on a narrow column, so no button is ever cut off
+        var layerBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(2, 8, 0, 0), WrapContents = true };
         layerBar.Controls.Add(_addLayer);
         layerBar.Controls.Add(_pasteLayer);
         layerBar.Controls.Add(_addVideoLayer);
@@ -2302,7 +2303,7 @@ public sealed class MainForm : Form
             Kind = "video", Path = pick.FileName, SourceStart = Math.Round(dlg.SourceStart, 2),
             Start = Math.Round(a, 2), End = Math.Round(Math.Min(s.Duration, a + dlg.Length), 2),
             FullFrame = dlg.FullFrame, CropX = dlg.CropX, CropY = dlg.CropY, Zoom = dlg.Zoom, Aspect = dlg.Aspect,
-            X = dlg.X, Y = dlg.Y, Size = dlg.WindowWidth, Style = "card", Animation = "none",
+            X = dlg.X, Y = dlg.Y, Size = dlg.WindowWidth, Style = dlg.Plain ? "plain" : "card", Animation = "none",
         };
         s.Overlays.Add(o);
         SaveProject();
@@ -2344,7 +2345,7 @@ public sealed class MainForm : Form
         o.SourceStart = Math.Round(dlg.SourceStart, 2);
         o.End = Math.Round(Math.Min(s.Duration, o.Start + dlg.Length), 2);
         o.FullFrame = dlg.FullFrame; o.CropX = dlg.CropX; o.CropY = dlg.CropY; o.Zoom = dlg.Zoom; o.Aspect = dlg.Aspect;
-        o.X = dlg.X; o.Y = dlg.Y; o.Size = dlg.WindowWidth;
+        o.X = dlg.X; o.Y = dlg.Y; o.Size = dlg.WindowWidth; o.Style = dlg.Plain ? "plain" : "card";
         SaveProject();
         RefreshLayerList(o.Id);
         await PushLayersAsync();

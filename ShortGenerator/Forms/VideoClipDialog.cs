@@ -47,9 +47,20 @@ public sealed class VideoClipDialog : Form
     private readonly Label _time = new() { AutoSize = true, ForeColor = Theme.TextSecondary, Margin = new Padding(8, 8, 0, 0), Font = Theme.Mono(9.5f) };
     private readonly NumericUpDown _start = new() { DecimalPlaces = 1, Increment = 0.5M, Maximum = 100000, Width = 90 };
     private readonly NumericUpDown _end = new() { DecimalPlaces = 1, Increment = 0.5M, Maximum = 100000, Width = 90 };
-    private readonly RadioButton _full = new() { Text = "Full screen (9:16)", AutoSize = true, Checked = true };
-    private readonly RadioButton _inset = new() { Text = "Picture in picture", AutoSize = true };
-    private readonly ComboBox _shape = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 140 };
+    // how the clip shows: three buttons (no drop-down list)
+    private readonly FancyButton _modeBanner = new() { Text = "Top banner (wide)", Height = 34 };
+    private readonly FancyButton _modeWindow = new() { Text = "Small window (9:16)", Height = 34 };
+    private readonly FancyButton _modeFull = new() { Text = "Full screen", Height = 34 };
+    /// <summary>banner | window | full</summary>
+    private string _mode = "window";
+    /// <summary>The small window's shape (9:16, or the shape an existing clip already had).</summary>
+    private double _windowAspect = 9.0 / 16;
+    private bool IsFull => _mode == "full";
+    /// <summary>Banner: a wide clip across the whole width at the top of the short, no border.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool Plain => _mode == "banner";
+    /// <summary>Centre height (percent of the short) of a full-width 16:9 banner touching the top.</summary>
+    private static readonly double BannerY = 100 * (9.0 / 16) / (16.0 / 9) / 2;
     private readonly Label _info = new() { AutoSize = true, ForeColor = Theme.TextMuted };
     private readonly FancyButton _play = new() { Text = "Play the clip", Width = 130, Glyph = "" };
     private readonly System.Windows.Forms.Timer _scrubTimer = new() { Interval = 120 };
@@ -105,12 +116,13 @@ public sealed class VideoClipDialog : Form
         bar.Controls.Add(endHere);
         bar.Controls.Add(L("End (s)")); bar.Controls.Add(_end);
         bar.Controls.Add(_play);
-        _full.Margin = new Padding(18, 8, 6, 0); _inset.Margin = new Padding(6, 8, 6, 0);
-        bar.Controls.Add(_full); bar.Controls.Add(_inset);
-        foreach (var (_, name) in ImageOverlay.InsetShapes) _shape.Items.Add(name);
-        _shape.SelectedIndex = Math.Max(0, Array.FindIndex(ImageOverlay.InsetShapes, x => Math.Abs(x.Aspect - aspect) < 0.01));
-        _shape.Margin = new Padding(4, 5, 6, 0);
-        bar.Controls.Add(_shape);
+        bar.Controls.Add(new Label { Text = "Show it as", AutoSize = true, Margin = new Padding(18, 9, 6, 0), ForeColor = Theme.TextSecondary });
+        foreach (var b in new[] { _modeBanner, _modeWindow, _modeFull })
+        {
+            b.Width = TextRenderer.MeasureText(b.Text, b.Font).Width + 36;
+            b.Margin = new Padding(0, 2, 6, 2);
+            bar.Controls.Add(b);
+        }
         _info.Margin = new Padding(14, 9, 0, 0);
         bar.Controls.Add(_info);
         foreach (var b in new[] { startHere, endHere, _play }) b.Margin = new Padding(0, 2, 6, 2);
@@ -144,8 +156,10 @@ public sealed class VideoClipDialog : Form
 
         _start.Value = (decimal)Math.Max(0, Math.Round(sourceStart, 1));
         _end.Value = (decimal)Math.Max(0, Math.Round(sourceStart + length, 1));
-        _full.Checked = fullFrame; _inset.Checked = !fullFrame;
-        _shape.Enabled = !fullFrame;
+        // the mode an existing clip had
+        bool wide = Math.Abs(aspect - 16.0 / 9) < 0.01;
+        _mode = fullFrame ? "full" : wide && size >= 95 ? "banner" : "window";
+        if (!fullFrame && !wide && aspect > 0) _windowAspect = aspect;
 
         _slider.Scroll += (_, _) => { StopPlay(load: false); _now = _slider.Value / 1000.0 * _duration; ShowTime(); _scrubTimer.Stop(); _scrubTimer.Start(); };
         _scrubTimer.Tick += async (_, _) => { _scrubTimer.Stop(); await LoadFrameAsync(_now); };
@@ -159,32 +173,59 @@ public sealed class VideoClipDialog : Form
         };
         _start.ValueChanged += (_, _) => ShowInfo();
         _end.ValueChanged += (_, _) => ShowInfo();
-        _full.CheckedChanged += (_, _) => { _shape.Enabled = _inset.Checked; _view.Invalidate(); _short.Invalidate(); };
-        _shape.SelectedIndexChanged += (_, _) => { _view.Invalidate(); _short.Invalidate(); };
+        _modeBanner.Click += (_, _) => SetMode("banner", place: true);
+        _modeWindow.Click += (_, _) => SetMode("window", place: true);
+        _modeFull.Click += (_, _) => SetMode("full", place: false);
+        SetMode(_mode, place: false);
         ok.Click += (_, _) =>
         {
             double a = (double)_start.Value, b = (double)_end.Value;
             if (b - a < 0.5) { AppDialog.Alert(this, "Pick the clip", "Mark where the clip starts and ends: it has to last at least half a second.", AppDialog.Kind.Warning); return; }
-            SourceStart = a; Length = Math.Min(b - a, maxLength); FullFrame = _full.Checked;
-            Aspect = ImageOverlay.InsetShapes[Math.Max(0, _shape.SelectedIndex)].Aspect;
+            SourceStart = a; Length = Math.Min(b - a, maxLength); FullFrame = IsFull;
+            Aspect = BoxAspect;
             DialogResult = DialogResult.OK; Close();
         };
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
         CancelButton = cancel;
-        KeyPreview = true;
-        KeyDown += (_, e) =>
-        {
-            if (ActiveControl is NumericUpDown or ComboBox) return;
-            if (e.KeyCode == Keys.Left) { SeekTo(_now - (e.Shift ? 1 : 0.1)); e.Handled = true; }
-            else if (e.KeyCode == Keys.Right) { SeekTo(_now + (e.Shift ? 1 : 0.1)); e.Handled = true; }
-        };
+
         Load += async (_, _) => await InitAsync();
         FormClosed += (_, _) => { _playTimer.Stop(); _scrubTimer.Stop(); _frameCts?.Cancel(); DisposePlayFrames(); try { Directory.Delete(_work, true); } catch { } };
         ShowInfo();
     }
 
+    /// <summary>
+    /// Left / Right step the video (Shift = 1 s). Handled here, before Windows uses the arrows to move the focus
+    /// between controls (which flipped the mode buttons instead); a number box keeps its own arrows.
+    /// </summary>
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        var key = keyData & Keys.KeyCode;
+        if ((key == Keys.Left || key == Keys.Right) && ActiveControl is not NumericUpDown)
+        {
+            double step = (keyData & Keys.Shift) != 0 ? 1 : 0.1;
+            SeekTo(_now + (key == Keys.Right ? step : -step));
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
     /// <summary>The framing box's shape: 9:16 for full screen, the chosen window shape for picture in picture (0 = whole frame).</summary>
-    private double BoxAspect => _full.Checked ? 9.0 / 16 : ImageOverlay.InsetShapes[Math.Max(0, _shape.SelectedIndex)].Aspect;
+    private double BoxAspect => _mode switch { "full" => 9.0 / 16, "banner" => 16.0 / 9, _ => _windowAspect };
+
+    /// <summary>
+    /// Switches how the clip shows. <paramref name="place"/> puts the window where that mode belongs: the banner across
+    /// the whole top, the small window centred near the top.
+    /// </summary>
+    private void SetMode(string mode, bool place)
+    {
+        _mode = mode;
+        if (place && mode == "banner") { X = 50; Y = BannerY; WindowWidth = 100; }
+        else if (place && mode == "window") { X = 50; Y = 22; WindowWidth = 32; }
+        foreach (var (b, m) in new[] { (_modeBanner, "banner"), (_modeWindow, "window"), (_modeFull, "full") })
+            b.Kind = m == mode ? ButtonKind.Primary : ButtonKind.Ghost;
+        _view.Invalidate();
+        _short.Invalidate();
+    }
 
     private decimal Clamp(double t) => (decimal)Math.Round(Math.Clamp(t, 0, _duration > 0 ? _duration : 100000), 1);
 
@@ -412,7 +453,7 @@ public sealed class VideoClipDialog : Form
             Invalidate();
         }
 
-        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); Focus(); } // so the wheel reaches it
+
     }
 
     // ------------------------------------------------------------------ the short, with the clip on it
@@ -480,7 +521,7 @@ public sealed class VideoClipDialog : Form
             if (frame is null) return;
             // the clip's crop in the frame's own pixels (same rule as the render)
             var o = new ImageOverlay { CropX = _d.CropX, CropY = _d.CropY, Zoom = _d.Zoom };
-            if (_d._full.Checked)
+            if (_d.IsFull)
             {
                 var r = o.CropRect(frame.Width, frame.Height, 9.0 / 16);
                 g.DrawImage(frame, c, new RectangleF(r.X, r.Y, r.W, r.H), GraphicsUnit.Pixel);
@@ -503,7 +544,7 @@ public sealed class VideoClipDialog : Form
         {
             base.OnMouseDown(e);
             Focus();
-            if (e.Button != MouseButtons.Left || _d._full.Checked) return;
+            if (e.Button != MouseButtons.Left || _d.IsFull) return;
             _dragging = true; _from = e.Location; _x0 = _d.X; _y0 = _d.Y;
             Capture = true;
         }
@@ -511,7 +552,7 @@ public sealed class VideoClipDialog : Form
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            Cursor = _d._full.Checked ? Cursors.Default : Cursors.SizeAll;
+            Cursor = _d.IsFull ? Cursors.Default : Cursors.SizeAll;
             if (!_dragging) return;
             var c = Canvas();
             _d.X = Math.Clamp(_x0 + (e.X - _from.X) / c.Width * 100, 0, 100);
@@ -524,11 +565,11 @@ public sealed class VideoClipDialog : Form
         protected override void OnMouseWheel(MouseEventArgs e)
         {
             base.OnMouseWheel(e);
-            if (_d._full.Checked) return;
+            if (_d.IsFull) return;
             _d.WindowWidth = Math.Clamp(_d.WindowWidth + (e.Delta > 0 ? 2 : -2), 10, 100);
             Invalidate();
         }
 
-        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); Focus(); }
+
     }
 }
