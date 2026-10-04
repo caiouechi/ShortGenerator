@@ -149,6 +149,8 @@ public sealed class ShortSuggestion
 
     /// <summary>Camera cuts for the vertical crop (times relative to the clip start). Empty = centered.</summary>
     [JsonPropertyName("camera")] public List<CameraKeyframe> Camera { get; set; } = new();
+    /// <summary>Where the auto camera may look (null = the whole frame). Faces outside it are ignored.</summary>
+    [JsonPropertyName("focus")] public FocusArea? Focus { get; set; }
     /// <summary>How far the picture is moved down inside the frame, in percent of the frame height (negative = up).
     /// Dragged on the preview, so the speakers sit below a split or a clip banner at the top; the strip it uncovers is black.</summary>
     [JsonPropertyName("main_dy")] public double MainOffsetY { get; set; }
@@ -201,6 +203,18 @@ public readonly record struct PostTargets(bool YouTube, bool TikTok, bool Instag
 {
     public bool Any => YouTube || TikTok || Instagram;
     public static PostTargets All => new(true, true, true);
+}
+
+/// <summary>A box on the source frame, in percent (left, top, width, height), that the auto camera keeps to.</summary>
+public sealed class FocusArea
+{
+    [JsonPropertyName("x")] public double X { get; set; }
+    [JsonPropertyName("y")] public double Y { get; set; }
+    [JsonPropertyName("w")] public double W { get; set; } = 100;
+    [JsonPropertyName("h")] public double H { get; set; } = 100;
+    [JsonIgnore] public double CenterX => X + W / 2;
+    [JsonIgnore] public double CenterY => Y + H / 2;
+    public bool Contains(double px, double py) => px >= X && px <= X + W && py >= Y && py <= Y + H;
 }
 
 public interface IKeyframe

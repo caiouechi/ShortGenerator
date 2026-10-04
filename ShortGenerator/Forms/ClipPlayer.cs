@@ -172,6 +172,10 @@ public sealed class ClipPlayer : UserControl
     /// <summary>How far the picture sits down inside the frame (percent of its height); the preview matches the render.</summary>
     public Task SetMainShiftAsync(double percent) => Exec($"setMainShift({J(percent)})");
 
+    /// <summary>The auto camera's focus area (percent of the source frame), drawn in Camera mode; null hides it.</summary>
+    public Task SetFocusAreaAsync(FocusArea? f) =>
+        Exec($"setFocusArea({(f is null ? "null" : JsonSerializer.Serialize(new { x = f.X, y = f.Y, w = f.W, h = f.H }))})");
+
     /// <summary>Camera edit mode: shows the whole source frame with a draggable 9:16 box (scroll to zoom).</summary>
     public Task SetCameraModeAsync(bool on) => Exec($"setCameraMode({(on ? "true" : "false")})");
     /// <summary>Image layers of the clip (times relative to the clip start); <paramref name="selectedId"/> gets a dashed outline.</summary>
@@ -262,17 +266,23 @@ public sealed class ClipPlayer : UserControl
   #edit textarea{width:100%;box-sizing:border-box;min-height:70px;background:transparent;border:0;outline:0;resize:none;color:#fff;font:600 16px Arial;line-height:1.35}
   #edit .hint{color:#C7CBE0;font:12px Arial;margin-top:6px}
   #camhint{position:absolute;left:8px;bottom:8px;color:#fff;font:12px Arial;background:rgba(0,0,0,.6);padding:4px 8px;border-radius:4px;display:none}
+  #focus{position:absolute;border:2px dashed #16a34a;box-sizing:border-box;pointer-events:none;display:none}
+  #focus .lbl{position:absolute;left:6px;top:6px;background:#16a34a;color:#fff;font:11px Arial;padding:2px 6px;border-radius:4px;white-space:nowrap}
   @keyframes pop{from{transform:scale(.8)}to{transform:scale(1)}}
   .pop{animation:pop 110ms ease-out}
 </style></head>
 <body>
-<div id="wrap"><div id="frame"><video id="bg" muted></video><video id="v" playsinline></video><div id="ovl"></div><div id="cap"></div><div id="cam"><span class="lbl"></span></div><div id="edit"><textarea spellcheck="true"></textarea><div class="hint">Enter to save, Shift+Enter for a new line, Esc to cancel. Edits the whole transcript line.</div></div><div id="camhint">Drag the box to move the camera, scroll to zoom. Each change creates a camera cut at the current time.</div></div></div>
+<div id="wrap"><div id="frame"><video id="bg" muted></video><video id="v" playsinline></video><div id="ovl"></div><div id="cap"></div><div id="cam"><span class="lbl"></span></div><div id="focus"><span class="lbl">auto camera looks here</span></div><div id="edit"><textarea spellcheck="true"></textarea><div class="hint">Enter to save, Shift+Enter for a new line, Esc to cancel. Edits the whole transcript line.</div></div><div id="camhint">Drag the box to move the camera, scroll to zoom. Each change creates a camera cut at the current time.</div></div></div>
 <script>
 const v=document.getElementById('v'),bg=document.getElementById('bg'),frame=document.getElementById('frame'),cap=document.getElementById('cap'),cam=document.getElementById('cam'),camHint=document.getElementById('camhint');
 let range={s:0,e:0},chunks=[],st=null,lastIdx=-1,lastPost=0,drag=null;
 let camera=[],capPos=[],cameraMode=false,camDrag=null,liveCam=null;   // liveCam: box being edited (percent center + zoom)
 let mainShift=0,shiftDrag=null,suppressClick=false;                    // mainShift: the picture moved down, % of the frame height
 function setMainShift(y){mainShift=y||0;layout();render(true);}
+const focusEl=document.getElementById('focus');let focusArea=null;
+function setFocusArea(f){focusArea=f;drawFocus();}
+function drawFocus(){const on=cameraMode&&focusArea;focusEl.style.display=on?'block':'none';if(!on)return;
+  focusEl.style.left=focusArea.x+'%';focusEl.style.top=focusArea.y+'%';focusEl.style.width=focusArea.w+'%';focusEl.style.height=focusArea.h+'%';}
 function shiftPx(){return cameraMode?0:mainShift/100*frame.clientHeight;}
 function post(o){window.chrome&&window.chrome.webview&&window.chrome.webview.postMessage(o);}
 function load(src,s,e){range={s,e};v.src=src;bg.src=src;v.currentTime=s;bg.currentTime=s;liveCam=null;layout();}
@@ -305,7 +315,7 @@ function layout(){
   frame.style.width=w+'px';frame.style.height=h+'px';
   const crop=st?st.crop:'VerticalCrop';
   bg.style.display=(!cameraMode&&crop==='VerticalBlurredBackground')?'block':'none';
-  cam.style.display=cameraMode?'block':'none';camHint.style.display=cameraMode?'block':'none';
+  cam.style.display=cameraMode?'block':'none';camHint.style.display=cameraMode?'block':'none';drawFocus();
   cap.style.display=cameraMode?'none':'block';
   // default video fit; applyCamera() overrides for vertical crop with camera cuts
   v.style.left='0';v.style.top=shiftPx()+'px';v.style.width='100%';v.style.height='100%';

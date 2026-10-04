@@ -79,6 +79,8 @@ public sealed class MainForm : Form
     private readonly CheckBox _cameraMode = new() { Text = "Camera mode", AutoSize = false, Appearance = Appearance.Button, TextAlign = ContentAlignment.MiddleCenter, Width = 110, Height = 28 };
     private readonly FancyButton _autoCamera = new() { Text = "Auto camera (faces)", Width = 185 };
     private readonly FancyButton _changeCamera = new() { Text = "Change camera", Width = 135 };
+    /// <summary>Draws the box the auto camera keeps to (so a screen in the background is left out).</summary>
+    private readonly FancyButton _focusArea = new() { Text = "Focus area", Width = 135 };
     private readonly FancyButton _removeFromSelection = new() { Text = "Remove from selected", Width = 180, Glyph = "\uE738" };
     // image layers of the short open in the editor
     private readonly ListView _layers = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
@@ -413,7 +415,7 @@ public sealed class MainForm : Form
             (_clearCover, "reset"), (_copyCover, "copy-image"), (_copyCoverPrompt, "copy-prompt"), (_generateCover, "ai-magic"),
             (_keyframeDelete, "delete"), (_keyframeClear, "clear"), (_removeLayer, "delete"),
             (_addLayer, "choose-image"), (_pasteLayer, "copy-image"), (_segDelete, "delete"), (_retranslate, "ai-magic"),
-            (_segPlay, "render"), (_renderClear, "clear"), (_addVideoLayer, "use-frame"), (_addSplit, "camera-mode"),
+            (_segPlay, "render"), (_renderClear, "clear"), (_addVideoLayer, "use-frame"), (_addSplit, "camera-mode"), (_focusArea, "auto-camera"),
         })
             b.Picture = Theme.Icon(icon);
         // icon + label must fit (never a truncated label); measured once every label is final
@@ -685,13 +687,16 @@ public sealed class MainForm : Form
         _renderPreview.Height = 38; _renderPreview.Dock = DockStyle.Fill; _renderPreview.Margin = new Padding(0, 0, 0, 8);
         _autoCamera.Text = "Auto camera"; _autoCamera.Dock = DockStyle.Fill; _autoCamera.Margin = new Padding(0, 0, 4, 8);
         _changeCamera.Dock = DockStyle.Fill; _changeCamera.Margin = new Padding(4, 0, 0, 8);
-        _cameraMode.Dock = DockStyle.Fill; _cameraMode.Height = 32; _cameraMode.Margin = new Padding(0, 0, 0, 12);
+        _cameraMode.Dock = DockStyle.Fill; _cameraMode.Height = 32; _cameraMode.Margin = new Padding(0, 0, 4, 12);
+        _focusArea.Dock = DockStyle.Fill; _focusArea.Height = 32; _focusArea.Margin = new Padding(4, 0, 0, 12);
         actions.RowCount = 0;
         Row(_renderPreview, true);
         actions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         actions.Controls.Add(_autoCamera, 0, actions.RowCount);
         actions.Controls.Add(_changeCamera, 1, actions.RowCount++);
-        Row(_cameraMode, true);
+        actions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        actions.Controls.Add(_cameraMode, 0, actions.RowCount);
+        actions.Controls.Add(_focusArea, 1, actions.RowCount++);
         var coverHead = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 4) };
         coverHead.Controls.Add(new Label { Text = "Cover / thumbnail", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 6, 8, 0) });
         _coverLang.Items.AddRange(new object[] { "Original", "English" });
@@ -1122,6 +1127,7 @@ public sealed class MainForm : Form
             await _player.SetCameraModeAsync(_cameraMode.Checked);
         };
         _autoCamera.Click += async (_, _) => await AutoCameraAsync();
+        _focusArea.Click += async (_, _) => await FocusAreaAsync();
         _changeCamera.Click += async (_, _) => await ChangeCameraAsync();
         _look.SelectedIndexChanged += async (_, _) =>
         {
@@ -2563,6 +2569,7 @@ public sealed class MainForm : Form
         {
             await _player.SetCameraAsync(_editing.Camera);
             await _player.SetMainShiftAsync(_editing.MainOffsetY);
+            await _player.SetFocusAreaAsync(_editing.Focus);
             await _player.SetCaptionPositionsAsync(_editing.CaptionPositions);
         }
     }
@@ -2588,7 +2595,7 @@ public sealed class MainForm : Form
         }
         _keyframes.EndUpdate();
         int cams = _editing?.Camera.Count ?? 0, caps = _editing?.CaptionPositions.Count ?? 0;
-        _keyframeHint.Text = _editing is null ? "" : $"{cams} camera cut{(cams == 1 ? "" : "s")}, {caps} caption pos." + (Math.Abs(_editing.MainOffsetY) >= 0.5 ? $", picture {(_editing.MainOffsetY > 0 ? "down" : "up")} {Math.Abs(_editing.MainOffsetY):F0}%" : "");
+        _keyframeHint.Text = _editing is null ? "" : $"{cams} camera cut{(cams == 1 ? "" : "s")}, {caps} caption pos." + (Math.Abs(_editing.MainOffsetY) >= 0.5 ? $", picture {(_editing.MainOffsetY > 0 ? "down" : "up")} {Math.Abs(_editing.MainOffsetY):F0}%" : "") + (_editing.Focus is not null ? ", focus area set" : "");
         // edits show on the scrub bar: camera cuts in violet, caption positions in blue
         if (_editing is not null && _editing.Duration > 0)
             _timeline.SetMarks(_editing.Camera.Where(k => k.Time > 0.05).Select(k => new TimelineBar.Mark(k.Time / _editing.Duration, Theme.Nebula, $"Camera cut at {Fmt(k.Time)} ({k.Source})"))
@@ -2619,6 +2626,39 @@ public sealed class MainForm : Form
     }
 
     /// <summary>Runs face detection on the current short and replaces its camera cuts.</summary>
+    /// <summary>
+    /// Lets the user box the part of the frame the auto camera may look at (the people, not the screen behind them),
+    /// for this short or for all shorts of the video, then reframes the short unless it has cuts placed by hand.
+    /// </summary>
+    private async Task FocusAreaAsync()
+    {
+        if (_video is null || _editing is null) return;
+        await _player.PauseAsync();
+        var s = _editing;
+        double at = Math.Min(CurrentClipTime(), Math.Max(0, s.Duration - 0.5));
+        using var dlg = new FocusAreaDialog(_ffmpeg, _video.FilePath, s.StartSeconds + at, s.Focus, _suggestions?.Shorts.Count ?? 1);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        var area = dlg.Area;
+        var targets = dlg.ApplyToAll && _suggestions is not null ? _suggestions.Shorts.ToList() : new List<ShortSuggestion> { s };
+        foreach (var t in targets)
+        {
+            t.Focus = area is null ? null : new FocusArea { X = area.X, Y = area.Y, W = area.W, H = area.H };
+            _faces.Remove(t); // Change camera analyses again with the new area
+        }
+        SaveProject();
+        await _player.SetFocusAreaAsync(s.Focus);
+        RefreshKeyframeList();
+        string what = area is null ? "Focus area cleared: the auto camera looks at the whole frame again" : "Focus area set";
+        if (targets.Count > 1) what += $" for all {targets.Count} shorts";
+        if (FaceFramer.IsSupported && !s.Camera.Any(k => k.Source is "manual" or "alt"))
+        {
+            _status.Text = what + ". Reframing this short...";
+            await AutoCameraAsync(silent: true);
+            _status.Text = what + ". This short was reframed; the others reframe when their auto camera runs.";
+        }
+        else _status.Text = what + ". Click Auto camera to reframe with it (the cuts you placed by hand are kept until then).";
+    }
+
     private async Task AutoCameraAsync(bool silent = false)
     {
         if (_video is null || _editing is null) return;

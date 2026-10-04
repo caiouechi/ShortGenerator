@@ -33,6 +33,8 @@ public sealed class FaceFramer
         public double Duration { get; init; }
         public List<(double Time, List<Face> Faces)> Frames { get; init; } = new();
         public List<CameraKeyframe> Cuts { get; init; } = new();
+        /// <summary>The area the detection was limited to (null = whole frame); the wide shot centres on it.</summary>
+        public FocusArea? Focus { get; init; }
     }
 
     /// <param name="samplesPerSecond">Detection rate. 2 is plenty for talking heads.</param>
@@ -61,19 +63,22 @@ public sealed class FaceFramer
             var detector = await FaceDetector.CreateAsync();
             var format = FaceDetector.GetSupportedBitmapPixelFormats().Contains(BitmapPixelFormat.Gray8) ? BitmapPixelFormat.Gray8 : BitmapPixelFormat.Nv12;
             var samples = new List<Sample>(files.Length);
+            var focus = s.Focus;
             for (int i = 0; i < files.Length; i++)
             {
                 ct.ThrowIfCancellationRequested();
                 double t = i / samplesPerSecond;
-                var sample = await DetectOneAsync(detector, format, files[i], t);
+                var sample = await DetectOneAsync(detector, format, files[i], t, focus);
                 samples.Add(sample);
                 progress?.Report(0.4 + 0.6 * (i + 1) / files.Length);
             }
 
             int found = samples.Count(x => x.Found);
-            var cuts = ToCuts(samples, s.Duration);
-            log.Report($"Camera: faces found in {found}/{samples.Count} frames -> {cuts.Count} camera cut(s) for \"{s.Title}\".");
-            return new Analysis { Duration = s.Duration, Cuts = cuts, Frames = samples.Select(x => (x.Time, x.Faces)).ToList() };
+            // with no face in sight the camera frames the focus area's centre, or the whole frame
+            var fallback = focus is null ? CameraMath.Centered() : new CameraKeyframe { Time = 0, X = Math.Round(focus.CenterX, 1), Y = Math.Round(focus.CenterY, 1), Zoom = 1, Source = "auto" };
+            var cuts = ToCuts(samples, s.Duration, fallback);
+            log.Report($"Camera: faces found in {found}/{samples.Count} frames{(focus is null ? "" : " inside the focus area")} -> {cuts.Count} camera cut(s) for \"{s.Title}\".");
+            return new Analysis { Duration = s.Duration, Cuts = cuts, Frames = samples.Select(x => (x.Time, x.Faces)).ToList(), Focus = focus };
         }
         finally
         {
@@ -81,7 +86,7 @@ public sealed class FaceFramer
         }
     }
 
-    private static async Task<Sample> DetectOneAsync(FaceDetector detector, BitmapPixelFormat format, string jpegPath, double t)
+    private static async Task<Sample> DetectOneAsync(FaceDetector detector, BitmapPixelFormat format, string jpegPath, double t, FocusArea? focus)
     {
         var bytes = await File.ReadAllBytesAsync(jpegPath);
         using var ms = new InMemoryRandomAccessStream();
@@ -92,12 +97,15 @@ public sealed class FaceFramer
         using var converted = SoftwareBitmap.Convert(bmp, format);
         var faces = await detector.DetectFacesAsync(converted);
         int w = bmp.PixelWidth, h = bmp.PixelHeight;
-        var all = faces.Select(f => new Face((f.FaceBox.X + f.FaceBox.Width / 2.0) / w * 100, (f.FaceBox.Y + f.FaceBox.Height / 2.0) / h * 100, f.FaceBox.Height / (double)h * 100)).ToList();
-        if (faces.Count == 0) return new Sample(t, 50, 50, 1, false, all);
+        // only faces whose centre lies inside the focus area count; a face on a screen in the background is left out
+        var boxes = faces.Select(f => f.FaceBox)
+            .Where(b => focus is null || focus.Contains((b.X + b.Width / 2.0) / w * 100, (b.Y + b.Height / 2.0) / h * 100)).ToList();
+        var all = boxes.Select(b => new Face((b.X + b.Width / 2.0) / w * 100, (b.Y + b.Height / 2.0) / h * 100, b.Height / (double)h * 100)).ToList();
+        if (boxes.Count == 0) return new Sample(t, focus?.CenterX ?? 50, focus?.CenterY ?? 50, 1, false, all);
 
         // Largest face is the active speaker most of the time. If two faces of similar size fit inside one
         // 9:16 window, frame both; otherwise follow the largest.
-        var ordered = faces.Select(f => f.FaceBox).OrderByDescending(b => b.Width * b.Height).ToList();
+        var ordered = boxes.OrderByDescending(b => b.Width * b.Height).ToList();
         var main = ordered[0];
         double cx = main.X + main.Width / 2.0, cy = main.Y + main.Height / 2.0, faceH = main.Height;
         if (ordered.Count > 1)
@@ -164,7 +172,7 @@ public sealed class FaceFramer
                 result.Add((new CameraKeyframe { Time = from, X = x, Y = Math.Round(y, 1), Zoom = 1.0, Source = "alt" }, "both"));
             }
         }
-        result.Add((new CameraKeyframe { Time = from, X = 50, Y = 50, Zoom = 1.0, Source = "alt" }, "wide shot"));
+        result.Add((new CameraKeyframe { Time = from, X = Math.Round(a.Focus?.CenterX ?? 50, 1), Y = Math.Round(a.Focus?.CenterY ?? 50, 1), Zoom = 1.0, Source = "alt" }, "wide shot"));
         return result;
     }
 
@@ -173,10 +181,10 @@ public sealed class FaceFramer
     /// (more than 12% of the width or a zoom change over 0.25) and stays there for at least 1.5 s; each cut uses
     /// the median of its samples. Frames without a face inherit the previous cut.
     /// </summary>
-    private static List<CameraKeyframe> ToCuts(List<Sample> samples, double duration)
+    private static List<CameraKeyframe> ToCuts(List<Sample> samples, double duration, CameraKeyframe fallback)
     {
         var detected = samples.Where(s => s.Found).ToList();
-        if (detected.Count == 0) return new List<CameraKeyframe> { CameraMath.Centered() };
+        if (detected.Count == 0) return new List<CameraKeyframe> { fallback };
 
         // fill gaps: carry the last detection forward (and the first one backward)
         var filled = new List<Sample>(samples.Count);
