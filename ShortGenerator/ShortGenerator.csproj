@@ -36,4 +36,12 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- WinForms raises UI Automation events (focus, structure, property changes) to any listening client, through
+         COM calls on the UI thread; when one lands inside an input-synchronous message COM raises
+         RPC_E_CANTCALLOUT_ININPUTSYNCCALL, which a debugger shows as "External component has thrown an exception".
+         Visual Studio and several Windows tools are such clients. The app does not need to push events to them. -->
+    <RuntimeHostConfigurationOption Include="Switch.System.Windows.Forms.AccessibleObject.NoClientNotifications" Value="true" />
+  </ItemGroup>
+
 </Project>

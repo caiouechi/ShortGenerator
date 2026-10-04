@@ -19,6 +19,7 @@ public static class NativeFaultLog
     [DllImport("kernel32.dll")] private static extern IntPtr AddVectoredExceptionHandler(uint first, VectoredHandler handler);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern bool GetModuleHandleExW(uint flags, IntPtr address, out IntPtr module);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern uint GetModuleFileNameW(IntPtr module, StringBuilder name, uint size);
+    [DllImport("kernel32.dll")] private static extern void GetCurrentThreadStackLimits(out UIntPtr lowLimit, out UIntPtr highLimit);
 
     private const uint FromAddress = 0x4, UnchangedRefCount = 0x2;
 
@@ -58,12 +59,15 @@ public static class NativeFaultLog
             var context = Marshal.ReadIntPtr(pointers, IntPtr.Size);
             if (context == IntPtr.Zero || IntPtr.Size != 8) return "?";
             long rsp = Marshal.ReadInt64(context, 0x98); // CONTEXT.Rsp on x64
+            // only within this thread's stack: reading past its top is an access violation, which would end the process
+            GetCurrentThreadStackLimits(out var low, out var high);
+            if (rsp < (long)low || rsp >= (long)high) return "?";
             var parts = new List<string>();
             for (int i = 0; i < 4096; i++)
             {
-                IntPtr slot = new(rsp + i * 8);
-                IntPtr value;
-                try { value = Marshal.ReadIntPtr(slot); } catch { break; }
+                long slot = rsp + i * 8;
+                if (slot + 8 > (long)high) break;
+                IntPtr value = Marshal.ReadIntPtr(new IntPtr(slot));
                 if (value == IntPtr.Zero || !GetModuleHandleExW(FromAddress | UnchangedRefCount, value, out var h)) continue;
                 var sb = new StringBuilder(260);
                 GetModuleFileNameW(h, sb, 260);
@@ -76,8 +80,12 @@ public static class NativeFaultLog
         catch { return "?"; }
     }
 
+    [ThreadStatic] private static bool t_inHandler;
+
     private static int Handler(IntPtr pointers)
     {
+        if (t_inHandler) return 0; // an exception raised while logging one (walking a stack can) is not logged again
+        t_inHandler = true;
         try
         {
             var record = Marshal.ReadIntPtr(pointers);
@@ -105,6 +113,7 @@ public static class NativeFaultLog
             AppLog.Write($"NATIVE exception 0x{code:X8} at 0x{address.ToInt64():X} in {Path.GetFileName(name.ToString())} (thread {Environment.CurrentManagedThreadId}). Stack: {ModuleStack(pointers)}{Environment.NewLine}{Environment.StackTrace}");
         }
         catch { }
+        finally { t_inHandler = false; }
         return 0; // EXCEPTION_CONTINUE_SEARCH: never changes what happens
     }
 }

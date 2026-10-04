@@ -8,6 +8,8 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
+        // no UI Automation event push to accessibility clients (see the csproj): set before any WinForms code runs
+        AppContext.SetSwitch("Switch.System.Windows.Forms.AccessibleObject.NoClientNotifications", true);
         ApplicationConfiguration.Initialize();
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         AppLog.Prune();
