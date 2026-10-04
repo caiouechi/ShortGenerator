@@ -72,13 +72,24 @@ public sealed class VideoClipDialog : Form
     private int _playIndex;
 
     /// <param name="shortFrame">A frame of the short where the clip appears, to place the window on (null = no short preview).</param>
+    private readonly bool _sync;
+    private readonly double _rangeStart, _rangeEnd;
+    /// <summary>The part of the source the slider covers: the short's own range for a split, the whole file otherwise.</summary>
+    private double RangeStart => _sync ? _rangeStart : 0;
+    private double RangeEnd => _sync ? Math.Min(_rangeEnd, _duration > 0 ? _duration : _rangeEnd) : _duration;
+    private double Span => Math.Max(0.1, RangeEnd - RangeStart);
+
+    /// <param name="syncRange">A split: the clip is the main video itself (<paramref name="path"/>), locked to the short's time;
+    /// the slider covers only the short's range (start, end in the source) and the clip's start and end are not asked.</param>
     public VideoClipDialog(FfmpegRunner ffmpeg, string path, double sourceStart, double length, bool fullFrame, double cropX, double cropY, double zoom,
-        double maxLength, double aspect = 9.0 / 16, Func<CancellationToken, Task<Bitmap?>>? shortFrame = null, double x = 50, double y = 22, double size = 32)
+        double maxLength, double aspect = 9.0 / 16, Func<CancellationToken, Task<Bitmap?>>? shortFrame = null, double x = 50, double y = 22, double size = 32,
+        (double Start, double End)? syncRange = null)
     {
         _ffmpeg = ffmpeg; _path = path; _shortFrame = shortFrame;
+        if (syncRange is { } sr) { _sync = true; _rangeStart = sr.Start; _rangeEnd = sr.End; }
         X = x; Y = y; WindowWidth = size;
         SourceStart = sourceStart; Length = length; FullFrame = fullFrame; CropX = cropX; CropY = cropY; Zoom = zoom; Aspect = aspect;
-        Text = "Video clip: " + Path.GetFileNameWithoutExtension(path);
+        Text = _sync ? "Split: another part of this video" : "Video clip: " + Path.GetFileNameWithoutExtension(path);
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
         MinimizeBox = false; ShowInTaskbar = false;
@@ -91,7 +102,9 @@ public sealed class VideoClipDialog : Form
         var head = new Label
         {
             Dock = DockStyle.Top, Height = 54, Padding = new Padding(16, 10, 16, 0), ForeColor = Theme.TextSecondary,
-            Text = "Move the slider to the moment you want (arrow keys step 0.1 s, Shift+arrow 1 s), then click \"Start here\" and \"End here\". Drag the box to frame it and scroll to zoom. The short keeps its own sound and its captions on top.",
+            Text = _sync
+                ? "Frame the part of this video to show (the screen behind them, say): drag the box, scroll to zoom. It plays in sync with the short; move the slider to check it at other moments. Then place it on the short on the right."
+                : "Move the slider to the moment you want (arrow keys step 0.1 s, Shift+arrow 1 s), then click \"Start here\" and \"End here\". Drag the box to frame it and scroll to zoom. The short keeps its own sound and its captions on top.",
         };
 
         // scrub row: step buttons, slider, time
@@ -111,11 +124,14 @@ public sealed class VideoClipDialog : Form
         var startHere = new FancyButton { Text = "Start here", Width = 120, Glyph = "" };
         var endHere = new FancyButton { Text = "End here", Width = 110, Glyph = "" };
         Label L(string t) => new() { Text = t, AutoSize = true, Margin = new Padding(14, 9, 4, 0), ForeColor = Theme.TextSecondary };
+        var startLabel = L("Start (s)"); var endLabel = L("End (s)");
         bar.Controls.Add(startHere);
-        bar.Controls.Add(L("Start (s)")); bar.Controls.Add(_start);
+        bar.Controls.Add(startLabel); bar.Controls.Add(_start);
         bar.Controls.Add(endHere);
-        bar.Controls.Add(L("End (s)")); bar.Controls.Add(_end);
+        bar.Controls.Add(endLabel); bar.Controls.Add(_end);
         bar.Controls.Add(_play);
+        // a split has no clip of its own to mark or preview: it is the short's own time
+        foreach (var c in new Control[] { startHere, startLabel, _start, endHere, endLabel, _end, _play }) c.Visible = !_sync;
         bar.Controls.Add(new Label { Text = "Show it as", AutoSize = true, Margin = new Padding(18, 9, 6, 0), ForeColor = Theme.TextSecondary });
         foreach (var b in new[] { _modeBanner, _modeWindow, _modeFull })
         {
@@ -124,10 +140,11 @@ public sealed class VideoClipDialog : Form
             bar.Controls.Add(b);
         }
         _info.Margin = new Padding(14, 9, 0, 0);
+        _info.Visible = !_sync;
         bar.Controls.Add(_info);
         foreach (var b in new[] { startHere, endHere, _play }) b.Margin = new Padding(0, 2, 6, 2);
 
-        var ok = new FancyButton { Text = "Use this clip", Width = 140, Height = 38 };
+        var ok = new FancyButton { Text = _sync ? "Use this split" : "Use this clip", Width = 140, Height = 38 };
         var cancel = new FancyButton { Text = "Cancel", Width = 100, Height = 38 };
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(14, 6, 14, 12), BackColor = Theme.SurfaceStrong };
         buttons.Controls.Add(ok); buttons.Controls.Add(cancel);
@@ -161,7 +178,7 @@ public sealed class VideoClipDialog : Form
         _mode = fullFrame ? "full" : wide && size >= 95 ? "banner" : "window";
         if (!fullFrame && !wide && aspect > 0) _windowAspect = aspect;
 
-        _slider.Scroll += (_, _) => { StopPlay(load: false); _now = _slider.Value / 1000.0 * _duration; ShowTime(); _scrubTimer.Stop(); _scrubTimer.Start(); };
+        _slider.Scroll += (_, _) => { StopPlay(load: false); _now = RangeStart + _slider.Value / 1000.0 * Span; ShowTime(); _scrubTimer.Stop(); _scrubTimer.Start(); };
         _scrubTimer.Tick += async (_, _) => { _scrubTimer.Stop(); await LoadFrameAsync(_now); };
         startHere.Click += (_, _) => { StopPlay(); _start.Value = Clamp(_now); if (_end.Value <= _start.Value) _end.Value = Clamp(_now + Math.Min(5, maxLength)); ShowInfo(); };
         endHere.Click += (_, _) => { StopPlay(); _end.Value = Clamp(Math.Max(_now, (double)_start.Value + 0.5)); ShowInfo(); };
@@ -179,9 +196,13 @@ public sealed class VideoClipDialog : Form
         SetMode(_mode, place: false);
         ok.Click += (_, _) =>
         {
-            double a = (double)_start.Value, b = (double)_end.Value;
-            if (b - a < 0.5) { AppDialog.Alert(this, "Pick the clip", "Mark where the clip starts and ends: it has to last at least half a second.", AppDialog.Kind.Warning); return; }
-            SourceStart = a; Length = Math.Min(b - a, maxLength); FullFrame = IsFull;
+            if (!_sync)
+            {
+                double a = (double)_start.Value, b = (double)_end.Value;
+                if (b - a < 0.5) { AppDialog.Alert(this, "Pick the clip", "Mark where the clip starts and ends: it has to last at least half a second.", AppDialog.Kind.Warning); return; }
+                SourceStart = a; Length = Math.Min(b - a, maxLength);
+            }
+            FullFrame = IsFull;
             Aspect = BoxAspect;
             DialogResult = DialogResult.OK; Close();
         };
@@ -236,7 +257,7 @@ public sealed class VideoClipDialog : Form
     }
 
     private static string Fmt(double t) { var ts = TimeSpan.FromSeconds(Math.Max(0, t)); return ts.TotalHours >= 1 ? ts.ToString(@"h\:mm\:ss\.f") : ts.ToString(@"mm\:ss\.f"); }
-    private void ShowTime() => _time.Text = $"{Fmt(_now)} / {Fmt(_duration)}";
+    private void ShowTime() => _time.Text = $"{Fmt(_now - RangeStart)} / {Fmt(Span)}";
 
     private async Task InitAsync()
     {
@@ -261,8 +282,8 @@ public sealed class VideoClipDialog : Form
     private void SeekTo(double t)
     {
         StopPlay(load: false);
-        _now = Math.Clamp(t, 0, _duration > 0 ? _duration : Math.Max(0, t));
-        if (_duration > 0) _slider.Value = Math.Clamp((int)Math.Round(_now / _duration * 1000), 0, 1000);
+        _now = _duration > 0 ? Math.Clamp(t, RangeStart, RangeEnd) : Math.Max(RangeStart, t);
+        if (_duration > 0) _slider.Value = Math.Clamp((int)Math.Round((_now - RangeStart) / Span * 1000), 0, 1000);
         ShowTime();
         _scrubTimer.Stop(); _scrubTimer.Start();
     }
@@ -275,7 +296,7 @@ public sealed class VideoClipDialog : Form
         var file = Path.Combine(_work, $"f{Guid.NewGuid():N}.jpg");
         try
         {
-            if (_duration > 0) _slider.Value = Math.Clamp((int)Math.Round(t / _duration * 1000), 0, 1000);
+            if (_duration > 0) _slider.Value = Math.Clamp((int)Math.Round((t - RangeStart) / Span * 1000), 0, 1000);
             await _ffmpeg.RunAsync(new[] { "-y", "-ss", t.ToString("F3", CultureInfo.InvariantCulture), "-i", _path, "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "3", file }, null, null, 0, cts.Token);
             if (cts.IsCancellationRequested || IsDisposed || !File.Exists(file)) return;
             _view.SetFrame(Theme.ReadImage(file));

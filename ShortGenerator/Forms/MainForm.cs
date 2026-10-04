@@ -89,6 +89,8 @@ public sealed class MainForm : Form
     private const double DefaultLayerSeconds = 5;
     /// <summary>Adds a moment of another video (the goal being talked about) over the short.</summary>
     private readonly FancyButton _addVideoLayer = new() { Text = "Add video", Width = 120 };
+    /// <summary>Shows another part of the main video (the screen behind the speakers, say) at the top, in sync with the short.</summary>
+    private readonly FancyButton _addSplit = new() { Text = "Add split", Width = 110 };
     private readonly FancyButton _removeLayer = new() { Text = "Remove", Width = 96, Enabled = false, Glyph = "\uE74D" };
     private readonly NumericUpDown _layerFrom = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 64, Maximum = 100000 };
     private readonly NumericUpDown _layerTo = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 64, Maximum = 100000 };
@@ -411,7 +413,7 @@ public sealed class MainForm : Form
             (_clearCover, "reset"), (_copyCover, "copy-image"), (_copyCoverPrompt, "copy-prompt"), (_generateCover, "ai-magic"),
             (_keyframeDelete, "delete"), (_keyframeClear, "clear"), (_removeLayer, "delete"),
             (_addLayer, "choose-image"), (_pasteLayer, "copy-image"), (_segDelete, "delete"), (_retranslate, "ai-magic"),
-            (_segPlay, "render"), (_renderClear, "clear"), (_addVideoLayer, "use-frame"),
+            (_segPlay, "render"), (_renderClear, "clear"), (_addVideoLayer, "use-frame"), (_addSplit, "camera-mode"),
         })
             b.Picture = Theme.Icon(icon);
         // icon + label must fit (never a truncated label); measured once every label is final
@@ -798,6 +800,7 @@ public sealed class MainForm : Form
         layerBar.Controls.Add(_addLayer);
         layerBar.Controls.Add(_pasteLayer);
         layerBar.Controls.Add(_addVideoLayer);
+        layerBar.Controls.Add(_addSplit);
         layerBar.Controls.Add(_removeLayer);
         _addLayer.Text = "Add"; _pasteLayer.Text = "Paste"; _addLayer.Width = 84; _pasteLayer.Width = 90; _removeLayer.Width = 100;
         foreach (Control c in new Control[] { layersHost, _layers })
@@ -810,7 +813,7 @@ public sealed class MainForm : Form
         layersHost.Controls.Add(props);
         layersHost.Controls.Add(layerBar);
         // AutoSize off + fixed height lets the hint wrap onto a second line instead of being cut off
-        layersHost.Controls.Add(new Label { Text = "Images and video clips. Add video shows a moment of another video (double-click its row to change it); on the video, drag a full-screen clip to frame it and scroll to zoom.", Dock = DockStyle.Top, Height = 40, AutoSize = false, ForeColor = Color.DimGray, UseMnemonic = false });
+        layersHost.Controls.Add(new Label { Text = "Images and clips. Add video: a moment of another video. Add split: another part of this video at the top, in sync. Double-click a clip's row to reframe it.", Dock = DockStyle.Top, Height = 40, AutoSize = false, ForeColor = Color.DimGray, UseMnemonic = false });
 
         // render queue under the images
         _renders.Columns.Add("Short", 200);
@@ -1074,6 +1077,7 @@ public sealed class MainForm : Form
         _player.LayerChanged += (id, x, y, size, rot) => BeginInvoke(() => OnLayerMovedOnVideo(id, x, y, size, rot));
         _addLayer.Click += async (_, _) => await PickAndAddLayerAsync(CurrentClipTime());
         _addVideoLayer.Click += async (_, _) => await AddVideoLayerAsync(CurrentClipTime());
+        _addSplit.Click += async (_, _) => await AddSplitAsync();
         _layers.DoubleClick += async (_, _) => { if (SelectedLayer is { IsVideo: true } v) await EditVideoLayerAsync(v); };
         _player.VideoLayerChanged += (id, cx, cy, zoom, x, y, size) => BeginInvoke(() =>
         {
@@ -2183,7 +2187,7 @@ public sealed class MainForm : Form
             foreach (var o in _editing.Overlays.OrderBy(o => o.Start))
             {
                 var item = new ListViewItem(new[] { $"{o.Start:F1}s", $"{o.End:F1}s",
-                    o.IsVideo ? $"🎬 {Path.GetFileNameWithoutExtension(o.Path)} from {Fmt(o.SourceStart)}" : Path.GetFileName(o.Path),
+                    o.IsVideo ? (o.Sync ? "⧉ Split: another part of this video, in sync" : $"🎬 {Path.GetFileNameWithoutExtension(o.Path)} from {Fmt(o.SourceStart)}") : Path.GetFileName(o.Path),
                     o.IsVideo ? (o.FullFrame ? "Full screen" : "Inset " + (ImageOverlay.InsetShapes.FirstOrDefault(x => Math.Abs(x.Aspect - o.Aspect) < 0.01).Name ?? "")) : ImageOverlay.StyleName(o.Style) }) { Tag = o };
                 if (!File.Exists(o.Path)) item.ForeColor = Theme.Danger;
                 if (o.Id == selectId) item.Selected = true;
@@ -2336,6 +2340,35 @@ public sealed class MainForm : Form
         };
     }
 
+    /// <summary>
+    /// Adds a split: another part of the main video (the screen behind the speakers, say), framed in the clip dialog
+    /// and shown at the top of the short as a wide banner, in sync with the short, for the whole short. From / To in
+    /// the table limit it; the window can be moved, resized and reframed like any clip.
+    /// </summary>
+    private async Task AddSplitAsync()
+    {
+        if (_editing is null || _video is null) return;
+        await _player.PauseAsync();
+        var s = _editing;
+        double at = Math.Min(CurrentClipTime(), Math.Max(0, s.Duration - 0.5));
+        double bannerY = 100 * (9.0 / 16) / (16.0 / 9) / 2; // a full-width 16:9 banner touching the top
+        using var dlg = new VideoClipDialog(_ffmpeg, _video.FilePath, s.StartSeconds + at, s.Duration, false, 50, 50, 1, maxLength: s.Duration,
+            aspect: 16.0 / 9, shortFrame: ShortFrameProvider(s, at), x: 50, y: bannerY, size: 100, syncRange: (s.StartSeconds, s.EndSeconds));
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        var o = new ImageOverlay
+        {
+            Kind = "video", Sync = true, Path = _video.FilePath, Start = 0, End = Math.Round(s.Duration, 2), SourceStart = Math.Round(s.StartSeconds, 2),
+            FullFrame = dlg.FullFrame, CropX = dlg.CropX, CropY = dlg.CropY, Zoom = dlg.Zoom, Aspect = dlg.Aspect,
+            X = dlg.X, Y = dlg.Y, Size = dlg.WindowWidth, Style = dlg.Plain ? "plain" : "card", Animation = "none",
+        };
+        s.Overlays.Add(o);
+        SaveProject();
+        RefreshLayerList(o.Id);
+        await PushLayersAsync();
+        await _player.SeekAsync(s.StartSeconds + at);
+        _status.Text = "Split added for the whole short: the framed part plays at the top, in sync. Change From / To to limit it; double-click its row to reframe it.";
+    }
+
     /// <summary>Opens the clip dialog again on an existing clip: another moment, length or framing.</summary>
     private async Task EditVideoLayerAsync(ImageOverlay o)
     {
@@ -2344,10 +2377,14 @@ public sealed class MainForm : Form
         var s = _editing;
         double room = Math.Max(0.5, s.Duration - o.Start);
         using var dlg = new VideoClipDialog(_ffmpeg, o.Path, o.SourceStart, o.End - o.Start, o.FullFrame, o.CropX, o.CropY, o.Zoom, maxLength: room,
-            aspect: o.Aspect, shortFrame: ShortFrameProvider(s, o.Start), x: o.X, y: o.Y, size: o.Size);
+            aspect: o.Aspect, shortFrame: ShortFrameProvider(s, o.Start), x: o.X, y: o.Y, size: o.Size,
+            syncRange: o.Sync ? (s.StartSeconds, s.EndSeconds) : null);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        o.SourceStart = Math.Round(dlg.SourceStart, 2);
-        o.End = Math.Round(Math.Min(s.Duration, o.Start + dlg.Length), 2);
+        if (!o.Sync)
+        {
+            o.SourceStart = Math.Round(dlg.SourceStart, 2);
+            o.End = Math.Round(Math.Min(s.Duration, o.Start + dlg.Length), 2);
+        }
         o.FullFrame = dlg.FullFrame; o.CropX = dlg.CropX; o.CropY = dlg.CropY; o.Zoom = dlg.Zoom; o.Aspect = dlg.Aspect;
         o.X = dlg.X; o.Y = dlg.Y; o.Size = dlg.WindowWidth; o.Style = dlg.Plain ? "plain" : "card";
         SaveProject();
@@ -2417,7 +2454,8 @@ public sealed class MainForm : Form
         o.Size = (double)_layerSize.Value;
         if (o.IsVideo)
         {
-            // a clip keeps its own look; only its window and (inset) size change here
+            // a clip keeps its own look; only its window and (inset) size change here. A split follows the short's time.
+            if (o.Sync) o.SourceStart = Math.Round(_editing.StartSeconds + o.Start, 2);
             SaveProject();
             RefreshLayerList(o.Id);
             await PushLayersAsync();

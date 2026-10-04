@@ -28,6 +28,9 @@ public sealed class ImageOverlay
     [JsonPropertyName("kind")] public string Kind { get; set; } = "image";
     /// <summary>Video: where the clip starts in its source file (seconds); it plays for End - Start.</summary>
     [JsonPropertyName("srcStart")] public double SourceStart { get; set; }
+    /// <summary>Video: a split, i.e. another part of the main video itself, locked to the short's time
+    /// (SourceStart = the short's start + Start, kept in step when Start changes).</summary>
+    [JsonPropertyName("sync")] public bool Sync { get; set; }
     /// <summary>Video: true = covers the whole 9:16 frame (cropped from the source), false = an inset window placed like an image.</summary>
     [JsonPropertyName("full")] public bool FullFrame { get; set; } = true;
     /// <summary>Video: centre of the crop in percent of the source frame, and its zoom (1 = the largest crop that fits).</summary>
