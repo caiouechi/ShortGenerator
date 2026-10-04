@@ -26,10 +26,25 @@ public static class NativeFaultLog
     {
         bool on = System.Diagnostics.Debugger.IsAttached || Environment.GetEnvironmentVariable("SHORTGEN_NATIVE_LOG") == "1";
         AppLog.Write($"Debugger attached: {System.Diagnostics.Debugger.IsAttached}." + (on ? " Native fault logging is on." : ""));
+        // Under a debugger WinForms checks cross-thread calls and lets exceptions inside window messages escape
+        // through user32 (they surface as SEHException 0xC000041D). SHORTGEN_STRICT=1 turns the same checks on
+        // without a debugger, so the bug can be reproduced; first-chance managed exceptions are then logged too.
+        bool strict = Environment.GetEnvironmentVariable("SHORTGEN_STRICT") == "1";
+        if (strict) System.Windows.Forms.Control.CheckForIllegalCrossThreadCalls = true;
+        if (on || strict)
+            AppDomain.CurrentDomain.FirstChanceException += (_, e) =>
+            {
+                var ex = e.Exception;
+                if (ex is OperationCanceledException || ex is System.IO.IOException) return; // expected and handled
+                if (Interlocked.Increment(ref _managed) > 60) return;
+                AppLog.Write($"FIRST-CHANCE {ex.GetType().FullName}: {ex.Message}{Environment.NewLine}{Environment.StackTrace}");
+            };
         if (!on) return;
         _handler = Handler;
         AddVectoredExceptionHandler(0, _handler);
     }
+
+    private static int _managed;
 
     private static int Handler(IntPtr pointers)
     {
