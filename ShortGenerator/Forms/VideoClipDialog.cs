@@ -29,6 +29,16 @@ public sealed class VideoClipDialog : Form
     public double Zoom { get; private set; } = 1;
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public double Aspect { get; private set; } = 9.0 / 16;
+    /// <summary>Picture in picture: centre (percent of the short) and width (percent of the short's width) of the window.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public double X { get; private set; } = 50;
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public double Y { get; private set; } = 22;
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public double WindowWidth { get; private set; } = 32;
+
+    private readonly Func<CancellationToken, Task<Bitmap?>>? _shortFrame;
+    private readonly ShortView _short;
 
     private readonly FfmpegRunner _ffmpeg;
     private readonly string _path;
@@ -50,17 +60,19 @@ public sealed class VideoClipDialog : Form
     private List<Bitmap>? _playFrames;
     private int _playIndex;
 
+    /// <param name="shortFrame">A frame of the short where the clip appears, to place the window on (null = no short preview).</param>
     public VideoClipDialog(FfmpegRunner ffmpeg, string path, double sourceStart, double length, bool fullFrame, double cropX, double cropY, double zoom,
-        double maxLength, double aspect = 9.0 / 16)
+        double maxLength, double aspect = 9.0 / 16, Func<CancellationToken, Task<Bitmap?>>? shortFrame = null, double x = 50, double y = 22, double size = 32)
     {
-        _ffmpeg = ffmpeg; _path = path;
+        _ffmpeg = ffmpeg; _path = path; _shortFrame = shortFrame;
+        X = x; Y = y; WindowWidth = size;
         SourceStart = sourceStart; Length = length; FullFrame = fullFrame; CropX = cropX; CropY = cropY; Zoom = zoom; Aspect = aspect;
         Text = "Video clip: " + Path.GetFileNameWithoutExtension(path);
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
         MinimizeBox = false; ShowInTaskbar = false;
-        ClientSize = new Size(1100, 760);
-        MinimumSize = new Size(820, 560);
+        ClientSize = new System.Drawing.Size(1240, 780);
+        MinimumSize = new System.Drawing.Size(900, 580);
         BackColor = Theme.Bg;
         _now = sourceStart;
 
@@ -108,7 +120,20 @@ public sealed class VideoClipDialog : Form
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(14, 6, 14, 12), BackColor = Theme.SurfaceStrong };
         buttons.Controls.Add(ok); buttons.Controls.Add(cancel);
 
+        // right: the short at the moment the clip appears, with the clip on it (drag and scroll to place a window)
+        _short = new ShortView(this) { Dock = DockStyle.Fill, BackColor = Theme.Navy };
+        var shortHost = new Panel { Dock = DockStyle.Right, Width = 330, Padding = new Padding(10, 6, 10, 6), BackColor = Theme.SurfaceStrong };
+        var shortHint = new Label
+        {
+            Dock = DockStyle.Bottom, Height = 46, ForeColor = Theme.TextSecondary, TextAlign = ContentAlignment.TopCenter,
+            Text = "Drag the window to place it, scroll to resize it.",
+        };
+        shortHost.Controls.Add(_short);
+        shortHost.Controls.Add(shortHint);
+        shortHost.Controls.Add(new Label { Dock = DockStyle.Top, Height = 22, Text = "On the short", Font = Theme.HeadingFont(10f), ForeColor = Theme.Heading });
+        shortHost.Visible = shortFrame is not null;
         Controls.Add(_view);
+        Controls.Add(shortHost);
         Controls.Add(head);
         Controls.Add(scrub);
         Controls.Add(bar);
@@ -134,8 +159,8 @@ public sealed class VideoClipDialog : Form
         };
         _start.ValueChanged += (_, _) => ShowInfo();
         _end.ValueChanged += (_, _) => ShowInfo();
-        _full.CheckedChanged += (_, _) => { _shape.Enabled = _inset.Checked; _view.Invalidate(); };
-        _shape.SelectedIndexChanged += (_, _) => _view.Invalidate();
+        _full.CheckedChanged += (_, _) => { _shape.Enabled = _inset.Checked; _view.Invalidate(); _short.Invalidate(); };
+        _shape.SelectedIndexChanged += (_, _) => { _view.Invalidate(); _short.Invalidate(); };
         ok.Click += (_, _) =>
         {
             double a = (double)_start.Value, b = (double)_end.Value;
@@ -180,9 +205,14 @@ public sealed class VideoClipDialog : Form
             var (w, h, d) = await _ffmpeg.ProbeAsync(_path, CancellationToken.None);
             if (IsDisposed) return;
             _duration = d;
-            _view.SourceSize = new Size(w, h);
+            _view.SourceSize = new System.Drawing.Size(w, h);
             ShowTime();
             await LoadFrameAsync(_now);
+            if (_shortFrame is not null)
+            {
+                var bmp = await _shortFrame(CancellationToken.None);
+                if (!IsDisposed && bmp is not null) _short.SetBackground(bmp);
+            }
         }
         catch (Exception ex) { AppLog.Error("clip dialog", ex); }
     }
@@ -284,6 +314,11 @@ public sealed class VideoClipDialog : Form
             Invalidate();
         }
 
+        /// <summary>The source frame on screen (the short view draws the clip from it).</summary>
+        public Bitmap? Frame => _frame;
+
+        protected override void OnInvalidated(InvalidateEventArgs e) { base.OnInvalidated(e); _d._short?.Invalidate(); }
+
         public void ReleaseIfShown(List<Bitmap> frames) { if (_frame is not null && frames.Contains(_frame)) { _frame = null; _frameOwned = true; Invalidate(); } }
 
         protected override void Dispose(bool disposing)
@@ -378,5 +413,122 @@ public sealed class VideoClipDialog : Form
         }
 
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); Focus(); } // so the wheel reaches it
+    }
+
+    // ------------------------------------------------------------------ the short, with the clip on it
+
+    /// <summary>
+    /// A 9:16 frame of the short with the clip drawn as the render will: covering it (full screen) or as a window
+    /// with a white border (picture in picture) that is dragged to place it and scrolled to shrink or grow it.
+    /// </summary>
+    private sealed class ShortView : Control
+    {
+        private readonly VideoClipDialog _d;
+        private Bitmap? _bg;
+        private bool _dragging;
+        private Point _from;
+        private double _x0, _y0;
+
+        public ShortView(VideoClipDialog d)
+        {
+            _d = d;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+        }
+
+        public void SetBackground(Bitmap bmp) { var old = _bg; _bg = bmp; old?.Dispose(); Invalidate(); }
+
+        protected override void Dispose(bool disposing) { if (disposing) _bg?.Dispose(); base.Dispose(disposing); }
+
+        /// <summary>The 9:16 canvas inside the control.</summary>
+        private RectangleF Canvas()
+        {
+            float h = Height, w = h * 9f / 16f;
+            if (w > Width) { w = Width; h = w * 16f / 9f; }
+            return new RectangleF((Width - w) / 2, (Height - h) / 2, w, h);
+        }
+
+        /// <summary>The clip's window on the canvas (picture in picture): width = Size % of the short, height from the shape.</summary>
+        private RectangleF Window(RectangleF c, double aspect)
+        {
+            float w = (float)(_d.WindowWidth / 100 * c.Width), h = (float)(w / aspect);
+            float cx = c.X + (float)(_d.X / 100 * c.Width), cy = c.Y + (float)(_d.Y / 100 * c.Height);
+            return new RectangleF(cx - w / 2, cy - h / 2, w, h);
+        }
+
+        private double ClipAspect()
+        {
+            var f = _d._view.Frame;
+            double src = f is null ? 16.0 / 9 : (double)f.Width / f.Height;
+            return _d.BoxAspect > 0 ? _d.BoxAspect : src;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(BackColor);
+            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            var c = Canvas();
+            if (_bg is not null) g.DrawImage(_bg, c);
+            else
+            {
+                using var dark = new SolidBrush(Color.FromArgb(25, 31, 64));
+                g.FillRectangle(dark, c);
+                using var lf = Theme.Body(9f);
+                TextRenderer.DrawText(g, "Loading the short...", lf, Rectangle.Round(c), Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+            var frame = _d._view.Frame;
+            if (frame is null) return;
+            // the clip's crop in the frame's own pixels (same rule as the render)
+            var o = new ImageOverlay { CropX = _d.CropX, CropY = _d.CropY, Zoom = _d.Zoom };
+            if (_d._full.Checked)
+            {
+                var r = o.CropRect(frame.Width, frame.Height, 9.0 / 16);
+                g.DrawImage(frame, c, new RectangleF(r.X, r.Y, r.W, r.H), GraphicsUnit.Pixel);
+                return;
+            }
+            double a = ClipAspect();
+            var cr = o.CropRect(frame.Width, frame.Height, a);
+            var win = Window(c, a);
+            float border = Math.Max(2, win.Width * 0.012f);
+            using (var white = new SolidBrush(Color.White)) g.FillRectangle(white, win);
+            var inner = RectangleF.Inflate(win, -border, -border);
+            var state = g.Save();
+            g.SetClip(c);
+            g.DrawImage(frame, inner, new RectangleF(cr.X, cr.Y, cr.W, cr.H), GraphicsUnit.Pixel);
+            using (var sel = new Pen(Theme.Nebula, 2) { DashStyle = DashStyle.Dash }) g.DrawRectangle(sel, win.X - 3, win.Y - 3, win.Width + 6, win.Height + 6);
+            g.Restore(state);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            Focus();
+            if (e.Button != MouseButtons.Left || _d._full.Checked) return;
+            _dragging = true; _from = e.Location; _x0 = _d.X; _y0 = _d.Y;
+            Capture = true;
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            Cursor = _d._full.Checked ? Cursors.Default : Cursors.SizeAll;
+            if (!_dragging) return;
+            var c = Canvas();
+            _d.X = Math.Clamp(_x0 + (e.X - _from.X) / c.Width * 100, 0, 100);
+            _d.Y = Math.Clamp(_y0 + (e.Y - _from.Y) / c.Height * 100, 0, 100);
+            Invalidate();
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); _dragging = false; Capture = false; }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            if (_d._full.Checked) return;
+            _d.WindowWidth = Math.Clamp(_d.WindowWidth + (e.Delta > 0 ? 2 : -2), 10, 100);
+            Invalidate();
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); Focus(); }
     }
 }

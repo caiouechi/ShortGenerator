@@ -1218,6 +1218,9 @@ public sealed class MainForm : Form
         _segPlay.Click += async (_, _) => { if (_editSegments.CurrentRow is not null) await PlayFromRowAsync(_editSegments.CurrentRow.Index); };
         _segDelete.Click += (_, _) => DeleteSegmentRow();
         Shown += (_, _) => RefreshLibrary();
+        // every modal window (dialogs, file pickers, confirmations) parks the editor's browser player until it closes
+        Application.EnterThreadModal += (_, _) => _player.Park(true);
+        Application.LeaveThreadModal += (_, _) => _player.Park(false);
         // posts scheduled before the app closed come back (and missed ones are offered)
         Shown += async (_, _) => { try { await _publishPanel.RestoreScheduledAsync(); } catch (Exception ex) { Log("Could not restore scheduled posts: " + ex.Message); } };
         FormClosing += (_, e) =>
@@ -2289,7 +2292,9 @@ public sealed class MainForm : Form
         if (pick.ShowDialog(this) != DialogResult.OK) return;
         var s = _editing;
         double room = Math.Max(0.5, s.Duration - Math.Min(start, s.Duration - 0.5));
-        using var dlg = new VideoClipDialog(_ffmpeg, pick.FileName, 0, Math.Min(5, room), true, 50, 50, 1, maxLength: room);
+        // new clips start as a small vertical window near the top of the short; full screen is one click away
+        using var dlg = new VideoClipDialog(_ffmpeg, pick.FileName, 0, Math.Min(5, room), false, 50, 50, 1, maxLength: room,
+            aspect: 9.0 / 16, shortFrame: ShortFrameProvider(s, Math.Min(start, Math.Max(0, s.Duration - 0.5))), x: 50, y: 22, size: 32);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         double a = Math.Min(start, Math.Max(0, s.Duration - dlg.Length));
         var o = new ImageOverlay
@@ -2297,8 +2302,7 @@ public sealed class MainForm : Form
             Kind = "video", Path = pick.FileName, SourceStart = Math.Round(dlg.SourceStart, 2),
             Start = Math.Round(a, 2), End = Math.Round(Math.Min(s.Duration, a + dlg.Length), 2),
             FullFrame = dlg.FullFrame, CropX = dlg.CropX, CropY = dlg.CropY, Zoom = dlg.Zoom, Aspect = dlg.Aspect,
-            // a vertical window starts narrower so it fits above the captions
-            X = 50, Y = 30, Size = dlg.Aspect is > 0 and < 1 ? 42 : 70, Style = "card", Animation = "none",
+            X = dlg.X, Y = dlg.Y, Size = dlg.WindowWidth, Style = "card", Animation = "none",
         };
         s.Overlays.Add(o);
         SaveProject();
@@ -2308,6 +2312,25 @@ public sealed class MainForm : Form
         _status.Text = $"Clip shown {Fmt(o.Start)} to {Fmt(o.End)}. " + (o.FullFrame ? "Drag it on the video to frame it, scroll to zoom." : "Drag it to place it, scroll to resize.") + " Double-click its row to pick another moment.";
     }
 
+    /// <summary>A frame of the short at <paramref name="t"/>, framed like the render, for the clip dialog's "On the short" view.</summary>
+    private Func<CancellationToken, Task<Bitmap?>>? ShortFrameProvider(ShortSuggestion s, double t)
+    {
+        if (_video is null) return null;
+        var video = _video;
+        var opts = ReadOptions();
+        return async ct =>
+        {
+            var tmp = Path.Combine(Path.GetTempPath(), $"shortgen_frame_{Guid.NewGuid():N}.jpg");
+            try
+            {
+                await _renderer.ExportShortFrameAsync(video, s, opts, t, tmp, 540, ct);
+                return File.Exists(tmp) ? Theme.ReadImage(tmp) : null;
+            }
+            catch (Exception ex) { AppLog.Error("short frame", ex); return null; }
+            finally { try { File.Delete(tmp); } catch { } }
+        };
+    }
+
     /// <summary>Opens the clip dialog again on an existing clip: another moment, length or framing.</summary>
     private async Task EditVideoLayerAsync(ImageOverlay o)
     {
@@ -2315,11 +2338,13 @@ public sealed class MainForm : Form
         await _player.PauseAsync();
         var s = _editing;
         double room = Math.Max(0.5, s.Duration - o.Start);
-        using var dlg = new VideoClipDialog(_ffmpeg, o.Path, o.SourceStart, o.End - o.Start, o.FullFrame, o.CropX, o.CropY, o.Zoom, maxLength: room, aspect: o.Aspect);
+        using var dlg = new VideoClipDialog(_ffmpeg, o.Path, o.SourceStart, o.End - o.Start, o.FullFrame, o.CropX, o.CropY, o.Zoom, maxLength: room,
+            aspect: o.Aspect, shortFrame: ShortFrameProvider(s, o.Start), x: o.X, y: o.Y, size: o.Size);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         o.SourceStart = Math.Round(dlg.SourceStart, 2);
         o.End = Math.Round(Math.Min(s.Duration, o.Start + dlg.Length), 2);
         o.FullFrame = dlg.FullFrame; o.CropX = dlg.CropX; o.CropY = dlg.CropY; o.Zoom = dlg.Zoom; o.Aspect = dlg.Aspect;
+        o.X = dlg.X; o.Y = dlg.Y; o.Size = dlg.WindowWidth;
         SaveProject();
         RefreshLayerList(o.Id);
         await PushLayersAsync();

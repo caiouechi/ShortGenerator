@@ -260,6 +260,37 @@ public sealed class ShortRenderer
         return Math.Clamp(coverTime ?? Math.Min(1.0, s.Duration / 2), 0, Math.Max(0, s.Duration - 0.05));
     }
 
+    /// <summary>
+    /// One frame of the short at <paramref name="t"/> (seconds into it), framed like the render (camera cut, crop mode,
+    /// look) and scaled to <paramref name="width"/>: what the viewer sees at that moment, without captions or layers.
+    /// The clip dialog shows it to place a small video window on the short.
+    /// </summary>
+    public async Task<string> ExportShortFrameAsync(VideoInfo video, ShortSuggestion s, GenerateOptions options, double t, string outPath, int width, CancellationToken ct)
+    {
+        t = Math.Clamp(t, 0, Math.Max(0, s.Duration - 0.05));
+        string vf;
+        if (options.CropMode == CropMode.VerticalCrop && video.Width > 0 && video.Height > 0)
+        {
+            var k = s.CameraAt(t) ?? CameraMath.Centered();
+            var r = CameraMath.CropRect(video.Width, video.Height, k);
+            vf = $"crop={r.W}:{r.H}:{r.X}:{r.Y},scale={width}:-2:flags=lanczos";
+        }
+        else if (options.CropMode == CropMode.VerticalBlurredBackground)
+        {
+            vf = "split=2[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:8[bgb];" +
+                 $"[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2,scale={width}:-2";
+        }
+        else vf = $"scale={width}:-2";
+        var look = VisualLook.Get(options.Look);
+        if (look.Filter.Length > 0) vf += "," + look.Filter;
+        await _ffmpeg.RunAsync(new[]
+        {
+            "-y", "-ss", (s.StartSeconds + t).ToString("F3", CultureInfo.InvariantCulture), "-i", video.FilePath,
+            "-filter_complex", "[0:v]" + vf + "[vout]", "-map", "[vout]", "-frames:v", "1", "-q:v", "3", outPath
+        }, null, null, 0, ct);
+        return outPath;
+    }
+
     public async Task<string?> ExportCoverAsync(VideoInfo video, ShortSuggestion s, GenerateOptions options, string videoOutPath, CancellationToken ct)
     {
         var coverPath = Path.ChangeExtension(videoOutPath, ".cover.jpg");

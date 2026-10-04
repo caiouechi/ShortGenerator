@@ -42,6 +42,23 @@ public sealed class ClipPlayer : UserControl
 
     public bool IsReady => _ready;
 
+    private int _parked;
+    /// <summary>
+    /// While a modal window is open the browser window is paused and hidden, so it gets no window messages: on the
+    /// user's machine WebView2 threw native exceptions from its window procedure while a modal dialog was open
+    /// (SEHException from DispatchMessage, 0xc000041d in EmbeddedBrowserWebView.dll). Nested modals are counted.
+    /// </summary>
+    public void Park(bool parked)
+    {
+        _parked = Math.Max(0, _parked + (parked ? 1 : -1));
+        bool hide = _parked > 0;
+        if (hide && _ready) _ = PauseAsync();
+        // always restored on the last close, also when a dialog opened before the player was ready;
+        // never when the player could not start (its message is shown instead)
+        if (_fallback.Visible || _web.Visible == !hide) return;
+        try { _web.Visible = !hide; } catch (Exception ex) { Services.AppLog.Error("player park", ex); }
+    }
+
     private static Task<CoreWebView2Environment>? _environment;
     /// <summary>
     /// One WebView2 environment for the whole app (the editor player and the clip dialog share it). Creating a second
