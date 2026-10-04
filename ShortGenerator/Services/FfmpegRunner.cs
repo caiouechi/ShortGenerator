@@ -32,8 +32,13 @@ public sealed class FfmpegRunner
             psi.ArgumentList.Add(a);
 
         using var p = Process.Start(psi)!;
-        var json = await p.StandardOutput.ReadToEndAsync(ct);
-        await p.WaitForExitAsync(ct);
+        string json;
+        using (ct.Register(() => Kill(p)))
+        {
+            json = await p.StandardOutput.ReadToEndAsync();
+            await p.WaitForExitAsync();
+        }
+        ct.ThrowIfCancellationRequested();
         try
         {
             using var doc = JsonDocument.Parse(json);
@@ -59,6 +64,12 @@ public sealed class FfmpegRunner
         => RunAsync(new[] { "-y", "-i", videoPath, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wavPath },
             null, progress, totalSeconds, ct);
 
+    /// <summary>Ends a cancelled ffmpeg / ffprobe and anything it started; already gone is fine.</summary>
+    private static void Kill(Process p)
+    {
+        try { if (!p.HasExited) p.Kill(); } catch { }
+    }
+
     /// <summary>Runs ffmpeg with the given arguments. Progress is derived from the "time=" field in stderr.</summary>
     public async Task RunAsync(IEnumerable<string> args, string? workingDirectory, IProgress<double>? progress, double totalSeconds, CancellationToken ct)
     {
@@ -75,6 +86,10 @@ public sealed class FfmpegRunner
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         using var p = Process.Start(psi)!;
+        // Cancelling never aborts a pipe read (an aborted read on a pool thread surfaced as an unhandled
+        // OperationCanceledException and ended the app): it stops ffmpeg, its pipes close, the reads end normally.
+        using var stop = ct.Register(() => Kill(p));
+        _ = p.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
         var stderr = new StringBuilder();
         var buffer = new char[4096];
         var line = new StringBuilder();
@@ -82,7 +97,7 @@ public sealed class FfmpegRunner
         // ffmpeg writes stats with '\r' separators, so read char by char instead of line by line.
         while (true)
         {
-            int read = await p.StandardError.ReadAsync(buffer, ct);
+            int read = await p.StandardError.ReadAsync(buffer, CancellationToken.None);
             if (read == 0) break;
             for (int i = 0; i < read; i++)
             {
@@ -111,7 +126,8 @@ public sealed class FfmpegRunner
         }
         if (line.Length > 0) stderr.AppendLine(line.ToString());
 
-        await p.WaitForExitAsync(ct);
+        await p.WaitForExitAsync();
+        ct.ThrowIfCancellationRequested();
         if (p.ExitCode != 0)
             throw new InvalidOperationException($"ffmpeg exited with code {p.ExitCode}:{Environment.NewLine}{stderr}");
         progress?.Report(1);

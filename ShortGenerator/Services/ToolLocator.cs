@@ -98,9 +98,13 @@ public sealed class ToolLocator
             RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true
         };
         using var p = Process.Start(psi)!;
-        var output = await p.StandardOutput.ReadToEndAsync(ct);
-        var err = await p.StandardError.ReadToEndAsync(ct);
-        await p.WaitForExitAsync(ct);
+        // cancelling stops yt-dlp; the pipe reads themselves are never aborted (see FfmpegRunner)
+        using var stop = ct.Register(() => { try { if (!p.HasExited) p.Kill(); } catch { } });
+        var errTask = p.StandardError.ReadToEndAsync();
+        var output = await p.StandardOutput.ReadToEndAsync();
+        var err = await errTask;
+        await p.WaitForExitAsync();
+        ct.ThrowIfCancellationRequested();
         return (output + Environment.NewLine + err).Trim();
     }
 }
