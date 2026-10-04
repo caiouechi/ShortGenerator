@@ -93,6 +93,7 @@ public sealed class MainForm : Form
     private readonly FancyButton _addVideoLayer = new() { Text = "Add video", Width = 120 };
     /// <summary>Shows another part of the main video (the screen behind the speakers, say) at the top, in sync with the short.</summary>
     private readonly FancyButton _addSplit = new() { Text = "Add split", Width = 110 };
+    private readonly FancyButton _autoSplit = new() { Text = "Auto split", Width = 112 };
     private readonly FancyButton _removeLayer = new() { Text = "Remove", Width = 96, Enabled = false, Glyph = "\uE74D" };
     private readonly NumericUpDown _layerFrom = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 64, Maximum = 100000 };
     private readonly NumericUpDown _layerTo = new() { DecimalPlaces = 1, Increment = 0.5M, Width = 64, Maximum = 100000 };
@@ -415,7 +416,7 @@ public sealed class MainForm : Form
             (_clearCover, "reset"), (_copyCover, "copy-image"), (_copyCoverPrompt, "copy-prompt"), (_generateCover, "ai-magic"),
             (_keyframeDelete, "delete"), (_keyframeClear, "clear"), (_removeLayer, "delete"),
             (_addLayer, "choose-image"), (_pasteLayer, "copy-image"), (_segDelete, "delete"), (_retranslate, "ai-magic"),
-            (_segPlay, "render"), (_renderClear, "clear"), (_addVideoLayer, "use-frame"), (_addSplit, "camera-mode"), (_focusArea, "auto-camera"),
+            (_segPlay, "render"), (_renderClear, "clear"), (_addVideoLayer, "use-frame"), (_addSplit, "camera-mode"), (_autoSplit, "auto-camera"), (_focusArea, "auto-camera"),
         })
             b.Picture = Theme.Icon(icon);
         // icon + label must fit (never a truncated label); measured once every label is final
@@ -806,6 +807,7 @@ public sealed class MainForm : Form
         layerBar.Controls.Add(_pasteLayer);
         layerBar.Controls.Add(_addVideoLayer);
         layerBar.Controls.Add(_addSplit);
+        layerBar.Controls.Add(_autoSplit);
         layerBar.Controls.Add(_removeLayer);
         _addLayer.Text = "Add"; _pasteLayer.Text = "Paste"; _addLayer.Width = 84; _pasteLayer.Width = 90; _removeLayer.Width = 100;
         foreach (Control c in new Control[] { layersHost, _layers })
@@ -1084,6 +1086,7 @@ public sealed class MainForm : Form
         _addLayer.Click += async (_, _) => await PickAndAddLayerAsync(CurrentClipTime());
         _addVideoLayer.Click += async (_, _) => await AddVideoLayerAsync(CurrentClipTime());
         _addSplit.Click += async (_, _) => await AddSplitAsync();
+        _autoSplit.Click += async (_, _) => await AutoSplitAsync();
         _layers.DoubleClick += async (_, _) => { if (SelectedLayer is { IsVideo: true } v) await EditVideoLayerAsync(v); };
         _player.VideoLayerChanged += (id, cx, cy, zoom, x, y, size) => BeginInvoke(() =>
         {
@@ -2374,6 +2377,58 @@ public sealed class MainForm : Form
         await PushLayersAsync();
         await _player.SeekAsync(s.StartSeconds + at);
         _status.Text = "Split added for the whole short: the framed part plays at the top, in sync. Change From / To to limit it; double-click its row to reframe it.";
+    }
+
+    /// <summary>
+    /// The split without the dialog: Claude (or, without an API key, the side away from the faces) says what the
+    /// video shows besides the speaker, that part plays in a wide window at the top for the whole short, and the
+    /// main picture follows the speaker with the auto camera.
+    /// </summary>
+    private async Task AutoSplitAsync()
+    {
+        if (_editing is null || _video is null) return;
+        await _player.PauseAsync();
+        var s = _editing;
+        var existing = s.Overlays.Where(o => o.IsVideo && o.Sync).ToList();
+        if (existing.Count > 0 && !AppDialog.Confirm(this, "Replace the split?", "This short already has a split. Auto split replaces it with the second subject it finds.", "Replace", "Keep mine")) return;
+        var apiKey = SettingsStore.GetApiKey(_settings);
+        SplitFinder.Result? found = null;
+        await RunBusyAsync("Finding the second subject", async ct =>
+        {
+            if (!_faces.TryGetValue(s, out var faces) && FaceFramer.IsSupported)
+            {
+                faces = await new FaceFramer(_ffmpeg).AnalyzeAsync(_video, s, ProgressReporter(), new Progress<string>(Log), ct);
+                _faces[s] = faces;
+            }
+            found = await new SplitFinder(_ffmpeg).FindAsync(_video, s, apiKey, _settings.ClaudeModel, faces, new Progress<string>(Log), ct);
+        });
+        if (found is null)
+        {
+            if (_lastBusyOutcome == "done")
+                _status.Text = apiKey is null
+                    ? "Auto split needs faces to go by without an API key, and none were found. Use Add split to frame the top part by hand, or set the Anthropic API key in Settings."
+                    : "No second subject found: these frames only show people talking. Use Add split to frame the top part by hand.";
+            return;
+        }
+        var (cropX, cropY, zoom) = SplitFinder.WindowFor(found.Box, _video.Width, _video.Height);
+        foreach (var old in existing) s.Overlays.Remove(old);
+        double bannerY = 100 * (9.0 / 16) / (16.0 / 9) / 2; // a full-width 16:9 banner touching the top
+        var o = new ImageOverlay
+        {
+            Kind = "video", Sync = true, Path = _video.FilePath, Start = 0, End = Math.Round(s.Duration, 2), SourceStart = Math.Round(s.StartSeconds, 2),
+            FullFrame = false, CropX = cropX, CropY = cropY, Zoom = zoom, Aspect = 16.0 / 9,
+            X = 50, Y = bannerY, Size = 100, Style = "plain", Animation = "none",
+        };
+        s.Overlays.Add(o);
+        SaveProject();
+        RefreshLayerList(o.Id);
+        await PushLayersAsync();
+        // the main picture: the speaker, unless the user placed the camera by hand
+        bool reframed = FaceFramer.IsSupported && !s.Camera.Any(k => k.Source is "manual" or "alt") && _cts is null;
+        if (reframed) await AutoCameraAsync(silent: true);
+        await _player.SeekAsync(s.StartSeconds + Math.Min(CurrentClipTime(), Math.Max(0, s.Duration - 0.5)));
+        _status.Text = $"Auto split: {found.Subject} plays at the top" + (reframed ? ", the camera follows the speaker below" : "; your camera cuts below were kept")
+            + ". Double-click the split row to reframe it, or drag the picture to move it.";
     }
 
     /// <summary>Opens the clip dialog again on an existing clip: another moment, length or framing.</summary>
