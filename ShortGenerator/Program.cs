@@ -13,6 +13,7 @@ internal static class Program
         AppLog.Prune();
         AppLog.Write("Short Generator started.");
         NativeFaultLog.InstallIfDebugging();
+        UiaGuard.Install();
         Application.ThreadException += (_, e) =>
         {
             // the details go to the log file; the dialog says where to find them

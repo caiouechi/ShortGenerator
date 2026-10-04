@@ -1,0 +1,92 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace ShortGenerator.Forms;
+
+/// <summary>
+/// Keeps UI Automation clients from stopping the app under a debugger. WinForms answers WM_GETOBJECT for UI
+/// Automation by calling UiaReturnRawElementProvider, which calls out over COM in the middle of an input-synchronous
+/// message; COM raises RPC_E_CANTCALLOUT_ININPUTSYNCCALL (0x8001010D) inside and recovers on its own, but with a
+/// debugger attached the raise surfaces as "External component has thrown an exception" (Visual Studio itself is a
+/// UI Automation client, and asks every window of the app when a dialog opens). This guard declines the UI Automation
+/// request on every window the app creates, so clients use the MSAA path instead, which has no such call-out.
+/// SHORTGEN_UIA=1 leaves UI Automation on.
+/// </summary>
+internal static class UiaGuard
+{
+    private const int WM_GETOBJECT = 0x003D, UiaRootObjectId = -25, WH_CBT = 5, HCBT_CREATEWND = 3;
+
+    private delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
+    private static HookProc? _hook; // kept alive for the process lifetime
+    private static IntPtr _hookHandle;
+    private static readonly ConditionalWeakTable<Control, Guard> _guarded = new();
+
+    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetWindowsHookExW(int id, HookProc proc, IntPtr module, uint threadId);
+    [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassNameW(IntPtr hwnd, System.Text.StringBuilder name, int max);
+    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hwnd);
+    [DllImport("comctl32.dll")] private static extern bool SetWindowSubclass(IntPtr hwnd, SubclassProc proc, UIntPtr id, UIntPtr refData);
+    [DllImport("comctl32.dll")] private static extern IntPtr DefSubclassProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+    private delegate IntPtr SubclassProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, UIntPtr id, UIntPtr refData);
+    private static readonly SubclassProc _browserProc = BrowserWndProc; // kept alive for the process lifetime
+
+    /// <summary>Guards every form the UI thread creates from now on, and their controls.</summary>
+    public static void Install()
+    {
+        if (Environment.GetEnvironmentVariable("SHORTGEN_UIA") == "1") return;
+        var sync = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        _hook = (code, wParam, lParam) =>
+        {
+            if (code == HCBT_CREATEWND)
+            {
+                var hwnd = wParam;
+                // the control is wired to its handle once CreateWindow returns: look it up on the next message
+                sync.Post(_ =>
+                {
+                    if (!IsWindow(hwnd)) return;
+                    if (Control.FromHandle(hwnd) is Form form) Protect(form);
+                    else if (ClassName(hwnd).StartsWith("Chrome_", StringComparison.Ordinal)) SetWindowSubclass(hwnd, _browserProc, UIntPtr.Zero, UIntPtr.Zero);
+                }, null);
+            }
+            return CallNextHookEx(_hookHandle, code, wParam, lParam);
+        };
+        _hookHandle = SetWindowsHookExW(WH_CBT, _hook, IntPtr.Zero, GetCurrentThreadId());
+    }
+
+    /// <summary>Guards a control, the controls inside it, and any added later.</summary>
+    public static void Protect(Control control)
+    {
+        if (_guarded.TryGetValue(control, out _)) return;
+        var guard = new Guard();
+        _guarded.Add(control, guard);
+        if (control.IsHandleCreated) guard.AssignHandle(control.Handle);
+        control.HandleCreated += (_, _) => guard.AssignHandle(control.Handle);
+        control.HandleDestroyed += (_, _) => guard.ReleaseHandle();
+        control.ControlAdded += (_, e) => Protect(e.Control);
+        foreach (Control child in control.Controls) Protect(child);
+    }
+
+    private static string ClassName(IntPtr hwnd)
+    {
+        var sb = new System.Text.StringBuilder(64);
+        return GetClassNameW(hwnd, sb, 64) > 0 ? sb.ToString() : "";
+    }
+
+    /// <summary>
+    /// The browser's own windows (WebView2 answers accessibility for them through the same cross-process bridge):
+    /// the player page has nothing for an accessibility client, so every WM_GETOBJECT is declined.
+    /// </summary>
+    private static IntPtr BrowserWndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, UIntPtr id, UIntPtr refData)
+        => msg == WM_GETOBJECT ? IntPtr.Zero : DefSubclassProc(hwnd, msg, wParam, lParam);
+
+    /// <summary>Sits in front of the control's own window procedure and declines the UI Automation root request.</summary>
+    private sealed class Guard : NativeWindow
+    {
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_GETOBJECT && unchecked((int)(long)m.LParam) == UiaRootObjectId) { m.Result = IntPtr.Zero; return; }
+            base.WndProc(ref m);
+        }
+    }
+}

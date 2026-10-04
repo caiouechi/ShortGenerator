@@ -46,6 +46,36 @@ public static class NativeFaultLog
 
     private static int _managed;
 
+    /// <summary>
+    /// The modules on the native stack at the time of the exception, innermost first, repeats collapsed: who raised,
+    /// and who called them. The stack is scanned from the faulting frame's stack pointer for return addresses that
+    /// fall inside a loaded module (a heuristic walk, which needs no symbols and cannot fail).
+    /// </summary>
+    private static string ModuleStack(IntPtr pointers)
+    {
+        try
+        {
+            var context = Marshal.ReadIntPtr(pointers, IntPtr.Size);
+            if (context == IntPtr.Zero || IntPtr.Size != 8) return "?";
+            long rsp = Marshal.ReadInt64(context, 0x98); // CONTEXT.Rsp on x64
+            var parts = new List<string>();
+            for (int i = 0; i < 4096; i++)
+            {
+                IntPtr slot = new(rsp + i * 8);
+                IntPtr value;
+                try { value = Marshal.ReadIntPtr(slot); } catch { break; }
+                if (value == IntPtr.Zero || !GetModuleHandleExW(FromAddress | UnchangedRefCount, value, out var h)) continue;
+                var sb = new StringBuilder(260);
+                GetModuleFileNameW(h, sb, 260);
+                string m = Path.GetFileName(sb.ToString());
+                if (parts.Count == 0 || parts[^1] != m) parts.Add(m);
+                if (parts.Count > 40) break;
+            }
+            return string.Join(" > ", parts);
+        }
+        catch { return "?"; }
+    }
+
     private static int Handler(IntPtr pointers)
     {
         try
@@ -69,7 +99,7 @@ public static class NativeFaultLog
             if (Interlocked.Increment(ref _logged) > 40) return 0; // enough to name the culprit
             var name = new StringBuilder(260);
             GetModuleFileNameW(module, name, 260);
-            AppLog.Write($"NATIVE exception 0x{code:X8} at 0x{address.ToInt64():X} in {name} (thread {Environment.CurrentManagedThreadId}).");
+            AppLog.Write($"NATIVE exception 0x{code:X8} at 0x{address.ToInt64():X} in {Path.GetFileName(name.ToString())} (thread {Environment.CurrentManagedThreadId}). Stack: {ModuleStack(pointers)}{Environment.NewLine}{Environment.StackTrace}");
         }
         catch { }
         return 0; // EXCEPTION_CONTINUE_SEARCH: never changes what happens
