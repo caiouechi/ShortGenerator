@@ -10,7 +10,10 @@ namespace ShortGenerator.Forms;
 /// debugger attached the raise surfaces as "External component has thrown an exception" (Visual Studio itself is a
 /// UI Automation client, and asks every window of the app when a dialog opens). This guard declines the UI Automation
 /// request on every window the app creates, so clients use the MSAA path instead, which has no such call-out.
-/// SHORTGEN_UIA=1 leaves UI Automation on.
+/// SHORTGEN_UIA=1 leaves UI Automation on. The browser's own windows are left alone: WebView2 answers their
+/// accessibility queries with the same call-out, but entirely in native code, where a debugger ignores it; a managed
+/// window procedure in front of theirs would turn the C++ exceptions WebView2 throws and catches internally into
+/// "External component has thrown an exception" (seen in Visual Studio).
 /// </summary>
 internal static class UiaGuard
 {
@@ -24,12 +27,7 @@ internal static class UiaGuard
     [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetWindowsHookExW(int id, HookProc proc, IntPtr module, uint threadId);
     [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassNameW(IntPtr hwnd, System.Text.StringBuilder name, int max);
     [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hwnd);
-    [DllImport("comctl32.dll")] private static extern bool SetWindowSubclass(IntPtr hwnd, SubclassProc proc, UIntPtr id, UIntPtr refData);
-    [DllImport("comctl32.dll")] private static extern IntPtr DefSubclassProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
-    private delegate IntPtr SubclassProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, UIntPtr id, UIntPtr refData);
-    private static readonly SubclassProc _browserProc = BrowserWndProc; // kept alive for the process lifetime
 
     /// <summary>Guards every form the UI thread creates from now on, and their controls.</summary>
     public static void Install()
@@ -46,7 +44,6 @@ internal static class UiaGuard
                 {
                     if (!IsWindow(hwnd)) return;
                     if (Control.FromHandle(hwnd) is Form form) Protect(form);
-                    else if (ClassName(hwnd).StartsWith("Chrome_", StringComparison.Ordinal)) SetWindowSubclass(hwnd, _browserProc, UIntPtr.Zero, UIntPtr.Zero);
                 }, null);
             }
             return CallNextHookEx(_hookHandle, code, wParam, lParam);
@@ -66,19 +63,6 @@ internal static class UiaGuard
         control.ControlAdded += (_, e) => Protect(e.Control);
         foreach (Control child in control.Controls) Protect(child);
     }
-
-    private static string ClassName(IntPtr hwnd)
-    {
-        var sb = new System.Text.StringBuilder(64);
-        return GetClassNameW(hwnd, sb, 64) > 0 ? sb.ToString() : "";
-    }
-
-    /// <summary>
-    /// The browser's own windows (WebView2 answers accessibility for them through the same cross-process bridge):
-    /// the player page has nothing for an accessibility client, so every WM_GETOBJECT is declined.
-    /// </summary>
-    private static IntPtr BrowserWndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, UIntPtr id, UIntPtr refData)
-        => msg == WM_GETOBJECT ? IntPtr.Zero : DefSubclassProc(hwnd, msg, wParam, lParam);
 
     /// <summary>Sits in front of the control's own window procedure and declines the UI Automation root request.</summary>
     private sealed class Guard : NativeWindow

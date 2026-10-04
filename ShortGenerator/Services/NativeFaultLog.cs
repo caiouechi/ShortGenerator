@@ -44,7 +44,7 @@ public static class NativeFaultLog
         AddVectoredExceptionHandler(0, _handler);
     }
 
-    private static int _managed;
+    private static int _managed, _cpp;
 
     /// <summary>
     /// The modules on the native stack at the time of the exception, innermost first, repeats collapsed: who raised,
@@ -85,7 +85,10 @@ public static class NativeFaultLog
             switch (code)
             {
                 case 0xE0434352: // a managed throw
-                case 0xE06D7363: // a C++ exception (handled inside its component)
+                case 0xE06D7363: // a C++ exception (handled inside its component), the first few noted: when one crosses a managed frame the runtime turns it into an SEHException
+                    if (Interlocked.Increment(ref _cpp) > 5) return 0;
+                    AppLog.Write($"NATIVE C++ exception (thread {Environment.CurrentManagedThreadId}). Stack: {ModuleStack(pointers)}{Environment.NewLine}{Environment.StackTrace}");
+                    return 0;
                 case 0x406D1388: // thread naming
                 case 0x40010006: case 0x4001000A: // OutputDebugString
                 case 0x80000003: case 0x80000004: // breakpoint, single step (the debugger)
