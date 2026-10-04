@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ShortGenerator.Forms.Controls;
 using System.Diagnostics;
 using System.Text.Json;
@@ -1695,6 +1696,9 @@ public sealed class MainForm : Form
                 if (shown > 0) Log($"Restored {shown} generated short(s).");
             }
         }
+        // a render finished but the app ended before it was recorded (stopped in the debugger, a crash, a power
+        // cut): the file is still complete on disk, so it is picked up here
+        _ = AdoptOrphanRendersAsync();
         UpdateGenerateEnabled();
         _tabs.SelectedTab = _transcript is null ? _tabVideo : (_suggestions is null ? _tabSuggest : _tabGenerate);
     }
@@ -3470,6 +3474,93 @@ public sealed class MainForm : Form
             _glClientId = id;
         }
         return _glClient;
+    }
+
+    // ------------------------------------------------------------------ renders the project missed
+
+    private static readonly Regex RenderNamePattern = new(@"^\d{2} - (?<title>.+?)(?<en> \(EN\))?( \(\d+\))?$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Finds rendered shorts in this video's output folder that the project does not know (the app ended between
+    /// ffmpeg finishing and the record being saved), adds them like a fresh render would, and exports a missing
+    /// cover. Files that match no suggestion are left alone.
+    /// </summary>
+    private async Task AdoptOrphanRendersAsync()
+    {
+        try
+        {
+            if (_video is null || _suggestions is null || _suggestions.Shorts.Count == 0) return;
+            var options = ReadOptions();
+            var folder = Path.Combine(options.OutputFolder, SafeFolder(_video.Title));
+            if (!Directory.Exists(folder)) return;
+            var known = new HashSet<string>(_generated.Select(g => g.Path), StringComparer.OrdinalIgnoreCase);
+            int adopted = 0;
+            foreach (var path in Directory.EnumerateFiles(folder, "*.mp4").OrderBy(f => f))
+            {
+                if (known.Contains(path)) continue;
+                var m = RenderNamePattern.Match(Path.GetFileNameWithoutExtension(path));
+                if (!m.Success) continue;
+                var s = _suggestions.Shorts.FirstOrDefault(x => string.Equals(ShortRenderer.SafeFileName(x.Title), m.Groups["title"].Value, StringComparison.Ordinal));
+                if (s is null) continue;
+                // a file still being written by a render in progress is not an orphan
+                if (_currentRender is not null && ReferenceEquals(_currentRender.Short, s)) continue;
+                bool en = m.Groups["en"].Success;
+                var opt = ReadOptions();
+                opt.OutputFolder = folder;
+                opt.CaptionLanguage = en ? "en" : "original";
+                opt.FileSuffix = en ? " (EN)" : "";
+                string? cover = Path.ChangeExtension(path, ".cover.jpg");
+                if (!File.Exists(cover))
+                {
+                    try { cover = await _renderer.ExportCoverAsync(_video, s, opt, path, CancellationToken.None); }
+                    catch (Exception ex) { AppLog.Error("adopt cover", ex); cover = null; }
+                }
+                if (_video is null) return; // the video changed while the cover was exported
+                var ep = en ? s.English : null;
+                var file = new GeneratedFile
+                {
+                    Title = ep is { Title.Length: > 0 } ? ep.Title : s.Title, ShortTitle = s.Title, Language = en ? "en" : null,
+                    Path = path, When = File.GetLastWriteTime(path),
+                    Caption = WithCredit(ep?.Caption ?? s.SuggestedCaption, en), Hashtags = (ep?.Hashtags ?? s.Hashtags)?.ToList(),
+                    Youtube = WithCredit(ep is null ? s.Youtube : ep.Youtube, en), Tiktok = WithCredit(ep is null ? s.Tiktok : ep.Tiktok, en),
+                    Instagram = WithCredit(ep is null ? s.Instagram : ep.Instagram, en),
+                    CoverPath = cover, CoverTimeSeconds = ShortRenderer.CoverFrameTime(s, opt.CaptionLanguage),
+                };
+                _generated.Add(file);
+                known.Add(path);
+                _results.Items.Add(new ListViewItem(new[] { file.Title, "done", path }) { Tag = path });
+                adopted++;
+            }
+            // a known render whose cover is gone (a re-render deletes the old cover first and exports the new one
+            // last; the app ended in between): the cover is made again from the video
+            int covers = 0;
+            foreach (var g in _generated.Where(g => File.Exists(g.Path) && (g.CoverPath is null || !File.Exists(g.CoverPath))).ToList())
+            {
+                var s = _suggestions.Shorts.FirstOrDefault(x => x.Title == (g.ShortTitle ?? g.Title));
+                if (s is null) continue;
+                if (_currentRender is not null && ReferenceEquals(_currentRender.Short, s)) continue;
+                bool en = g.Language == "en";
+                var opt = ReadOptions();
+                opt.OutputFolder = folder;
+                opt.CaptionLanguage = en ? "en" : "original";
+                opt.FileSuffix = en ? " (EN)" : "";
+                try
+                {
+                    g.CoverPath = await _renderer.ExportCoverAsync(_video, s, opt, g.Path, CancellationToken.None);
+                    g.CoverTimeSeconds = ShortRenderer.CoverFrameTime(s, opt.CaptionLanguage);
+                    if (g.CoverPath is not null) covers++;
+                }
+                catch (Exception ex) { AppLog.Error("restore cover", ex); }
+                if (_video is null) return;
+            }
+            if (adopted == 0 && covers == 0) return;
+            SaveProject();
+            _publishPanel.RefreshList();
+            RefreshQueue();
+            if (adopted > 0) Log($"Picked up {adopted} finished render(s) the project had not recorded yet.");
+            if (covers > 0) Log($"Made the missing cover of {covers} render(s) again.");
+        }
+        catch (Exception ex) { AppLog.Error("adopt renders", ex); }
     }
 
     // ------------------------------------------------------------------ credit to the source

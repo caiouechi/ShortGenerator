@@ -349,7 +349,7 @@ public sealed class ShortRenderer
         return (w / 2 * 2, h / 2 * 2);
     }
 
-    private static string SafeFileName(string name)
+    internal static string SafeFileName(string name)
     {
         var invalid = new string(Path.GetInvalidFileNameChars());
         var cleaned = Regex.Replace(name, $"[{Regex.Escape(invalid)}]", "");

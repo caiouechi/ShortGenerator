@@ -22,10 +22,12 @@ public sealed class GaliLunaClient : IDisposable
 
     public GaliLunaClient(string baseUrl, string apiKey)
     {
-        // Idle connections are closed by us after 30 s, before the server drops them (a dropped idle connection
-        // surfaces as a socket exception on a pool thread, which Visual Studio stops on).
-        var handler = new SocketsHttpHandler { PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30), PooledConnectionLifetime = TimeSpan.FromMinutes(10) };
-        _http = new HttpClient(handler) { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(6) };
+        // Every request closes its connection when the response is read ("Connection: close"), so the app never
+        // holds an idle connection: an idle one is watched by .NET with a pending read that ends in an internal
+        // exception when the connection is dropped or disposed, and Visual Studio stops on those. The calls are
+        // few (accounts, uploads, status checks), so a fresh connection each time costs nothing noticeable.
+        _http = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(6) };
+        _http.DefaultRequestHeaders.ConnectionClose = true;
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("GalilunaShortGenerator/1.0");
     }
@@ -176,6 +178,7 @@ public sealed class GaliLunaClient : IDisposable
     private static HttpClient CreateAnonymous()
     {
         var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        http.DefaultRequestHeaders.ConnectionClose = true; // same reason as the signed-in client: no idle connections
         http.DefaultRequestHeaders.UserAgent.ParseAdd("GalilunaShortGenerator/1.0");
         return http;
     }
