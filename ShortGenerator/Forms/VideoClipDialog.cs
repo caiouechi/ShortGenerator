@@ -1,16 +1,17 @@
+using System.Drawing.Drawing2D;
 using System.Globalization;
-using System.Text.Json;
-using Microsoft.Web.WebView2.Core;
-using Microsoft.Web.WebView2.WinForms;
 using ShortGenerator.Forms.Controls;
+using ShortGenerator.Models;
+using ShortGenerator.Services;
 
 namespace ShortGenerator.Forms;
 
 /// <summary>
-/// Picks the moment of another video to show over the short, and how it is framed. The source plays with normal
-/// controls; "Start here" / "End here" mark the clip. Full screen: a 9:16 box over the source is dragged to frame it
-/// and the mouse wheel zooms (what the viewer sees). Picture in picture: the whole source frame, placed and sized on
-/// the short afterwards like an image.
+/// Picks the moment of another video to show over the short, and how it is framed. Frames come from ffmpeg as the
+/// slider moves (no embedded browser here: a second WebView2 in a modal window crashed on some machines); "Start
+/// here" / "End here" mark the clip and "Play the clip" plays a light preview of it. The framing box (9:16 for full
+/// screen, the chosen shape for picture in picture) is dragged over the frame and the wheel zooms, exactly the crop
+/// the render uses.
 /// </summary>
 public sealed class VideoClipDialog : Form
 {
@@ -28,25 +29,32 @@ public sealed class VideoClipDialog : Form
     public double Zoom { get; private set; } = 1;
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public double Aspect { get; private set; } = 9.0 / 16;
-    private readonly ComboBox _shape = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 140 };
 
-    private readonly WebView2 _web = new() { Dock = DockStyle.Fill };
+    private readonly FfmpegRunner _ffmpeg;
+    private readonly string _path;
+    private readonly FrameView _view;
+    private readonly TrackBar _slider = new() { Dock = DockStyle.Fill, TickStyle = TickStyle.None, Minimum = 0, Maximum = 1000, SmallChange = 10, LargeChange = 100 };
+    private readonly Label _time = new() { AutoSize = true, ForeColor = Theme.TextSecondary, Margin = new Padding(8, 8, 0, 0), Font = Theme.Mono(9.5f) };
     private readonly NumericUpDown _start = new() { DecimalPlaces = 1, Increment = 0.5M, Maximum = 100000, Width = 90 };
     private readonly NumericUpDown _end = new() { DecimalPlaces = 1, Increment = 0.5M, Maximum = 100000, Width = 90 };
     private readonly RadioButton _full = new() { Text = "Full screen (9:16)", AutoSize = true, Checked = true };
     private readonly RadioButton _inset = new() { Text = "Picture in picture", AutoSize = true };
+    private readonly ComboBox _shape = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 140 };
     private readonly Label _info = new() { AutoSize = true, ForeColor = Theme.TextMuted };
-    private readonly Label _loading = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.White, BackColor = Theme.Navy, Text = "Loading the video..." };
-    private readonly List<Control> _needsVideo = new();
-    private readonly string _path;
-    private double _now, _duration;
-    private bool _ready;
+    private readonly FancyButton _play = new() { Text = "Play the clip", Width = 130, Glyph = "" };
+    private readonly System.Windows.Forms.Timer _scrubTimer = new() { Interval = 120 };
+    private readonly System.Windows.Forms.Timer _playTimer = new() { Interval = 125 };
+    private readonly string _work = Path.Combine(Path.GetTempPath(), "shortgen_clip_" + Guid.NewGuid().ToString("N")[..8]);
+    private CancellationTokenSource? _frameCts;
+    private double _duration, _now;
+    private List<Bitmap>? _playFrames;
+    private int _playIndex;
 
-    public VideoClipDialog(string path, double sourceStart, double length, bool fullFrame, double cropX, double cropY, double zoom, double maxLength, double aspect = 9.0 / 16)
+    public VideoClipDialog(FfmpegRunner ffmpeg, string path, double sourceStart, double length, bool fullFrame, double cropX, double cropY, double zoom,
+        double maxLength, double aspect = 9.0 / 16)
     {
-        _path = path;
-        Aspect = aspect;
-        SourceStart = sourceStart; Length = length; FullFrame = fullFrame; CropX = cropX; CropY = cropY; Zoom = zoom;
+        _ffmpeg = ffmpeg; _path = path;
+        SourceStart = sourceStart; Length = length; FullFrame = fullFrame; CropX = cropX; CropY = cropY; Zoom = zoom; Aspect = aspect;
         Text = "Video clip: " + Path.GetFileNameWithoutExtension(path);
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -54,82 +62,104 @@ public sealed class VideoClipDialog : Form
         ClientSize = new Size(1100, 760);
         MinimumSize = new Size(820, 560);
         BackColor = Theme.Bg;
+        _now = sourceStart;
 
+        _view = new FrameView(this) { Dock = DockStyle.Fill };
         var head = new Label
         {
             Dock = DockStyle.Top, Height = 54, Padding = new Padding(16, 10, 16, 0), ForeColor = Theme.TextSecondary,
-            Text = "Play the video and stop at the moment you want, then click \"Start here\" and \"End here\". Full screen: drag the 9:16 box to frame it, scroll to zoom. The short keeps its own sound and its captions on top.",
+            Text = "Move the slider to the moment you want (arrow keys step 0.1 s, Shift+arrow 1 s), then click \"Start here\" and \"End here\". Drag the box to frame it and scroll to zoom. The short keeps its own sound and its captions on top.",
         };
 
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(14, 10, 14, 12), WrapContents = true, BackColor = Theme.SurfaceStrong };
+        // scrub row: step buttons, slider, time
+        var scrub = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 44, ColumnCount = 6, Padding = new Padding(12, 6, 12, 0), BackColor = Theme.SurfaceStrong };
+        for (int i = 0; i < 2; i++) scrub.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        scrub.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (int i = 0; i < 3; i++) scrub.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        FancyButton Step(string text, double by) { var b = new FancyButton { Text = text, Width = 58, Height = 30, Margin = new Padding(0, 0, 4, 0) }; b.Click += (_, _) => SeekTo(_now + by); return b; }
+        scrub.Controls.Add(Step("-1 s", -1), 0, 0);
+        scrub.Controls.Add(Step("-0.1", -0.1), 1, 0);
+        scrub.Controls.Add(_slider, 2, 0);
+        scrub.Controls.Add(Step("+0.1", 0.1), 3, 0);
+        scrub.Controls.Add(Step("+1 s", 1), 4, 0);
+        scrub.Controls.Add(_time, 5, 0);
+
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(14, 8, 14, 10), WrapContents = true, BackColor = Theme.SurfaceStrong };
         var startHere = new FancyButton { Text = "Start here", Width = 120, Glyph = "" };
         var endHere = new FancyButton { Text = "End here", Width = 110, Glyph = "" };
-        var preview = new FancyButton { Text = "Play the clip", Width = 130, Glyph = "" };
-        var ok = new FancyButton { Text = "Use this clip", Width = 140, Height = 38 };
-        var cancel = new FancyButton { Text = "Cancel", Width = 100, Height = 38 };
         Label L(string t) => new() { Text = t, AutoSize = true, Margin = new Padding(14, 9, 4, 0), ForeColor = Theme.TextSecondary };
         bar.Controls.Add(startHere);
         bar.Controls.Add(L("Start (s)")); bar.Controls.Add(_start);
         bar.Controls.Add(endHere);
         bar.Controls.Add(L("End (s)")); bar.Controls.Add(_end);
-        bar.Controls.Add(preview);
+        bar.Controls.Add(_play);
         _full.Margin = new Padding(18, 8, 6, 0); _inset.Margin = new Padding(6, 8, 6, 0);
         bar.Controls.Add(_full); bar.Controls.Add(_inset);
-        // picture in picture: the shape of the small window (the framing box takes it), shrunk and placed on the short later
-        foreach (var (_, name) in Models.ImageOverlay.InsetShapes) _shape.Items.Add(name);
-        _shape.SelectedIndex = Math.Max(0, Array.FindIndex(Models.ImageOverlay.InsetShapes, x => Math.Abs(x.Aspect - aspect) < 0.01));
+        foreach (var (_, name) in ImageOverlay.InsetShapes) _shape.Items.Add(name);
+        _shape.SelectedIndex = Math.Max(0, Array.FindIndex(ImageOverlay.InsetShapes, x => Math.Abs(x.Aspect - aspect) < 0.01));
         _shape.Margin = new Padding(4, 5, 6, 0);
         bar.Controls.Add(_shape);
         _info.Margin = new Padding(14, 9, 0, 0);
         bar.Controls.Add(_info);
+        foreach (var b in new[] { startHere, endHere, _play }) b.Margin = new Padding(0, 2, 6, 2);
+
+        var ok = new FancyButton { Text = "Use this clip", Width = 140, Height = 38 };
+        var cancel = new FancyButton { Text = "Cancel", Width = 100, Height = 38 };
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(14, 6, 14, 12), BackColor = Theme.SurfaceStrong };
         buttons.Controls.Add(ok); buttons.Controls.Add(cancel);
-        foreach (var b in new[] { startHere, endHere, preview }) { b.Margin = new Padding(0, 2, 6, 2); b.Enabled = false; _needsVideo.Add(b); }
 
-        // the video area shows a message until the browser is up; the buttons that read the video wait for it
-        var stage = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Navy };
-        stage.Controls.Add(_web);
-        stage.Controls.Add(_loading);
-        _loading.BringToFront();
-        Controls.Add(stage);
+        Controls.Add(_view);
         Controls.Add(head);
+        Controls.Add(scrub);
         Controls.Add(bar);
         Controls.Add(buttons);
         Theme.Apply(this);
         Theme.Primary(ok);
+        _view.BackColor = Theme.Navy;
 
         _start.Value = (decimal)Math.Max(0, Math.Round(sourceStart, 1));
         _end.Value = (decimal)Math.Max(0, Math.Round(sourceStart + length, 1));
         _full.Checked = fullFrame; _inset.Checked = !fullFrame;
+        _shape.Enabled = !fullFrame;
 
-        startHere.Click += (_, _) => { _start.Value = Clamp(_now); if (_end.Value <= _start.Value) _end.Value = Clamp(_now + Math.Min(5, maxLength)); ShowInfo(); };
-        endHere.Click += (_, _) => { _end.Value = Clamp(Math.Max(_now, (double)_start.Value + 0.5)); ShowInfo(); };
-        preview.Click += async (_, _) => await Js($"playRange({J((double)_start.Value)},{J((double)_end.Value)})");
+        _slider.Scroll += (_, _) => { StopPlay(load: false); _now = _slider.Value / 1000.0 * _duration; ShowTime(); _scrubTimer.Stop(); _scrubTimer.Start(); };
+        _scrubTimer.Tick += async (_, _) => { _scrubTimer.Stop(); await LoadFrameAsync(_now); };
+        startHere.Click += (_, _) => { StopPlay(); _start.Value = Clamp(_now); if (_end.Value <= _start.Value) _end.Value = Clamp(_now + Math.Min(5, maxLength)); ShowInfo(); };
+        endHere.Click += (_, _) => { StopPlay(); _end.Value = Clamp(Math.Max(_now, (double)_start.Value + 0.5)); ShowInfo(); };
+        _play.Click += async (_, _) => await TogglePlayAsync();
+        _playTimer.Tick += (_, _) =>
+        {
+            if (_playFrames is null || _playIndex >= _playFrames.Count) { StopPlay(); return; }
+            _view.SetFrame(_playFrames[_playIndex++], keep: true);
+        };
         _start.ValueChanged += (_, _) => ShowInfo();
         _end.ValueChanged += (_, _) => ShowInfo();
-        _full.CheckedChanged += async (_, _) => await PushShapeAsync();
-        _shape.SelectedIndexChanged += async (_, _) => await PushShapeAsync();
+        _full.CheckedChanged += (_, _) => { _shape.Enabled = _inset.Checked; _view.Invalidate(); };
+        _shape.SelectedIndexChanged += (_, _) => _view.Invalidate();
         ok.Click += (_, _) =>
         {
             double a = (double)_start.Value, b = (double)_end.Value;
             if (b - a < 0.5) { AppDialog.Alert(this, "Pick the clip", "Mark where the clip starts and ends: it has to last at least half a second.", AppDialog.Kind.Warning); return; }
             SourceStart = a; Length = Math.Min(b - a, maxLength); FullFrame = _full.Checked;
-            Aspect = Models.ImageOverlay.InsetShapes[Math.Max(0, _shape.SelectedIndex)].Aspect;
+            Aspect = ImageOverlay.InsetShapes[Math.Max(0, _shape.SelectedIndex)].Aspect;
             DialogResult = DialogResult.OK; Close();
         };
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
         CancelButton = cancel;
+        KeyPreview = true;
+        KeyDown += (_, e) =>
+        {
+            if (ActiveControl is NumericUpDown or ComboBox) return;
+            if (e.KeyCode == Keys.Left) { SeekTo(_now - (e.Shift ? 1 : 0.1)); e.Handled = true; }
+            else if (e.KeyCode == Keys.Right) { SeekTo(_now + (e.Shift ? 1 : 0.1)); e.Handled = true; }
+        };
         Load += async (_, _) => await InitAsync();
+        FormClosed += (_, _) => { _playTimer.Stop(); _scrubTimer.Stop(); _frameCts?.Cancel(); DisposePlayFrames(); try { Directory.Delete(_work, true); } catch { } };
         ShowInfo();
     }
 
-    /// <summary>The framing box: 9:16 for full screen, the chosen shape for picture in picture (0 = the whole source frame).</summary>
-    private async Task PushShapeAsync()
-    {
-        _shape.Enabled = _inset.Checked;
-        double a = _full.Checked ? 9.0 / 16 : Models.ImageOverlay.InsetShapes[Math.Max(0, _shape.SelectedIndex)].Aspect;
-        await Js($"setShape({J(a)})");
-    }
+    /// <summary>The framing box's shape: 9:16 for full screen, the chosen window shape for picture in picture (0 = whole frame).</summary>
+    private double BoxAspect => _full.Checked ? 9.0 / 16 : ImageOverlay.InsetShapes[Math.Max(0, _shape.SelectedIndex)].Aspect;
 
     private decimal Clamp(double t) => (decimal)Math.Round(Math.Clamp(t, 0, _duration > 0 ? _duration : 100000), 1);
 
@@ -139,99 +169,214 @@ public sealed class VideoClipDialog : Form
         _info.Text = len > 0 ? $"Clip: {len:0.0} s" : "Mark the start and the end";
     }
 
-    private Task<string> Js(string code) => _ready ? _web.CoreWebView2.ExecuteScriptAsync(code) : Task.FromResult("");
-    private static string J(double d) => d.ToString("F3", CultureInfo.InvariantCulture);
+    private static string Fmt(double t) { var ts = TimeSpan.FromSeconds(Math.Max(0, t)); return ts.TotalHours >= 1 ? ts.ToString(@"h\:mm\:ss\.f") : ts.ToString(@"mm\:ss\.f"); }
+    private void ShowTime() => _time.Text = $"{Fmt(_now)} / {Fmt(_duration)}";
 
     private async Task InitAsync()
     {
         try
         {
-            var dataFolder = ClipPlayer.DataFolder;
-            var env = await ClipPlayer.SharedEnvironmentAsync();
+            Directory.CreateDirectory(_work);
+            var (w, h, d) = await _ffmpeg.ProbeAsync(_path, CancellationToken.None);
             if (IsDisposed) return;
-            await _web.EnsureCoreWebView2Async(env);
-            if (IsDisposed) return;
-            _web.CoreWebView2.ProcessFailed += (_, e) => Services.AppLog.Write($"Clip dialog WebView2 process failed: {e.ProcessFailedKind} ({e.Reason}).");
-            _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-            _web.CoreWebView2.Settings.AreDevToolsEnabled = false;
-            _web.AllowExternalDrop = false;
-            _web.CoreWebView2.WebMessageReceived += (_, e) =>
-            {
-                try
-                {
-                    using var doc = JsonDocument.Parse(e.WebMessageAsJson);
-                    var r = doc.RootElement;
-                    if (r.TryGetProperty("t", out var t)) _now = t.GetDouble();
-                    if (r.TryGetProperty("dur", out var d)) _duration = d.GetDouble();
-                    if (r.TryGetProperty("box", out var box))
-                    {
-                        CropX = box.GetProperty("x").GetDouble(); CropY = box.GetProperty("y").GetDouble(); Zoom = box.GetProperty("zoom").GetDouble();
-                    }
-                }
-                catch { }
-            };
-            var folder = Path.Combine(dataFolder, "player");
-            Directory.CreateDirectory(folder);
-            var page = Path.Combine(folder, "clip.html");
-            await File.WriteAllTextAsync(page, Html);
-            // the code after the await must not run inside WebView2's own callback (a dialog opened there is fatal)
-            var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _web.CoreWebView2.NavigationCompleted += (_, _) => done.TrySetResult(true);
-            _web.CoreWebView2.Navigate(new Uri(page).AbsoluteUri);
-            await done.Task;
-            if (IsDisposed) return;
-            _ready = true;
-            var src = new Uri(Path.GetFullPath(_path)).AbsoluteUri;
-            await Js($"init({JsonSerializer.Serialize(src)},{J(SourceStart)},{(FullFrame ? "true" : "false")},{J(CropX)},{J(CropY)},{J(Zoom)})");
-            await PushShapeAsync();
-            _loading.Visible = false;
-            foreach (var c in _needsVideo) c.Enabled = true;
+            _duration = d;
+            _view.SourceSize = new Size(w, h);
+            ShowTime();
+            await LoadFrameAsync(_now);
         }
-        catch (Exception ex)
-        {
-            // shown in place, never as a dialog from inside the browser's start-up
-            Services.AppLog.Error("clip dialog", ex);
-            if (!IsDisposed) _loading.Text = "The video could not be shown: " + ex.Message + "\n\nYou can still type the start and end times below.";
-        }
+        catch (Exception ex) { AppLog.Error("clip dialog", ex); }
     }
 
-    private const string Html = """
-<!doctype html>
-<html><head><meta charset="utf-8">
-<style>
-  html,body{margin:0;height:100%;background:#0B1028;overflow:hidden;font-family:Arial}
-  #wrap{position:absolute;inset:0 0 0 0;display:flex;align-items:center;justify-content:center}
-  #frame{position:relative}
-  video{display:block;width:100%;height:100%}
-  #box{position:absolute;border:2px solid #fff;box-shadow:0 0 0 9999px rgba(11,16,40,.55);cursor:move;display:none;box-sizing:border-box}
-  #box .lbl{position:absolute;left:0;top:-22px;background:#6A38FF;color:#fff;font:12px Arial;padding:2px 6px;border-radius:4px;white-space:nowrap}
-</style></head>
-<body><div id="wrap"><div id="frame"><video id="v" controls preload="auto"></video><div id="box"><span class="lbl">what the viewer sees</span></div></div></div>
-<script>
-const v=document.getElementById('v'),frame=document.getElementById('frame'),box=document.getElementById('box');
-let full=true,shape=9/16,k={x:50,y:50,zoom:1},drag=null,stopAt=null;
-function post(o){window.chrome&&window.chrome.webview&&window.chrome.webview.postMessage(o);}
-function init(src,t,f,x,y,z){v.src=src;v.currentTime=t;full=f;k={x,y,zoom:z};}
-function setFull(f){full=f;draw();}
-function setShape(a){shape=a;draw();}
-function playRange(a,b){v.currentTime=a;stopAt=b;v.play();}
-function layout(){const W=innerWidth,H=innerHeight-44,ar=(v.videoWidth&&v.videoHeight)?v.videoWidth/v.videoHeight:16/9;
-  let w=W,h=W/ar;if(h>H){h=H;w=H*ar;}frame.style.width=w+'px';frame.style.height=h+'px';draw();}
-function draw(){box.style.display='block';
-  const fw=frame.clientWidth,fh=frame.clientHeight;   // the box maps to the whole frame, exactly what the render crops
-  const a=shape>0?shape:fw/fh;                            // 0 = the whole source frame
-  let bh=fh/k.zoom,bw=bh*a;if(bw>fw/k.zoom){bw=fw/k.zoom;bh=bw/a;}
-  let cx=k.x/100*fw,cy=k.y/100*fh;cx=Math.max(bw/2,Math.min(fw-bw/2,cx));cy=Math.max(bh/2,Math.min(fh-bh/2,cy));
-  box.style.left=(cx-bw/2)+'px';box.style.top=(cy-bh/2)+'px';box.style.width=bw+'px';box.style.height=bh+'px';}
-box.addEventListener('pointerdown',e=>{drag={x0:e.clientX,y0:e.clientY,cx:k.x,cy:k.y};box.setPointerCapture(e.pointerId);e.preventDefault();});
-box.addEventListener('pointermove',e=>{if(!drag)return;const fw=frame.clientWidth,fh=frame.clientHeight;
-  k.x=Math.max(0,Math.min(100,drag.cx+(e.clientX-drag.x0)/fw*100));k.y=Math.max(0,Math.min(100,drag.cy+(e.clientY-drag.y0)/fh*100));draw();});
-box.addEventListener('pointerup',()=>{if(!drag)return;drag=null;post({box:k});});
-box.addEventListener('wheel',e=>{e.preventDefault();k.zoom=Math.max(1,Math.min(4,k.zoom+(e.deltaY<0?0.1:-0.1)));draw();post({box:k});},{passive:false});
-v.addEventListener('loadedmetadata',()=>{layout();post({dur:v.duration,box:k});});
-v.addEventListener('timeupdate',()=>{post({t:v.currentTime});if(stopAt!==null&&v.currentTime>=stopAt){v.pause();stopAt=null;}});
-v.addEventListener('seeked',()=>post({t:v.currentTime}));
-addEventListener('resize',layout);
-</script></body></html>
-""";
+    private void SeekTo(double t)
+    {
+        StopPlay(load: false);
+        _now = Math.Clamp(t, 0, _duration > 0 ? _duration : Math.Max(0, t));
+        if (_duration > 0) _slider.Value = Math.Clamp((int)Math.Round(_now / _duration * 1000), 0, 1000);
+        ShowTime();
+        _scrubTimer.Stop(); _scrubTimer.Start();
+    }
+
+    /// <summary>One frame at <paramref name="t"/> from ffmpeg (fast seek), shown when it arrives; a newer request cancels an older one.</summary>
+    private async Task LoadFrameAsync(double t)
+    {
+        _frameCts?.Cancel();
+        var cts = _frameCts = new CancellationTokenSource();
+        var file = Path.Combine(_work, $"f{Guid.NewGuid():N}.jpg");
+        try
+        {
+            if (_duration > 0) _slider.Value = Math.Clamp((int)Math.Round(t / _duration * 1000), 0, 1000);
+            await _ffmpeg.RunAsync(new[] { "-y", "-ss", t.ToString("F3", CultureInfo.InvariantCulture), "-i", _path, "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "3", file }, null, null, 0, cts.Token);
+            if (cts.IsCancellationRequested || IsDisposed || !File.Exists(file)) return;
+            _view.SetFrame(Theme.ReadImage(file));
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { AppLog.Error("clip frame", ex); }
+        finally { try { File.Delete(file); } catch { } }
+    }
+
+    /// <summary>A light preview of the marked clip: frames at 8 per second, played in place.</summary>
+    private async Task TogglePlayAsync()
+    {
+        if (_playTimer.Enabled) { StopPlay(); return; }
+        double a = (double)_start.Value, b = (double)_end.Value;
+        if (b - a < 0.2) return;
+        _play.Enabled = false; _play.Text = "Preparing...";
+        var dir = Path.Combine(_work, "play" + Guid.NewGuid().ToString("N")[..6]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            await _ffmpeg.RunAsync(new[] { "-y", "-ss", a.ToString("F3", CultureInfo.InvariantCulture), "-t", (b - a).ToString("F3", CultureInfo.InvariantCulture), "-i", _path,
+                "-vf", "fps=8,scale=640:-2", "-q:v", "5", Path.Combine(dir, "p%04d.jpg") }, null, null, 0, CancellationToken.None);
+            if (IsDisposed) return;
+            DisposePlayFrames();
+            _playFrames = Directory.GetFiles(dir, "p*.jpg").OrderBy(f => f).Select(Theme.ReadImage).ToList();
+            _playIndex = 0;
+            _play.Text = "Stop"; _play.Glyph = "";
+            _playTimer.Start();
+        }
+        catch (Exception ex) { AppLog.Error("clip preview", ex); _play.Text = "Play the clip"; }
+        finally { _play.Enabled = true; try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    private void StopPlay(bool load = true)
+    {
+        if (!_playTimer.Enabled && _playFrames is null) return;
+        _playTimer.Stop();
+        _play.Text = "Play the clip"; _play.Glyph = "";
+        DisposePlayFrames();
+        if (load) _ = LoadFrameAsync(_now);
+    }
+
+    private void DisposePlayFrames()
+    {
+        if (_playFrames is null) return;
+        var frames = _playFrames; _playFrames = null;
+        _view.ReleaseIfShown(frames);
+        foreach (var f in frames) f.Dispose();
+    }
+
+    // ------------------------------------------------------------------ the frame with its framing box
+
+    private sealed class FrameView : Control
+    {
+        private readonly VideoClipDialog _d;
+        private Bitmap? _frame;
+        private bool _frameOwned = true;
+        private Point _dragFrom;
+        private double _cx0, _cy0;
+        private bool _dragging;
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public Size SourceSize { get; set; }
+
+        public FrameView(VideoClipDialog d)
+        {
+            _d = d;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+            Cursor = Cursors.SizeAll;
+        }
+
+        /// <param name="keep">A preview frame owned by the preview list (not disposed here).</param>
+        public void SetFrame(Bitmap bmp, bool keep = false)
+        {
+            var old = _frame; bool oldOwned = _frameOwned;
+            _frame = bmp; _frameOwned = !keep;
+            if (old is not null && oldOwned && !ReferenceEquals(old, bmp)) old.Dispose();
+            Invalidate();
+        }
+
+        public void ReleaseIfShown(List<Bitmap> frames) { if (_frame is not null && frames.Contains(_frame)) { _frame = null; _frameOwned = true; Invalidate(); } }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && _frameOwned) _frame?.Dispose();
+            base.Dispose(disposing);
+        }
+
+        /// <summary>Where the frame is drawn: letterboxed into the control.</summary>
+        private RectangleF FrameRect()
+        {
+            var src = SourceSize.Width > 0 ? SourceSize : (_frame?.Size ?? Size.Empty);
+            if (src.Width <= 0 || src.Height <= 0) return RectangleF.Empty;
+            float s = Math.Min((float)Width / src.Width, (float)Height / src.Height);
+            float w = src.Width * s, h = src.Height * s;
+            return new RectangleF((Width - w) / 2, (Height - h) / 2, w, h);
+        }
+
+        /// <summary>The framing box in control pixels: the same rule as the render's crop (largest of that shape, / zoom).</summary>
+        private RectangleF BoxRect(RectangleF fr)
+        {
+            double a = _d.BoxAspect > 0 ? _d.BoxAspect : fr.Width / fr.Height;
+            double w, h;
+            if (fr.Width / fr.Height > a) { h = fr.Height; w = h * a; } else { w = fr.Width; h = w / a; }
+            double z = Math.Clamp(_d.Zoom, 1, 4);
+            w /= z; h /= z;
+            double cx = fr.X + _d.CropX / 100 * fr.Width, cy = fr.Y + _d.CropY / 100 * fr.Height;
+            double x = Math.Clamp(cx - w / 2, fr.X, fr.Right - w), y = Math.Clamp(cy - h / 2, fr.Y, fr.Bottom - h);
+            return new RectangleF((float)x, (float)y, (float)w, (float)h);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(BackColor);
+            var fr = FrameRect();
+            if (fr.IsEmpty || _frame is null)
+            {
+                using var lf = Theme.Body(10f);
+                TextRenderer.DrawText(g, "Loading the video...", lf, ClientRectangle, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                if (fr.IsEmpty) return;
+            }
+            if (_frame is not null)
+            {
+                g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                g.DrawImage(_frame, fr);
+            }
+            var box = BoxRect(fr);
+            using (var shade = new SolidBrush(Color.FromArgb(140, 11, 16, 40)))
+            using (var outside = new Region(fr))
+            {
+                outside.Exclude(box);
+                g.FillRegion(shade, outside);
+            }
+            using (var pen = new Pen(Color.White, 2)) g.DrawRectangle(pen, box.X, box.Y, box.Width, box.Height);
+            const string label = "what the viewer sees";
+            using var f = Theme.Body(8.5f, FontStyle.Bold);
+            var sz = TextRenderer.MeasureText(label, f);
+            var lr = new Rectangle((int)box.X, (int)box.Y - sz.Height - 6, sz.Width + 10, sz.Height + 4);
+            if (lr.Y < 0) lr.Y = (int)box.Y + 4;
+            using (var b = new SolidBrush(Theme.Purple)) g.FillRectangle(b, lr);
+            TextRenderer.DrawText(g, label, f, lr, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            Focus();
+            if (e.Button != MouseButtons.Left) return;
+            _dragging = true; _dragFrom = e.Location; _cx0 = _d.CropX; _cy0 = _d.CropY;
+            Capture = true;
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (!_dragging) return;
+            var fr = FrameRect();
+            if (fr.Width <= 0) return;
+            _d.CropX = Math.Clamp(_cx0 + (e.X - _dragFrom.X) / fr.Width * 100, 0, 100);
+            _d.CropY = Math.Clamp(_cy0 + (e.Y - _dragFrom.Y) / fr.Height * 100, 0, 100);
+            Invalidate();
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); _dragging = false; Capture = false; }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            _d.Zoom = Math.Clamp(_d.Zoom + (e.Delta > 0 ? 0.1 : -0.1), 1, 4);
+            Invalidate();
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); Focus(); } // so the wheel reaches it
+    }
 }

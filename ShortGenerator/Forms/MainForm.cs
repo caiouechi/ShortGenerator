@@ -2289,7 +2289,7 @@ public sealed class MainForm : Form
         if (pick.ShowDialog(this) != DialogResult.OK) return;
         var s = _editing;
         double room = Math.Max(0.5, s.Duration - Math.Min(start, s.Duration - 0.5));
-        using var dlg = new VideoClipDialog(pick.FileName, 0, Math.Min(5, room), true, 50, 50, 1, maxLength: room);
+        using var dlg = new VideoClipDialog(_ffmpeg, pick.FileName, 0, Math.Min(5, room), true, 50, 50, 1, maxLength: room);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         double a = Math.Min(start, Math.Max(0, s.Duration - dlg.Length));
         var o = new ImageOverlay
@@ -2315,7 +2315,7 @@ public sealed class MainForm : Form
         await _player.PauseAsync();
         var s = _editing;
         double room = Math.Max(0.5, s.Duration - o.Start);
-        using var dlg = new VideoClipDialog(o.Path, o.SourceStart, o.End - o.Start, o.FullFrame, o.CropX, o.CropY, o.Zoom, maxLength: room, aspect: o.Aspect);
+        using var dlg = new VideoClipDialog(_ffmpeg, o.Path, o.SourceStart, o.End - o.Start, o.FullFrame, o.CropX, o.CropY, o.Zoom, maxLength: room, aspect: o.Aspect);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         o.SourceStart = Math.Round(dlg.SourceStart, 2);
         o.End = Math.Round(Math.Min(s.Duration, o.Start + dlg.Length), 2);
