@@ -17,7 +17,7 @@ namespace ShortGenerator.Forms;
 /// </summary>
 internal static class UiaGuard
 {
-    private const int WM_GETOBJECT = 0x003D, UiaRootObjectId = -25, WH_CBT = 5, HCBT_CREATEWND = 3;
+    private const int WM_GETOBJECT = 0x003D, UiaRootObjectId = -25, WH_CALLWNDPROC = 4;
 
     private delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
     private static HookProc? _hook; // kept alive for the process lifetime
@@ -27,28 +27,32 @@ internal static class UiaGuard
     [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetWindowsHookExW(int id, HookProc proc, IntPtr module, uint threadId);
     [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
-    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hwnd);
 
-    /// <summary>Guards every form the UI thread creates from now on, and their controls.</summary>
+    /// <summary>
+    /// Guards every control of the UI thread from its first UI Automation request on. The hook sees each message
+    /// sent to a window of this thread before its window procedure does; on a UI Automation root request for a
+    /// control that is not guarded yet, the guard is put in place right there, so that very request is declined.
+    /// (Guarding on window creation instead would leave a gap: a client can ask before the thread's message loop
+    /// gets to run anything posted.) Drop-downs and other windows outside a form are covered the same way.
+    /// </summary>
     public static void Install()
     {
         if (Environment.GetEnvironmentVariable("SHORTGEN_UIA") == "1") return;
-        var sync = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _hook = (code, wParam, lParam) =>
         {
-            if (code == HCBT_CREATEWND)
+            if (code >= 0)
             {
-                var hwnd = wParam;
-                // the control is wired to its handle once CreateWindow returns: look it up on the next message
-                sync.Post(_ =>
+                // CWPSTRUCT: lParam, wParam, message, hwnd
+                int msg = Marshal.ReadInt32(lParam, 2 * IntPtr.Size);
+                if (msg == WM_GETOBJECT && unchecked((int)(long)Marshal.ReadIntPtr(lParam)) == UiaRootObjectId)
                 {
-                    if (!IsWindow(hwnd)) return;
-                    if (Control.FromHandle(hwnd) is Form form) Protect(form);
-                }, null);
+                    var hwnd = Marshal.ReadIntPtr(lParam, 2 * IntPtr.Size + 8);
+                    if (Control.FromHandle(hwnd) is { } control) Protect(control);
+                }
             }
             return CallNextHookEx(_hookHandle, code, wParam, lParam);
         };
-        _hookHandle = SetWindowsHookExW(WH_CBT, _hook, IntPtr.Zero, GetCurrentThreadId());
+        _hookHandle = SetWindowsHookExW(WH_CALLWNDPROC, _hook, IntPtr.Zero, GetCurrentThreadId());
     }
 
     /// <summary>Guards a control, the controls inside it, and any added later.</summary>
