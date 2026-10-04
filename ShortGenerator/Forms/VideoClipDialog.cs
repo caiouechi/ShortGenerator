@@ -36,6 +36,8 @@ public sealed class VideoClipDialog : Form
     private readonly RadioButton _full = new() { Text = "Full screen (9:16)", AutoSize = true, Checked = true };
     private readonly RadioButton _inset = new() { Text = "Picture in picture", AutoSize = true };
     private readonly Label _info = new() { AutoSize = true, ForeColor = Theme.TextMuted };
+    private readonly Label _loading = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.White, BackColor = Theme.Navy, Text = "Loading the video..." };
+    private readonly List<Control> _needsVideo = new();
     private readonly string _path;
     private double _now, _duration;
     private bool _ready;
@@ -82,9 +84,14 @@ public sealed class VideoClipDialog : Form
         bar.Controls.Add(_info);
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(14, 6, 14, 12), BackColor = Theme.SurfaceStrong };
         buttons.Controls.Add(ok); buttons.Controls.Add(cancel);
-        foreach (var b in new[] { startHere, endHere, preview }) b.Margin = new Padding(0, 2, 6, 2);
+        foreach (var b in new[] { startHere, endHere, preview }) { b.Margin = new Padding(0, 2, 6, 2); b.Enabled = false; _needsVideo.Add(b); }
 
-        Controls.Add(_web);
+        // the video area shows a message until the browser is up; the buttons that read the video wait for it
+        var stage = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Navy };
+        stage.Controls.Add(_web);
+        stage.Controls.Add(_loading);
+        _loading.BringToFront();
+        Controls.Add(stage);
         Controls.Add(head);
         Controls.Add(bar);
         Controls.Add(buttons);
@@ -139,9 +146,12 @@ public sealed class VideoClipDialog : Form
     {
         try
         {
-            var dataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShortGenerator", "WebView2");
-            var env = await CoreWebView2Environment.CreateAsync(null, dataFolder);
+            var dataFolder = ClipPlayer.DataFolder;
+            var env = await ClipPlayer.SharedEnvironmentAsync();
+            if (IsDisposed) return;
             await _web.EnsureCoreWebView2Async(env);
+            if (IsDisposed) return;
+            _web.CoreWebView2.ProcessFailed += (_, e) => Services.AppLog.Write($"Clip dialog WebView2 process failed: {e.ProcessFailedKind} ({e.Reason}).");
             _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             _web.CoreWebView2.Settings.AreDevToolsEnabled = false;
             _web.AllowExternalDrop = false;
@@ -164,18 +174,24 @@ public sealed class VideoClipDialog : Form
             Directory.CreateDirectory(folder);
             var page = Path.Combine(folder, "clip.html");
             await File.WriteAllTextAsync(page, Html);
-            var done = new TaskCompletionSource<bool>();
+            // the code after the await must not run inside WebView2's own callback (a dialog opened there is fatal)
+            var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _web.CoreWebView2.NavigationCompleted += (_, _) => done.TrySetResult(true);
             _web.CoreWebView2.Navigate(new Uri(page).AbsoluteUri);
             await done.Task;
+            if (IsDisposed) return;
             _ready = true;
             var src = new Uri(Path.GetFullPath(_path)).AbsoluteUri;
             await Js($"init({JsonSerializer.Serialize(src)},{J(SourceStart)},{(FullFrame ? "true" : "false")},{J(CropX)},{J(CropY)},{J(Zoom)})");
             await PushShapeAsync();
+            _loading.Visible = false;
+            foreach (var c in _needsVideo) c.Enabled = true;
         }
         catch (Exception ex)
         {
-            AppDialog.Alert(this, "Cannot show the video", "The video preview needs the Microsoft Edge WebView2 runtime. " + ex.Message, AppDialog.Kind.Error);
+            // shown in place, never as a dialog from inside the browser's start-up
+            Services.AppLog.Error("clip dialog", ex);
+            if (!IsDisposed) _loading.Text = "The video could not be shown: " + ex.Message + "\n\nYou can still type the start and end times below.";
         }
     }
 

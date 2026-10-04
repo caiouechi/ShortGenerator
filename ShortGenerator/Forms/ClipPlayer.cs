@@ -42,6 +42,16 @@ public sealed class ClipPlayer : UserControl
 
     public bool IsReady => _ready;
 
+    private static Task<CoreWebView2Environment>? _environment;
+    /// <summary>
+    /// One WebView2 environment for the whole app (the editor player and the clip dialog share it). Creating a second
+    /// environment on the same data folder works but is not what WebView2 recommends.
+    /// </summary>
+    public static Task<CoreWebView2Environment> SharedEnvironmentAsync() =>
+        _environment ??= CoreWebView2Environment.CreateAsync(null, DataFolder);
+
+    public static string DataFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShortGenerator", "WebView2");
+
     public ClipPlayer()
     {
         BackColor = Color.Black;
@@ -55,9 +65,10 @@ public sealed class ClipPlayer : UserControl
         if (_ready) return true;
         try
         {
-            var dataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShortGenerator", "WebView2");
-            var env = await CoreWebView2Environment.CreateAsync(null, dataFolder);
+            var dataFolder = DataFolder;
+            var env = await SharedEnvironmentAsync();
             await _web.EnsureCoreWebView2Async(env);
+            _web.CoreWebView2.ProcessFailed += (_, e) => Services.AppLog.Write($"Player WebView2 process failed: {e.ProcessFailedKind} ({e.Reason}).");
             var s = _web.CoreWebView2.Settings;
             s.AreDefaultContextMenusEnabled = false;
             s.AreDevToolsEnabled = false;
@@ -73,7 +84,8 @@ public sealed class ClipPlayer : UserControl
             var pagePath = Path.Combine(pageFolder, "player.html");
             await File.WriteAllTextAsync(pagePath, Html);
 
-            _navigated = new TaskCompletionSource<bool>();
+            // the code after the await must not run inside WebView2's own callback
+            _navigated = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _web.CoreWebView2.NavigationCompleted += (_, _) => _navigated?.TrySetResult(true);
             _web.CoreWebView2.Navigate(new Uri(pagePath).AbsoluteUri);
             await _navigated.Task;
