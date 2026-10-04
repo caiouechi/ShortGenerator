@@ -22,7 +22,10 @@ public sealed class GaliLunaClient : IDisposable
 
     public GaliLunaClient(string baseUrl, string apiKey)
     {
-        _http = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(6) };
+        // Idle connections are closed by us after 30 s, before the server drops them (a dropped idle connection
+        // surfaces as a socket exception on a pool thread, which Visual Studio stops on).
+        var handler = new SocketsHttpHandler { PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30), PooledConnectionLifetime = TimeSpan.FromMinutes(10) };
+        _http = new HttpClient(handler) { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(6) };
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("GalilunaShortGenerator/1.0");
     }

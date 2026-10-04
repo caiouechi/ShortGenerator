@@ -383,7 +383,7 @@ public sealed class MainForm : Form
     /// this form only lends it the settings, the generated files and the project save.</summary>
     private void BuildPublishTab()
     {
-        _publishPanel.ClientFactory = () => SettingsStore.CreateGaliLunaClient(_settings);
+        _publishPanel.ClientFactory = SharedGaliLunaClient;
         _publishPanel.Files = () => _generated;
         _publishPanel.Saved = () => { SaveProject(); UpdateNavStates(); };
         _publishPanel.Log = Log;
@@ -3449,6 +3449,27 @@ public sealed class MainForm : Form
                 b.Width = Math.Max(b.Width, TextRenderer.MeasureText(b.Text, b.Font).Width + 24 + 8 + 30);
             FitPictureButtons(c);
         }
+    }
+
+    private GaliLunaClient? _glClient;
+    private string? _glClientId;
+
+    /// <summary>
+    /// One galiluna client for the Publish step, reused for every call (it was a new HttpClient per call, never
+    /// disposed, each keeping its own connections open). A new one only when the address or the key changes; the
+    /// old one is left to any upload still using it.
+    /// </summary>
+    private GaliLunaClient? SharedGaliLunaClient()
+    {
+        var key = SettingsStore.GetGaliLunaKey(_settings);
+        if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(_settings.GaliLunaBaseUrl)) return null;
+        var id = _settings.GaliLunaBaseUrl + "|" + key;
+        if (_glClient is null || _glClientId != id)
+        {
+            _glClient = SettingsStore.CreateGaliLunaClient(_settings);
+            _glClientId = id;
+        }
+        return _glClient;
     }
 
     // ------------------------------------------------------------------ credit to the source
