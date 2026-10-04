@@ -56,6 +56,7 @@ public sealed class ShortRenderer
                     break;
             }
 
+            if (ShiftFilter(s.MainOffsetY, outH) is { } shift) filters.Add(shift);
             var look = VisualLook.Get(options.Look);
             if (look.Filter.Length > 0) filters.Add(look.Filter);
 
@@ -199,6 +200,19 @@ public sealed class ShortRenderer
         return f;
     }
 
+    /// <summary>
+    /// Moves the picture down (up when negative) by <paramref name="pct"/> percent of a frame <paramref name="outH"/> high:
+    /// the frame is padded with black on the side the picture leaves and cropped back to its height on the other.
+    /// </summary>
+    private static string? ShiftFilter(double pct, int outH)
+    {
+        if (outH <= 0) return null;
+        int o = (int)Math.Round(pct / 100.0 * outH / 2) * 2;
+        if (o == 0) return null;
+        int a = Math.Abs(o);
+        return $"pad=iw:ih+{a}:0:{Math.Max(o, 0)}:black,crop=iw:ih-{a}:0:{Math.Max(-o, 0)}";
+    }
+
     /// <summary>How long the cover image opens the TikTok copy; TikTok's cover is then pointed at its middle.</summary>
     public const double CoverLeadSeconds = 0.1;
 
@@ -281,6 +295,8 @@ public sealed class ShortRenderer
                  $"[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2,scale={width}:-2";
         }
         else vf = $"scale={width}:-2";
+        var (ow, oh) = OutputSize(video, options.CropMode);
+        if (ShiftFilter(s.MainOffsetY, ow > 0 ? oh * width / ow : 0) is { } shift) vf += "," + shift;
         var look = VisualLook.Get(options.Look);
         if (look.Filter.Length > 0) vf += "," + look.Filter;
         await _ffmpeg.RunAsync(new[]
@@ -324,6 +340,7 @@ public sealed class ShortRenderer
                      "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2";
             }
             else vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2";
+            if (ShiftFilter(s.MainOffsetY, OutputSize(video, options.CropMode).Item2) is { } coverShift) vf += "," + coverShift;
             var coverLook = VisualLook.Get(options.Look);
             if (coverLook.Filter.Length > 0) vf += "," + coverLook.Filter;
 

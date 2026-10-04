@@ -649,7 +649,7 @@ public sealed class MainForm : Form
 
     private void BuildEditorTab()
     {
-        _editorHint.Text = "Click the video to play or pause. Drag the caption to place it, double-click it to fix the words, right-click it to edit its line in the table. Camera mode: drag the 9:16 box or scroll to zoom; auto framing resumes 4 s later. " +
+        _editorHint.Text = "Click the video to play or pause. Drag the picture up or down to move it inside the frame (below a banner, say). Drag the caption to place it, double-click it to fix the words, right-click it to edit its line in the table. Camera mode: drag the 9:16 box or scroll to zoom; auto framing resumes 4 s later. " +
                            "Edit the Text column to fix words. Style and framing come from Generate shorts.";
 
         // Three resizable columns: shorts + actions | player | transcript. Inside the left column the
@@ -1070,6 +1070,7 @@ public sealed class MainForm : Form
         _player.Status += s => Log("Player: " + s);
         _player.CaptionMoved += (x, y, t) => BeginInvoke(() => OnCaptionMoved(x, y, t));
         _player.CameraMoved += (x, y, z, t) => BeginInvoke(() => OnCameraMoved(x, y, z, t));
+        _player.MainShifted += y => BeginInvoke(() => OnMainShifted(y));
         _player.EditRequested += t => BeginInvoke(async () => { if (SegmentAt(t) is { } seg) await _player.BeginEditAsync(EnglishMode ? seg.English ?? seg.Text : seg.Text); });
         _player.TextEdited += (t, text) => BeginInvoke(() => OnCaptionTextEdited(t, text));
         _player.LineRequested += t => BeginInvoke(() => EditLineInGrid(t));
@@ -1180,8 +1181,8 @@ public sealed class MainForm : Form
         _keyframeClear.Click += async (_, _) =>
         {
             if (_editing is null) return;
-            if (!AppDialog.Confirm(this, "Clear camera and captions?", "All camera cuts and caption positions of this short are removed.", "Clear all", danger: true)) return;
-            _editing.Camera.Clear(); _editing.CaptionPositions.Clear();
+            if (!AppDialog.Confirm(this, "Clear camera and captions?", "All camera cuts, caption positions and the picture shift of this short are removed.", "Clear all", danger: true)) return;
+            _editing.Camera.Clear(); _editing.CaptionPositions.Clear(); _editing.MainOffsetY = 0;
             await PushKeyframesAsync();
         };
         _timeline.MouseDown += (_, _) => _timelineDragging = true;
@@ -2561,6 +2562,7 @@ public sealed class MainForm : Form
         if (_player.IsReady)
         {
             await _player.SetCameraAsync(_editing.Camera);
+            await _player.SetMainShiftAsync(_editing.MainOffsetY);
             await _player.SetCaptionPositionsAsync(_editing.CaptionPositions);
         }
     }
@@ -2574,6 +2576,9 @@ public sealed class MainForm : Form
             var rows = _editing.Camera.Select(k => (k.Time, "Camera", $"{k.X:F0}% / {k.Y:F0}%  zoom {k.Zoom:F2}x  ({k.Source})", (IKeyframe)k))
                 .Concat(_editing.CaptionPositions.Select(k => (k.Time, "Caption", $"{k.X:F0}% / {k.Y:F0}%", (IKeyframe)k)))
                 .OrderBy(r => r.Item1).ThenBy(r => r.Item2);
+            // the picture shift applies to the whole short, so it heads the list; Delete on it puts the picture back
+            if (Math.Abs(_editing.MainOffsetY) >= 0.5)
+                _keyframes.Items.Add(new ListViewItem(new[] { "all", "Picture", $"moved {Math.Abs(_editing.MainOffsetY):F0}% {(_editing.MainOffsetY > 0 ? "down" : "up")}" }) { Tag = "shift", ForeColor = Theme.CosmicBlue });
             foreach (var r in rows)
             {
                 var item = new ListViewItem(new[] { Fmt(r.Item1), r.Item2, r.Item3 }) { Tag = r.Item4 };
@@ -2583,7 +2588,7 @@ public sealed class MainForm : Form
         }
         _keyframes.EndUpdate();
         int cams = _editing?.Camera.Count ?? 0, caps = _editing?.CaptionPositions.Count ?? 0;
-        _keyframeHint.Text = _editing is null ? "" : $"{cams} camera cut{(cams == 1 ? "" : "s")}, {caps} caption pos.";
+        _keyframeHint.Text = _editing is null ? "" : $"{cams} camera cut{(cams == 1 ? "" : "s")}, {caps} caption pos." + (Math.Abs(_editing.MainOffsetY) >= 0.5 ? $", picture {(_editing.MainOffsetY > 0 ? "down" : "up")} {Math.Abs(_editing.MainOffsetY):F0}%" : "");
         // edits show on the scrub bar: camera cuts in violet, caption positions in blue
         if (_editing is not null && _editing.Duration > 0)
             _timeline.SetMarks(_editing.Camera.Where(k => k.Time > 0.05).Select(k => new TimelineBar.Mark(k.Time / _editing.Duration, Theme.Nebula, $"Camera cut at {Fmt(k.Time)} ({k.Source})"))
@@ -2592,9 +2597,22 @@ public sealed class MainForm : Form
         else _timeline.SetMarks(Array.Empty<TimelineBar.Mark>());
     }
 
+    /// <summary>The picture was dragged up or down on the preview: kept with the short and shown in the table.</summary>
+    private void OnMainShifted(double percent)
+    {
+        if (_editing is null) return;
+        _editing.MainOffsetY = Math.Abs(percent) < 0.5 ? 0 : Math.Round(percent, 1);
+        SaveProject();
+        RefreshKeyframeList();
+        _status.Text = _editing.MainOffsetY == 0 ? "Picture back in place."
+            : $"Picture moved {Math.Abs(_editing.MainOffsetY):F0}% {(_editing.MainOffsetY > 0 ? "down" : "up")}. Drag it again to adjust; the render does the same.";
+    }
+
     private async Task DeleteKeyframeAsync()
     {
-        if (_editing is null || _keyframes.SelectedItems.Count == 0 || _keyframes.SelectedItems[0].Tag is not IKeyframe k) return;
+        if (_editing is null || _keyframes.SelectedItems.Count == 0) return;
+        if (_keyframes.SelectedItems[0].Tag is string) { _editing.MainOffsetY = 0; await PushKeyframesAsync(); return; }
+        if (_keyframes.SelectedItems[0].Tag is not IKeyframe k) return;
         if (k is CameraKeyframe ck) _editing.Camera.Remove(ck);
         else if (k is CaptionKeyframe pk) _editing.CaptionPositions.Remove(pk);
         await PushKeyframesAsync();

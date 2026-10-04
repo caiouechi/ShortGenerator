@@ -149,6 +149,9 @@ public sealed class ShortSuggestion
 
     /// <summary>Camera cuts for the vertical crop (times relative to the clip start). Empty = centered.</summary>
     [JsonPropertyName("camera")] public List<CameraKeyframe> Camera { get; set; } = new();
+    /// <summary>How far the picture is moved down inside the frame, in percent of the frame height (negative = up).
+    /// Dragged on the preview, so the speakers sit below a split or a clip banner at the top; the strip it uncovers is black.</summary>
+    [JsonPropertyName("main_dy")] public double MainOffsetY { get; set; }
     /// <summary>Illustrations shown over the short (people, objects, places being talked about).</summary>
     [JsonPropertyName("overlays")] public List<ImageOverlay> Overlays { get; set; } = new();
     /// <summary>Make an English version of this short (captions + post text). Ticked by default.</summary>

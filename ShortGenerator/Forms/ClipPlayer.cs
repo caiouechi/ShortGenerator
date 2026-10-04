@@ -35,6 +35,8 @@ public sealed class ClipPlayer : UserControl
     public event Action<double>? LineRequested;
     /// <summary>User clicked an image layer on the video.</summary>
     public event Action<string>? LayerSelected;
+    /// <summary>User dragged the picture up or down: its shift in percent of the frame height (positive = down).</summary>
+    public event Action<double>? MainShifted;
     /// <summary>User moved (percent centre), resized (percent width) or rotated (degrees) an image layer.</summary>
     public event Action<string, double, double, double, double>? LayerChanged;
     /// <summary>User reframed a video clip (crop centre and zoom) or moved / resized its inset window.</summary>
@@ -130,6 +132,7 @@ public sealed class ClipPlayer : UserControl
             if (root.TryGetProperty("status", out var s)) Status?.Invoke(s.GetString() ?? "");
             if (root.TryGetProperty("pos", out var pos)) CaptionMoved?.Invoke(pos.GetProperty("x").GetDouble(), pos.GetProperty("y").GetDouble(), pos.GetProperty("t").GetDouble());
             if (root.TryGetProperty("camera", out var cam)) CameraMoved?.Invoke(cam.GetProperty("x").GetDouble(), cam.GetProperty("y").GetDouble(), cam.GetProperty("zoom").GetDouble(), cam.GetProperty("t").GetDouble());
+            if (root.TryGetProperty("shift", out var sh)) MainShifted?.Invoke(sh.GetProperty("y").GetDouble());
             if (root.TryGetProperty("editAt", out var ea)) EditRequested?.Invoke(ea.GetDouble());
             if (root.TryGetProperty("lineAt", out var la)) LineRequested?.Invoke(la.GetDouble());
             if (root.TryGetProperty("ovSel", out var os)) LayerSelected?.Invoke(os.GetString() ?? "");
@@ -165,6 +168,9 @@ public sealed class ClipPlayer : UserControl
     /// <summary>Caption anchors over time (relative to the clip start). Empty = style default placement.</summary>
     public Task SetCaptionPositionsAsync(List<CaptionKeyframe> positions) =>
         Exec($"setCaptionPositions({JsonSerializer.Serialize(positions.OrderBy(k => k.Time).Select(k => new { t = k.Time, x = k.X, y = k.Y }))})");
+
+    /// <summary>How far the picture sits down inside the frame (percent of its height); the preview matches the render.</summary>
+    public Task SetMainShiftAsync(double percent) => Exec($"setMainShift({J(percent)})");
 
     /// <summary>Camera edit mode: shows the whole source frame with a draggable 9:16 box (scroll to zoom).</summary>
     public Task SetCameraModeAsync(bool on) => Exec($"setCameraMode({(on ? "true" : "false")})");
@@ -265,6 +271,9 @@ public sealed class ClipPlayer : UserControl
 const v=document.getElementById('v'),bg=document.getElementById('bg'),frame=document.getElementById('frame'),cap=document.getElementById('cap'),cam=document.getElementById('cam'),camHint=document.getElementById('camhint');
 let range={s:0,e:0},chunks=[],st=null,lastIdx=-1,lastPost=0,drag=null;
 let camera=[],capPos=[],cameraMode=false,camDrag=null,liveCam=null;   // liveCam: box being edited (percent center + zoom)
+let mainShift=0,shiftDrag=null,suppressClick=false;                    // mainShift: the picture moved down, % of the frame height
+function setMainShift(y){mainShift=y||0;layout();render(true);}
+function shiftPx(){return cameraMode?0:mainShift/100*frame.clientHeight;}
 function post(o){window.chrome&&window.chrome.webview&&window.chrome.webview.postMessage(o);}
 function load(src,s,e){range={s,e};v.src=src;bg.src=src;v.currentTime=s;bg.currentTime=s;liveCam=null;layout();}
 function setRange(s,e){range={s,e};if(v.currentTime<s||v.currentTime>e){seek(s);}}
@@ -299,7 +308,7 @@ function layout(){
   cam.style.display=cameraMode?'block':'none';camHint.style.display=cameraMode?'block':'none';
   cap.style.display=cameraMode?'none':'block';
   // default video fit; applyCamera() overrides for vertical crop with camera cuts
-  v.style.left='0';v.style.top='0';v.style.width='100%';v.style.height='100%';
+  v.style.left='0';v.style.top=shiftPx()+'px';v.style.width='100%';v.style.height='100%';
   v.style.objectFit=(!cameraMode&&crop==='VerticalCrop')?'cover':'contain';
   if(!st)return;
   const scale=h>=w?h/1920:(h/1080)*0.72;
@@ -334,6 +343,7 @@ function applyCamera(t){
   const cx=k.x/100*dw,cy=k.y/100*dh;
   let left=fw/2-cx,top=fh/2-cy;
   left=Math.min(0,Math.max(fw-dw,left));top=Math.min(0,Math.max(fh-dh,top));
+  top+=shiftPx();
   v.style.objectFit='fill';v.style.width=dw+'px';v.style.height=dh+'px';v.style.left=left+'px';v.style.top=top+'px';
 }
 
@@ -482,7 +492,16 @@ window.addEventListener('resize',styleLayers);
 
 // ---- click the picture to play / pause; double-click the caption to edit its words ----
 const editBox=document.getElementById('edit'),editText=editBox.querySelector('textarea');let editT=null;
-document.getElementById('wrap').addEventListener('click',e=>{if(cameraMode||editT!==null)return;if(cap.contains(e.target)||editBox.contains(e.target)||cam.contains(e.target)||ovl.contains(e.target))return;toggle();});
+const wrapEl=document.getElementById('wrap');
+wrapEl.addEventListener('click',e=>{if(suppressClick){suppressClick=false;return;}if(cameraMode||editT!==null)return;if(cap.contains(e.target)||editBox.contains(e.target)||cam.contains(e.target)||ovl.contains(e.target))return;toggle();});
+// drag the picture itself up or down: moves it inside the frame (the render does the same), e.g. below a banner at the top
+wrapEl.addEventListener('pointerdown',e=>{if(cameraMode||editT!==null||e.button!==0)return;if(cap.contains(e.target)||editBox.contains(e.target)||cam.contains(e.target)||ovl.contains(e.target))return;
+  shiftDrag={y0:e.clientY,s0:mainShift,moved:false};wrapEl.setPointerCapture(e.pointerId);});
+wrapEl.addEventListener('pointermove',e=>{const g=shiftDrag;if(!g)return;const fh=frame.clientHeight;if(fh<=0)return;
+  if(Math.abs(e.clientY-g.y0)>4)g.moved=true;if(!g.moved)return;
+  mainShift=Math.max(-60,Math.min(60,g.s0+(e.clientY-g.y0)/fh*100));wrapEl.style.cursor='ns-resize';layout();render(true);});
+const endShift=e=>{const g=shiftDrag;if(!g)return;shiftDrag=null;wrapEl.style.cursor='';if(g.moved){suppressClick=true;post({shift:{y:+mainShift.toFixed(1)}});}};
+wrapEl.addEventListener('pointerup',endShift);wrapEl.addEventListener('pointercancel',endShift);
 // right-click the caption: the host selects that line in its transcript table, ready to edit
 cap.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();if(cameraMode)return;pause();post({lineAt:v.currentTime});});
 cap.addEventListener('dblclick',e=>{if(cameraMode)return;e.stopPropagation();pause();editT=v.currentTime;post({editAt:editT});});
