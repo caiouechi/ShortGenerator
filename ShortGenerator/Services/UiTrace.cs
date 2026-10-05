@@ -28,16 +28,21 @@ public static class UiTrace
     {
         _hook = (code, wParam, lParam) =>
         {
-            if (code >= 0)
+            // a hook procedure is called from native code: an exception escaping it would end the process
+            try
             {
-                // CWPSTRUCT: lParam, wParam, message, hwnd
-                int msg = Marshal.ReadInt32(lParam, 2 * IntPtr.Size);
-                if (msg == WM_SHOWWINDOW && Marshal.ReadIntPtr(lParam, IntPtr.Size) != IntPtr.Zero)
+                if (code >= 0)
                 {
-                    var hwnd = Marshal.ReadIntPtr(lParam, 2 * IntPtr.Size + 8);
-                    if (Control.FromHandle(hwnd) is Form form) Attach(form);
+                    // CWPSTRUCT: lParam, wParam, message, hwnd
+                    int msg = Marshal.ReadInt32(lParam, 2 * IntPtr.Size);
+                    if (msg == WM_SHOWWINDOW && Marshal.ReadIntPtr(lParam, IntPtr.Size) != IntPtr.Zero)
+                    {
+                        var hwnd = Marshal.ReadIntPtr(lParam, 2 * IntPtr.Size + 8);
+                        if (Control.FromHandle(hwnd) is Form form) Attach(form);
+                    }
                 }
             }
+            catch (Exception ex) { AppLog.Error("UiTrace hook", ex); }
             return CallNextHookEx(_hookHandle, code, wParam, lParam);
         };
         _hookHandle = SetWindowsHookExW(WH_CALLWNDPROC, _hook, IntPtr.Zero, GetCurrentThreadId());
@@ -45,6 +50,11 @@ public static class UiTrace
 
     /// <summary>One line in the log, "UI <what>"; the same line twice within a second is written once.</summary>
     public static void Log(string what)
+    {
+        try { LogCore(what); } catch { }
+    }
+
+    private static void LogCore(string what)
     {
         var now = DateTime.Now;
         if (what == _last && (now - _lastAt).TotalSeconds < 1) return;

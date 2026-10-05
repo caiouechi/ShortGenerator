@@ -43,6 +43,7 @@ public static class NativeFaultLog
                 AppLog.Write($"FIRST-CHANCE {ex.GetType().FullName}{code}: {ex.Message}{Environment.NewLine}{Environment.StackTrace}");
             };
         if (!on) return;
+        _uiThread = GetCurrentThreadId();
         _handler = Handler;
         AddVectoredExceptionHandler(0, _handler);
     }
@@ -85,8 +86,15 @@ public static class NativeFaultLog
 
     [ThreadStatic] private static bool t_inHandler;
 
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    private static uint _uiThread;
+
     private static int Handler(IntPtr pointers)
     {
+        // Only the UI thread is watched: that is where a native raise becomes "External component has thrown an
+        // exception". Worker threads of UI Automation and RPC raise and catch C++ exceptions of their own all the
+        // time, and taking a managed stack trace there, in the middle of their unwinding, is not safe.
+        if (GetCurrentThreadId() != _uiThread) return 0;
         if (t_inHandler) return 0; // an exception raised while logging one (walking a stack can) is not logged again
         t_inHandler = true;
         try

@@ -40,16 +40,21 @@ internal static class UiaGuard
         if (Environment.GetEnvironmentVariable("SHORTGEN_UIA") == "1") return;
         _hook = (code, wParam, lParam) =>
         {
-            if (code >= 0)
+            // a hook procedure is called from native code: an exception escaping it would end the process
+            try
             {
-                // CWPSTRUCT: lParam, wParam, message, hwnd
-                int msg = Marshal.ReadInt32(lParam, 2 * IntPtr.Size);
-                if (msg == WM_GETOBJECT && unchecked((int)(long)Marshal.ReadIntPtr(lParam)) == UiaRootObjectId)
+                if (code >= 0)
                 {
-                    var hwnd = Marshal.ReadIntPtr(lParam, 2 * IntPtr.Size + 8);
-                    if (Control.FromHandle(hwnd) is { } control) Protect(control);
+                    // CWPSTRUCT: lParam, wParam, message, hwnd
+                    int msg = Marshal.ReadInt32(lParam, 2 * IntPtr.Size);
+                    if (msg == WM_GETOBJECT && unchecked((int)(long)Marshal.ReadIntPtr(lParam)) == UiaRootObjectId)
+                    {
+                        var hwnd = Marshal.ReadIntPtr(lParam, 2 * IntPtr.Size + 8);
+                        if (Control.FromHandle(hwnd) is { } control) Protect(control);
+                    }
                 }
             }
+            catch (Exception ex) { Services.AppLog.Error("UiaGuard hook", ex); }
             return CallNextHookEx(_hookHandle, code, wParam, lParam);
         };
         _hookHandle = SetWindowsHookExW(WH_CALLWNDPROC, _hook, IntPtr.Zero, GetCurrentThreadId());
@@ -61,9 +66,12 @@ internal static class UiaGuard
         if (_guarded.TryGetValue(control, out _)) return;
         var guard = new Guard();
         _guarded.Add(control, guard);
-        if (control.IsHandleCreated) guard.AssignHandle(control.Handle);
-        control.HandleCreated += (_, _) => guard.AssignHandle(control.Handle);
-        control.HandleDestroyed += (_, _) => guard.ReleaseHandle();
+        // the guard may be asked for while the handle is still being created (a client asks as soon as the window
+        // exists), so HandleCreated can follow for the same handle: never assign twice
+        void Assign() { if (guard.Handle != control.Handle) { if (guard.Handle != IntPtr.Zero) guard.ReleaseHandle(); guard.AssignHandle(control.Handle); } }
+        if (control.IsHandleCreated) Assign();
+        control.HandleCreated += (_, _) => Assign();
+        control.HandleDestroyed += (_, _) => { if (guard.Handle != IntPtr.Zero) guard.ReleaseHandle(); };
         control.ControlAdded += (_, e) => Protect(e.Control);
         foreach (Control child in control.Controls) Protect(child);
     }
