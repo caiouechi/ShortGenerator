@@ -283,7 +283,7 @@ public sealed class AppDialog : Form
                 Kind.Error => (ColorTranslator.FromHtml("#FDECEC"), Theme.Danger, ""),
                 Kind.Success => (ColorTranslator.FromHtml("#E5F6EE"), Theme.Success, ""),
                 Kind.Question => (Theme.SurfaceSoft, Theme.Purple, ""),
-                _ => (ColorTranslator.FromHtml("#EAF0FF"), Theme.CosmicBlue, ""),
+                _ => (Theme.AccentTint, Theme.Accent, ""),
             };
             using (var b = new SolidBrush(fill)) g.FillEllipse(b, 0, 0, Width - 1, Height - 1);
             using var f = Theme.IconFont(15f);
