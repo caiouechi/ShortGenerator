@@ -76,7 +76,7 @@ public sealed class MainForm : Form
     private readonly FancyButton _copyCover = new() { Text = "Copy image", Width = 150, Glyph = "\uE8C8" };
     private readonly FancyButton _copyCoverPrompt = new() { Text = "Copy thumbnail prompt", Width = 150 };
     private readonly FancyButton _generateCover = new() { Text = "Higgsfield cover", Width = 150, Glyph = "\uE8A9", Visible = HiggsfieldClient.IsConfigured || System.Diagnostics.Debugger.IsAttached };
-    private readonly CheckBox _cameraMode = new() { Text = "Camera mode", AutoSize = false, Appearance = Appearance.Button, TextAlign = ContentAlignment.MiddleCenter, Width = 110, Height = 28 };
+    private readonly FancyToggle _cameraMode = new() { Text = "Camera mode", Width = 110 };
     private readonly FancyButton _autoCamera = new() { Text = "Auto camera (faces)", Width = 185 };
     private readonly FancyButton _changeCamera = new() { Text = "Change camera", Width = 135 };
     /// <summary>Draws the box the auto camera keeps to (so a screen in the background is left out).</summary>
@@ -409,24 +409,19 @@ public sealed class MainForm : Form
     private void ApplyTheme()
     {
         foreach (var b in new[] { _download, _downloadTranscribe, _transcribe, _analyze, _generate, _continueToGenerate, _libraryTranscribe, _gptBuild, _gptCopy, _gptImport, _playPause, _renderPreview }) Theme.Primary(b);
-        // the editor's white buttons carry the Higgsfield icon set (gradient buttons keep their white glyphs)
+        // the vector icon set, one thin stroke style everywhere; filled buttons draw it in white
         foreach (var (b, icon) in new (FancyButton, string)[]
         {
-            (_autoCamera, "auto-camera"), (_changeCamera, "change-camera"), (_setCover, "use-frame"), (_pickCoverImage, "choose-image"),
-            (_clearCover, "reset"), (_copyCover, "copy-image"), (_copyCoverPrompt, "copy-prompt"), (_generateCover, "ai-magic"),
-            (_keyframeDelete, "delete"), (_keyframeClear, "clear"), (_removeLayer, "delete"),
-            (_addLayer, "choose-image"), (_pasteLayer, "copy-image"), (_segDelete, "delete"), (_retranslate, "ai-magic"),
-            (_segPlay, "render"), (_renderClear, "clear"), (_addVideoLayer, "use-frame"), (_addSplit, "camera-mode"), (_autoSplit, "auto-camera"), (_focusArea, "auto-camera"),
+            (_autoCamera, "camera-auto"), (_changeCamera, "camera-switch"), (_setCover, "frame"), (_pickCoverImage, "image-add"),
+            (_clearCover, "reset"), (_copyCover, "copy"), (_copyCoverPrompt, "copy-text"), (_generateCover, "sparkles"),
+            (_keyframeDelete, "trash"), (_keyframeClear, "clear"), (_removeLayer, "trash"),
+            (_addLayer, "image-add"), (_pasteLayer, "paste"), (_segDelete, "trash"), (_retranslate, "translate"),
+            (_segPlay, "play"), (_renderClear, "clear"), (_addVideoLayer, "video"), (_addSplit, "split"), (_autoSplit, "sparkles"), (_focusArea, "focus"),
+            (_cameraMode, "camera"), (_renderPreview, "play"), (_playPause, "play"),
         })
-            b.Picture = Theme.Icon(icon);
+            b.IconName = icon;
         // icon + label must fit (never a truncated label); measured once every label is final
         Load += (_, _) => FitPictureButtons(this);
-        if (Theme.Icon("camera-mode") is { } modeIcon)
-        {
-            _cameraMode.Image = new Bitmap(modeIcon, new Size(20, 20));
-            _cameraMode.TextImageRelation = TextImageRelation.ImageBeforeText;
-            _cameraMode.ImageAlign = ContentAlignment.MiddleCenter;
-        }
         Theme.Apply(this);
         _videoInfo.Font = Theme.Body(10f);
         _videoInfo.ForeColor = Theme.TextSecondary;
@@ -440,22 +435,13 @@ public sealed class MainForm : Form
         _summary.ForeColor = Theme.TextMuted;
         _summary.BackColor = Theme.Elevated;
         _preview.BackColor = Theme.DarkBg;
-        _cameraMode.BackColor = Theme.Elevated;
-        _cameraMode.ForeColor = Theme.TextSecondary;
-        _cameraMode.FlatStyle = FlatStyle.Flat;
-        _cameraMode.FlatAppearance.BorderColor = Theme.BorderStrong;
-        _cameraMode.FlatAppearance.CheckedBackColor = Theme.Nebula;
         _generate.Font = Theme.Body(10f, FontStyle.Bold);
         _generate.Height = 36; _generate.Width = 210; _generate.Glyph = "";
         _continueToGenerate.Glyph = ""; _continueToGenerate.Font = Theme.Body(10f, FontStyle.Bold);
-        _renderPreview.Glyph = "";
-        _renderPreview.Glyph = "";
         _transcribe.Glyph = "";
         _analyze.Glyph = "";
         _gptCopy.Glyph = "";
-        _changeCamera.Glyph = "\uE89E";
         _autoCamera.Glyph = "";
-        _playPause.Glyph = "";
         UpdateNavStates();
     }
 
@@ -1072,7 +1058,7 @@ public sealed class MainForm : Form
         _editClips.SelectedIndexChanged += async (_, _) => await LoadClipInEditorAsync();
         _playPause.Click += async (_, _) => await _player.TogglePlayAsync();
         // the button shows what a click does: Play with the play icon while paused, Pause with the pause icon while playing
-        _player.PlayingChanged += playing => { _playPause.Text = playing ? "Pause" : "Play"; _playPause.Glyph = playing ? "" : ""; };
+        _player.PlayingChanged += playing => { _playPause.Text = playing ? "Pause" : "Play"; _playPause.IconName = playing ? "pause" : "play"; };
         _player.TimeChanged += OnPlayerTime;
         _player.Status += s => Log("Player: " + s);
         _player.CaptionMoved += (x, y, t) => BeginInvoke(() => OnCaptionMoved(x, y, t));
@@ -1133,8 +1119,6 @@ public sealed class MainForm : Form
         _editClips.KeyDown += (_, e) => { if (e.KeyCode == Keys.Delete) { e.Handled = true; RemoveEditingFromSelection(); } };
         _cameraMode.CheckedChanged += async (_, _) =>
         {
-            _cameraMode.BackColor = _cameraMode.Checked ? Theme.Nebula : Theme.Elevated;
-            _cameraMode.ForeColor = _cameraMode.Checked ? Color.White : Theme.Heading;
             if (_cameraMode.Checked) await _player.PauseAsync();
             await _player.SetCameraModeAsync(_cameraMode.Checked);
         };
@@ -3609,8 +3593,8 @@ public sealed class MainForm : Form
     {
         foreach (Control c in root.Controls)
         {
-            if (c is FancyButton { Picture: not null } b && b.Dock != DockStyle.Fill)
-                b.Width = Math.Max(b.Width, TextRenderer.MeasureText(b.Text, b.Font).Width + 24 + 8 + 30);
+            if (c is FancyButton b && (b.Picture is not null || b.IconName is not null) && b.Dock != DockStyle.Fill && !b.AutoSize)
+                b.Width = Math.Max(b.Width, TextRenderer.MeasureText(b.Text, b.Font).Width + 20 + 8 + 30);
             FitPictureButtons(c);
         }
     }

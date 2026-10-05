@@ -159,8 +159,8 @@ public sealed class SideNav : Control
                 }
                 if (sel)
                 {
-                    using var accent = new LinearGradientBrush(new Rectangle(r.X, r.Y, 3, r.Height), Theme.CosmicBlue, Theme.Nebula, 90f);
-                    using var bar = FancyButton.Rounded(new Rectangle(r.X, r.Y + 14, 3, r.Height - 28), 1);
+                    using var accent = new SolidBrush(Theme.Accent);
+                    using var bar = FancyButton.Rounded(new Rectangle(r.X, r.Y + 16, 3, r.Height - 32), 1);
                     g.FillPath(accent, bar);
                 }
             }
@@ -186,9 +186,7 @@ public sealed class SideNav : Control
             g.FillPath(fill, fpath);
         }
         var gear = new Rectangle(fr.X + 16, fr.Y + (fr.Height - 24) / 2, 24, 24);
-        using (var ring = new Pen(_hover == FooterIndex ? Theme.Purple : Theme.BorderStrong, 1f)) g.DrawEllipse(ring, gear);
-        using (var gf = Theme.IconFont(9.5f))
-            TextRenderer.DrawText(g, "", gf, gear, _hover == FooterIndex ? Theme.PurpleDeep : Theme.TextSecondary, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+        Glyphs.Draw(g, "settings", gear, _hover == FooterIndex ? Theme.AccentDeep : Theme.TextMuted, 0.9f);
         using (var sf = Theme.HeadingFont(9.5f))
             TextRenderer.DrawText(g, "Settings", sf, new Rectangle(gear.Right + 14, fr.Y, fr.Right - gear.Right - 24, fr.Height),
                 _hover == FooterIndex ? Theme.PurpleDeep : Theme.TextSecondary, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
@@ -196,22 +194,33 @@ public sealed class SideNav : Control
             TextRenderer.DrawText(g, "galiluna.com", ff, new Rectangle(0, Height - 22, Width, 16), Theme.TextMuted, TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
     }
 
-    /// <summary>Done: gradient disc with a check. Ready: thin violet ring. Pending: faint ring. Numbers stay small.</summary>
+    /// <summary>
+    /// Done: a lavender disc with a purple check. The current step: a filled purple disc with its number in white.
+    /// Ready: a thin purple ring. Pending: a faint ring and a muted number. One size, one weight, no gradients.
+    /// </summary>
     private static void DrawBadge(Graphics g, Rectangle badge, StepState state, bool selected, string number)
     {
-        if (state == StepState.Done)
+        if (selected)
         {
-            using var cb = new LinearGradientBrush(badge, Theme.CosmicBlue, Theme.Nebula, 45f);
-            g.FillEllipse(cb, badge);
-            using var check = Theme.IconFont(8.5f);
-            TextRenderer.DrawText(g, "", check, badge, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            using var fill = new SolidBrush(Theme.Accent);
+            g.FillEllipse(fill, badge);
+            using var nf = Theme.HeadingFont(8.5f);
+            TextRenderer.DrawText(g, number, nf, badge, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             return;
         }
-        var ringColor = state == StepState.Ready ? Theme.Purple : selected ? Theme.BorderStrong : Theme.Border;
+        if (state == StepState.Done)
+        {
+            using var disc = new SolidBrush(Theme.AccentTintStrong);
+            g.FillEllipse(disc, badge);
+            var inner = badge; inner.Inflate(-5, -5);
+            Glyphs.Draw(g, "check", inner, Theme.AccentDeep, 0.9f);
+            return;
+        }
+        var ringColor = state == StepState.Ready ? Theme.Accent : Theme.BorderStrong;
         using var ring = new Pen(ringColor, state == StepState.Ready ? 1.5f : 1f);
         g.DrawEllipse(ring, badge);
-        using var nf = Theme.HeadingFont(8.5f);
-        var numColor = selected ? Theme.Heading : state == StepState.Ready ? Theme.PurpleDeep : Theme.TextMuted;
-        TextRenderer.DrawText(g, number, nf, badge, numColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+        using var numFont = Theme.HeadingFont(8.5f);
+        var numColor = state == StepState.Ready ? Theme.AccentDeep : Theme.TextMuted;
+        TextRenderer.DrawText(g, number, numFont, badge, numColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }
 }

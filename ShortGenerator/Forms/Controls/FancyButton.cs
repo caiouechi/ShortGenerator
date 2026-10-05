@@ -7,15 +7,17 @@ namespace ShortGenerator.Forms.Controls;
 public enum ButtonKind { Primary, Ghost, Subtle, Danger }
 
 /// <summary>
-/// Owner-drawn button in the Galiluna language: rounded, gradient primary with a soft glow on hover,
-/// quiet ghost / subtle variants for secondary actions, optional Segoe Fluent icon glyph.
+/// The app's button. One quiet language for every action: a soft bright purple fill for the one thing to do on a
+/// page, white with a hairline border for everything else, a tint instead of a border for the quietest ones, and a
+/// rose tint for destructive actions. Icons are thin vector strokes in the state colour (see <see cref="Glyphs"/>).
+/// Hover lifts with a tint and a lavender border; pressing settles the fill; nothing glows, nothing shouts.
 /// Drop-in replacement for Button (same events and properties).
 /// </summary>
 public class FancyButton : Button
 {
     private bool _hover, _down;
     private ButtonKind _kind = ButtonKind.Ghost;
-    private string? _glyph;
+    private string? _glyph, _icon;
 
     public FancyButton()
     {
@@ -23,7 +25,7 @@ public class FancyButton : Button
         FlatStyle = FlatStyle.Flat;
         FlatAppearance.BorderSize = 0;
         BackColor = Color.Transparent;
-        Height = 34;
+        Height = 36;
         Margin = new Padding(0, 0, 8, 0); // consistent 8 px gap between neighbouring buttons in toolbars
         Cursor = Cursors.Hand;
         Font = Theme.Body(9.5f, FontStyle.Bold);
@@ -33,17 +35,24 @@ public class FancyButton : Button
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public ButtonKind Kind { get => _kind; set { _kind = value; Invalidate(); } }
 
-    /// <summary>Optional icon glyph (Segoe Fluent Icons / Segoe MDL2 Assets code point) drawn before the text.</summary>
+    /// <summary>Optional icon glyph (Segoe Fluent Icons code point) drawn before the text, when no vector icon is set.</summary>
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string? Glyph { get => _glyph; set { _glyph = value; Invalidate(); } }
 
+    /// <summary>The vector icon drawn before the text, one of <see cref="Glyphs.Names"/>; takes the state colour.</summary>
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-    public int Radius { get; set; } = 10;
+    public string? IconName { get => _icon; set { _icon = value; Invalidate(); } }
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public int Radius { get; set; } = 11;
 
     private Image? _picture;
-    /// <summary>Optional colour icon (the Higgsfield set) drawn before the text instead of the glyph; faded when disabled.</summary>
+    /// <summary>Optional bitmap icon drawn before the text (kept for pictures that are not in the vector set).</summary>
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Image? Picture { get => _picture; set { _picture = value; Invalidate(); } }
+
+    /// <summary>Toggle buttons paint their "on" state like a selected chip.</summary>
+    protected virtual bool IsOn => false;
 
     protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { _hover = false; _down = false; Invalidate(); base.OnMouseLeave(e); }
@@ -62,92 +71,112 @@ public class FancyButton : Button
 
         var rect = new Rectangle(0, 0, Width - 1, Height - 1);
         using var path = Rounded(rect, Radius);
+        bool on = IsOn;
 
+        Color fore;
         switch (_kind)
         {
             case ButtonKind.Primary:
+            {
                 if (!Enabled)
                 {
-                    using var dis = new SolidBrush(Color.FromArgb(70, Theme.Purple));
+                    using var dis = new SolidBrush(Theme.AccentDisabled);
                     g.FillPath(dis, path);
+                    fore = Color.White;
+                    break;
                 }
-                else
-                {
-                    if (_hover && !_down)
-                    {
-                        // soft glow
-                        using var glowPath = Rounded(new Rectangle(-2, -1, Width + 3, Height + 3), Radius + 2);
-                        using var glow = new SolidBrush(Color.FromArgb(60, Theme.Nebula));
-                        g.FillPath(glow, glowPath);
-                    }
-                    var c1 = _down ? Theme.PurpleDeep : Theme.CosmicBlue;
-                    var c2 = _down ? Theme.Purple : (_hover ? Theme.Nebula : Theme.Purple);
-                    using var grad = new LinearGradientBrush(rect, c1, c2, 20f);
+                // a soft shadow under the button, a touch deeper on hover, so it floats rather than glows
+                using (var shadowPath = Rounded(new Rectangle(1, _hover ? 3 : 2, Width - 3, Height - 2), Radius))
+                using (var shadow = new SolidBrush(Color.FromArgb(_hover ? 70 : 45, Theme.Accent)))
+                    g.FillPath(shadow, shadowPath);
+                var top = _down ? Theme.AccentPressed : _hover ? Theme.AccentHover : Theme.Accent;
+                var bottom = _down ? Theme.AccentPressed : _hover ? Theme.Accent : Theme.AccentDeep;
+                using (var grad = new LinearGradientBrush(new Rectangle(0, 0, Math.Max(1, Width), Math.Max(1, Height)), top, bottom, 90f))
                     g.FillPath(grad, path);
-                    using var hi = new Pen(Color.FromArgb(_hover ? 90 : 50, 255, 255, 255));
+                using (var hi = new Pen(Color.FromArgb(_hover ? 70 : 45, 255, 255, 255)))
                     g.DrawPath(hi, path);
-                }
+                fore = Color.White;
                 break;
-
+            }
             case ButtonKind.Danger:
-                using (var b = new SolidBrush(Enabled ? (_hover ? Color.FromArgb(230, 60, 80) : Theme.Danger) : Color.FromArgb(70, Theme.Danger))) g.FillPath(b, path);
+            {
+                // rose tint: clear about what it does, without a red slab
+                var fill = !Enabled ? Theme.DangerTint : _down ? Theme.DangerTintStrong : _hover ? Theme.DangerTintStrong : Theme.DangerTint;
+                using (var b = new SolidBrush(fill)) g.FillPath(b, path);
+                using (var p = new Pen(_hover && Enabled ? Theme.Danger : Theme.DangerBorder)) g.DrawPath(p, path);
+                fore = Enabled ? Theme.Danger : Color.FromArgb(120, Theme.Danger);
                 break;
-
+            }
             case ButtonKind.Subtle:
-                using (var b = new SolidBrush(_down ? Theme.SelectionBg : (_hover ? Theme.SurfaceSoft : Theme.Elevated))) g.FillPath(b, path);
-                using (var p = new Pen(_hover ? Theme.BorderHover : Theme.Border)) g.DrawPath(p, path);
+            {
+                if (_hover || _down || on)
+                {
+                    using var b = new SolidBrush(_down || on ? Theme.AccentTintStrong : Theme.AccentTint);
+                    g.FillPath(b, path);
+                }
+                fore = Enabled ? (_hover || _down || on ? Theme.AccentDeep : Theme.TextSecondary) : Theme.TextMuted;
                 break;
-
-            default: // Ghost: white surface, lavender tint on hover, text stays dark for contrast
-                using (var b = new SolidBrush(_down ? Theme.SelectionBg : (_hover ? Theme.SurfaceSoft : Theme.Elevated))) g.FillPath(b, path);
-                using (var p = new Pen(_hover ? Theme.Purple : Theme.BorderStrong, _hover ? 1.4f : 1f)) g.DrawPath(p, path);
+            }
+            default: // Ghost: white, hairline border; lavender tint and border on hover; a selected chip when on
+            {
+                var fill = on ? Theme.AccentTintStrong : _down ? Theme.AccentTintStrong : _hover ? Theme.AccentTint : Theme.Elevated;
+                using (var b = new SolidBrush(fill)) g.FillPath(b, path);
+                var edge = on ? Theme.Accent : _hover && Enabled ? Theme.AccentBorder : Theme.Border;
+                using (var p = new Pen(edge, on ? 1.4f : 1f)) g.DrawPath(p, path);
+                fore = Enabled ? (on || _hover || _down ? Theme.AccentDeep : Theme.Heading) : Theme.TextMuted;
                 break;
+            }
         }
 
-        var fore = _kind is ButtonKind.Primary or ButtonKind.Danger
-            ? (Enabled ? Color.White : Color.FromArgb(200, 255, 255, 255))
-            : (Enabled ? (_hover || _down ? Theme.PurpleDeep : Theme.Heading) : Theme.TextMuted);
-
-        // layout: [glyph] text, centered
+        // layout: [icon] text, centred as one group
         var textSize = TextRenderer.MeasureText(g, Text, Font, Size.Empty, TextFormatFlags.NoPadding);
-        int glyphW = 0;
+        int iconW = 0;
         Font? glyphFont = null;
-        int pic = _picture is null ? 0 : Math.Clamp(Height - 14, 16, 24);
-        if (pic > 0) glyphW = pic + 8;
+        int iconSize = Math.Clamp(Height - 16, 16, 20);
+        bool hasText = !string.IsNullOrEmpty(Text);
+        int gap = hasText ? 8 : 0;
+        if (_icon is not null || _picture is not null) iconW = iconSize + gap;
         else if (!string.IsNullOrEmpty(_glyph))
         {
-            glyphFont = Theme.IconFont(Font.Size + 2);
-            glyphW = TextRenderer.MeasureText(g, _glyph, glyphFont, Size.Empty, TextFormatFlags.NoPadding).Width + 8;
+            glyphFont = Theme.IconFont(Font.Size + 1.5f);
+            iconW = TextRenderer.MeasureText(g, _glyph, glyphFont, Size.Empty, TextFormatFlags.NoPadding).Width + gap;
         }
-        int total = textSize.Width + glyphW;
+        int total = (hasText ? textSize.Width : 0) + iconW;
         int x = Math.Max(6, (Width - total) / 2);
-        if (pic > 0)
+        var iconColor = Enabled ? (_kind == ButtonKind.Primary ? Color.White : _kind == ButtonKind.Danger ? Theme.Danger : (on || _hover || _down ? Theme.AccentDeep : Theme.Accent)) : Theme.TextMuted;
+        if (_icon is not null)
         {
-            var dest = new Rectangle(x, (Height - pic) / 2, pic, pic);
+            Glyphs.Draw(g, _icon, new Rectangle(x, (Height - iconSize) / 2, iconSize, iconSize), iconColor);
+            x += iconW;
+        }
+        else if (_picture is not null)
+        {
+            var dest = new Rectangle(x, (Height - iconSize) / 2, iconSize, iconSize);
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            if (Enabled) g.DrawImage(_picture!, dest);
+            if (Enabled) g.DrawImage(_picture, dest);
             else
             {
                 using var faded = new System.Drawing.Imaging.ImageAttributes();
                 faded.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = 0.35f });
-                g.DrawImage(_picture!, dest, 0, 0, _picture!.Width, _picture.Height, GraphicsUnit.Pixel, faded);
+                g.DrawImage(_picture, dest, 0, 0, _picture.Width, _picture.Height, GraphicsUnit.Pixel, faded);
             }
-            x += glyphW;
+            x += iconW;
         }
         else if (glyphFont is not null)
         {
-            TextRenderer.DrawText(g, _glyph, glyphFont, new Rectangle(x, 0, glyphW - 8, Height), fore,
+            TextRenderer.DrawText(g, _glyph, glyphFont, new Rectangle(x, 0, iconW - gap, Height), iconColor,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
-            x += glyphW;
+            x += iconW;
             glyphFont.Dispose();
         }
-        TextRenderer.DrawText(g, Text, Font, new Rectangle(x, 0, Width - x - 4, Height), fore,
-            TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+        if (hasText)
+            TextRenderer.DrawText(g, Text, Font, new Rectangle(x, 0, Width - x - 4, Height), fore,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
 
         if (Focused && ShowFocusCues)
         {
-            using var fp = new Pen(Color.FromArgb(120, Theme.Nebula)) { DashStyle = DashStyle.Dot };
+            using var fp = new Pen(Color.FromArgb(140, Theme.Accent)) { DashStyle = DashStyle.Dot };
             using var fpath = Rounded(new Rectangle(2, 2, Width - 5, Height - 5), Radius - 2);
             g.DrawPath(fp, fpath);
         }
@@ -156,12 +185,37 @@ public class FancyButton : Button
     public static GraphicsPath Rounded(Rectangle r, int radius)
     {
         var p = new GraphicsPath();
-        int d = Math.Max(1, radius * 2);
+        int d = Math.Max(1, Math.Min(radius * 2, Math.Min(r.Width, r.Height)));
         p.AddArc(r.X, r.Y, d, d, 180, 90);
         p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
         p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
         p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
         p.CloseFigure();
         return p;
+    }
+}
+
+/// <summary>
+/// A button that stays pressed: a mode switch (Camera mode). Looks like a ghost button; when on, a lavender chip
+/// with the purple border. Same Checked / CheckedChanged surface as a CheckBox, so callers need no other change.
+/// </summary>
+public sealed class FancyToggle : FancyButton
+{
+    private bool _checked;
+    public event EventHandler? CheckedChanged;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool Checked
+    {
+        get => _checked;
+        set { if (_checked == value) return; _checked = value; Invalidate(); CheckedChanged?.Invoke(this, EventArgs.Empty); }
+    }
+
+    protected override bool IsOn => _checked;
+
+    protected override void OnClick(EventArgs e)
+    {
+        Checked = !Checked;
+        base.OnClick(e);
     }
 }

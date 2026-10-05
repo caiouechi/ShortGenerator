@@ -6,19 +6,30 @@ using ShortGenerator.Forms.Controls;
 namespace ShortGenerator.Forms;
 
 /// <summary>
-/// Galiluna brand foundation (v1.1 guidelines) in its dark theme, translated to WinForms:
-/// navy #0B1028, cosmic blue #295BFF, lunar purple #6A38FF, nebula #A855F7.
+/// Galiluna brand foundation translated to WinForms as a quiet, bright system: white surfaces, navy text and one
+/// soft bright purple accent (#8B6CFF) used sparingly, with its tints for hover and selection.
 /// </summary>
 public static class Theme
 {
-    // palette
+    // palette: one soft, bright purple carries the whole interface; the brand's night navy stays for text
     public static readonly Color Navy = ColorTranslator.FromHtml("#0B1028");
-    public static readonly Color CosmicBlue = ColorTranslator.FromHtml("#295BFF");
-    public static readonly Color Purple = ColorTranslator.FromHtml("#6A38FF");
-    public static readonly Color PurpleHover = ColorTranslator.FromHtml("#7B4DFF");
-    public static readonly Color PurpleDeep = ColorTranslator.FromHtml("#4523C7");
-    public static readonly Color Nebula = ColorTranslator.FromHtml("#A855F7");
-    public static readonly Color Lavender = ColorTranslator.FromHtml("#C4B5FD");
+    /// <summary>The accent: soft bright purple, calm enough to sit on white all day.</summary>
+    public static readonly Color Accent = ColorTranslator.FromHtml("#8B6CFF");
+    public static readonly Color AccentHover = ColorTranslator.FromHtml("#9A80FF");
+    public static readonly Color AccentPressed = ColorTranslator.FromHtml("#7659F0");
+    public static readonly Color AccentDeep = ColorTranslator.FromHtml("#6A4DE6");
+    public static readonly Color AccentDisabled = ColorTranslator.FromHtml("#CFC4FF");
+    /// <summary>Tints of the accent for hover and selection; never a saturated slab.</summary>
+    public static readonly Color AccentTint = ColorTranslator.FromHtml("#F4F1FF");
+    public static readonly Color AccentTintStrong = ColorTranslator.FromHtml("#EAE4FF");
+    public static readonly Color AccentBorder = ColorTranslator.FromHtml("#CFC4FF");
+    // the older names map onto the same system, so every surface shifts together
+    public static readonly Color CosmicBlue = Accent;
+    public static readonly Color Purple = Accent;
+    public static readonly Color PurpleHover = AccentHover;
+    public static readonly Color PurpleDeep = AccentDeep;
+    public static readonly Color Nebula = ColorTranslator.FromHtml("#A892FF");
+    public static readonly Color Lavender = ColorTranslator.FromHtml("#D6CCFF");
 
     // light surfaces (the app theme: this is a product for the public, so the work area is light)
     public static readonly Color Bg = ColorTranslator.FromHtml("#F6F7FC");
@@ -26,10 +37,10 @@ public static class Theme
     public static readonly Color Surface = Color.White;
     public static readonly Color SurfaceStrong = ColorTranslator.FromHtml("#EEF0F8");
     public static readonly Color SurfaceSoft = ColorTranslator.FromHtml("#F4F1FF");
-    public static readonly Color Border = ColorTranslator.FromHtml("#E7EAF5");
-    public static readonly Color BorderStrong = ColorTranslator.FromHtml("#D8DDED");
-    public static readonly Color BorderHover = ColorTranslator.FromHtml("#C9BCFF");
-    public static readonly Color SelectionBg = ColorTranslator.FromHtml("#E9E3FF");
+    public static readonly Color Border = ColorTranslator.FromHtml("#E8E6F3");
+    public static readonly Color BorderStrong = ColorTranslator.FromHtml("#DCD9EC");
+    public static readonly Color BorderHover = ColorTranslator.FromHtml("#CFC4FF");
+    public static readonly Color SelectionBg = ColorTranslator.FromHtml("#EAE4FF");
     public static readonly Color SelectionFg = ColorTranslator.FromHtml("#0B1028");
 
     // text
@@ -37,12 +48,15 @@ public static class Theme
     public static readonly Color TextSecondary = ColorTranslator.FromHtml("#3E4668");
     public static readonly Color TextMuted = ColorTranslator.FromHtml("#737B98");
     public static readonly Color Heading = ColorTranslator.FromHtml("#2E3A6E");
-    public static readonly Color Link = ColorTranslator.FromHtml("#295BFF");
+    public static readonly Color Link = ColorTranslator.FromHtml("#6A4DE6");
 
     // status
     public static readonly Color Success = ColorTranslator.FromHtml("#16794F");
     public static readonly Color Warning = ColorTranslator.FromHtml("#A66A00");
-    public static readonly Color Danger = ColorTranslator.FromHtml("#C5283D");
+    public static readonly Color Danger = ColorTranslator.FromHtml("#C2344B");
+    public static readonly Color DangerTint = ColorTranslator.FromHtml("#FFF3F5");
+    public static readonly Color DangerTintStrong = ColorTranslator.FromHtml("#FFE4E8");
+    public static readonly Color DangerBorder = ColorTranslator.FromHtml("#F3CCD3");
 
     // the dark side navigation keeps the brand's night palette
     public static readonly Color DarkBg = ColorTranslator.FromHtml("#131834");
@@ -254,6 +268,8 @@ public static class Theme
             case CheckBox chk:
                 chk.ForeColor = TextSecondary;
                 chk.FlatStyle = FlatStyle.Flat;
+                chk.FlatAppearance.CheckedBackColor = Accent;
+                chk.FlatAppearance.BorderColor = BorderStrong;
                 if (chk.Parent is FlowLayoutPanel) chk.Margin = new Padding(0, 8, 12, 0);
                 break;
             case TrackBar tb:
@@ -361,7 +377,7 @@ public static class Theme
             using var cpath = FancyButton.Rounded(cb, 3);
             if (e.SubItem.Text == "\u2611")
             {
-                using var fill = new LinearGradientBrush(cb, CosmicBlue, Nebula, 45f);
+                using var fill = new SolidBrush(Accent);
                 e.Graphics.FillPath(fill, cpath);
                 using var cf = IconFont(8f);
                 TextRenderer.DrawText(e.Graphics, "\uE73E", cf, cb, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
@@ -379,7 +395,7 @@ public static class Theme
             using var path = FancyButton.Rounded(box, 3);
             if (e.Item.Checked)
             {
-                using var fill = new LinearGradientBrush(box, CosmicBlue, Nebula, 45f);
+                using var fill = new SolidBrush(Accent);
                 e.Graphics.FillPath(fill, path);
                 using var cf = IconFont(8f);
                 TextRenderer.DrawText(e.Graphics, "", cf, box, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
@@ -424,14 +440,13 @@ public sealed class BrandHeader : Control
 
         // light header with a faint aurora tint on the left, echoing the sidebar artwork
         using (var bg = new SolidBrush(Theme.Elevated)) g.FillRectangle(bg, ClientRectangle);
-        using (var tint = new LinearGradientBrush(new Rectangle(0, 0, Math.Max(1, Width), Height), Color.FromArgb(60, Theme.Purple), Color.FromArgb(0, Theme.CosmicBlue), 0f))
+        using (var tint = new LinearGradientBrush(new Rectangle(0, 0, Math.Max(1, Width), Height), Color.FromArgb(34, Theme.Accent), Color.FromArgb(0, Theme.Accent), 0f))
         {
-            var blend = new ColorBlend(3) { Colors = new[] { Color.FromArgb(60, Theme.Purple), Color.FromArgb(18, Theme.CosmicBlue), Color.FromArgb(0, Theme.CosmicBlue) }, Positions = new[] { 0f, 0.55f, 1f } };
+            var blend = new ColorBlend(3) { Colors = new[] { Color.FromArgb(34, Theme.Accent), Color.FromArgb(10, Theme.Accent), Color.FromArgb(0, Theme.Accent) }, Positions = new[] { 0f, 0.5f, 1f } };
             tint.InterpolationColors = blend;
             g.FillRectangle(tint, ClientRectangle);
         }
-        using (var line = new LinearGradientBrush(new Rectangle(0, Height - 2, Math.Max(1, Width), 2), Color.FromArgb(200, Theme.CosmicBlue), Color.FromArgb(0, Theme.Nebula), 0f))
-            g.FillRectangle(line, 0, Height - 2, Width, 2);
+        using (var line = new Pen(Theme.Border)) g.DrawLine(line, 0, Height - 1, Width, Height - 1);
 
         using var titleFont = Theme.HeadingFont(15f);
         using var tagFont = Theme.Body(9f);
@@ -471,7 +486,7 @@ public sealed class BrandProgressBar : Control
         int w = (int)(track.Width * _value / 100.0);
         if (w < 6) return;
         var fill = new Rectangle(track.X, track.Y, w, track.Height);
-        using var fillBrush = new LinearGradientBrush(new Rectangle(0, 0, Math.Max(1, Width), 1), Theme.CosmicBlue, Theme.Nebula, 0f);
+        using var fillBrush = new LinearGradientBrush(new Rectangle(0, 0, Math.Max(1, Width), 1), Theme.Accent, Theme.Nebula, 0f);
         using var fillPath = FancyButton.Rounded(fill, 3);
         g.FillPath(fillBrush, fillPath);
     }
