@@ -244,6 +244,7 @@ public static class Theme
                 tb.BorderStyle = BorderStyle.FixedSingle;
                 tb.BackColor = tb.ReadOnly ? SurfaceSoft : Surface;
                 tb.ForeColor = Text;
+                FieldChrome.Attach(tb);
                 break;
             case RichTextBox rtb:
                 rtb.BackColor = Elevated;
@@ -258,18 +259,18 @@ public static class Theme
                 cb.BackColor = Surface;
                 cb.ForeColor = Text;
                 if (cb.Parent is FlowLayoutPanel) cb.Margin = new Padding(0, 5, 12, 0);
+                FieldChrome.Attach(cb);
                 break;
             case NumericUpDown nud:
-                nud.BorderStyle = BorderStyle.FixedSingle;
+                nud.BorderStyle = BorderStyle.None; // the chrome draws the frame and the spinner
                 nud.BackColor = Surface;
                 nud.ForeColor = Text;
+                nud.TextAlign = HorizontalAlignment.Center;
                 if (nud.Parent is FlowLayoutPanel) nud.Margin = new Padding(0, 5, 12, 0);
+                FieldChrome.Attach(nud);
                 break;
             case CheckBox chk:
-                chk.ForeColor = TextSecondary;
-                chk.FlatStyle = FlatStyle.Flat;
-                chk.FlatAppearance.CheckedBackColor = Accent;
-                chk.FlatAppearance.BorderColor = BorderStrong;
+                if (chk is not FancyCheck) { chk.ForeColor = TextSecondary; chk.FlatStyle = FlatStyle.Flat; }
                 if (chk.Parent is FlowLayoutPanel) chk.Margin = new Padding(0, 8, 12, 0);
                 break;
             case TrackBar tb:

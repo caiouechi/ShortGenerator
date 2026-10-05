@@ -55,7 +55,7 @@ public sealed class PublishPanel : UserControl
     private GaliLunaClient.StorageInfo? _storage;
     private readonly FancyButton _cancelPublish = new() { Text = "Cancel all", Width = 150, Height = 36, Visible = false, Glyph = "\uE711" };
     // scheduling: "Schedule for" + date and time; the publish buttons then schedule instead of sending now
-    private readonly CheckBox _scheduleOn = new() { Text = "Schedule for", AutoSize = true, Margin = new Padding(0, 10, 6, 0) };
+    private readonly FancyCheck _scheduleOn = new() { Text = "Schedule for", AutoSize = true, Margin = new Padding(0, 10, 6, 0) };
     private readonly SchedulePicker _scheduleAt = new() { Enabled = false, Margin = new Padding(0, 6, 14, 0) };
     /// <summary>Checks every 15 s for scheduled posts that are due.</summary>
     private readonly System.Windows.Forms.Timer _scheduleTimer = new() { Interval = 15_000 };
@@ -1039,6 +1039,14 @@ public sealed class PublishPanel : UserControl
             base.Title = title; Subtitle = subtitle;
             Margin = new Padding(0, 0, 0, 12);
             bool yt = network == "youtube", tt = network == "tiktok";
+            // each network in a whisper of its own colour: Instagram rose, YouTube red, TikTok ink; all bright and soft
+            (BackColor, TitleColor) = network switch
+            {
+                "instagram" => (ColorTranslator.FromHtml("#FDF4F9"), ColorTranslator.FromHtml("#B3377E")),
+                "youtube" => (ColorTranslator.FromHtml("#FFF4F4"), ColorTranslator.FromHtml("#C62828")),
+                "tiktok" => (ColorTranslator.FromHtml("#F6F6F8"), ColorTranslator.FromHtml("#141414")),
+                _ => (Theme.Elevated, Theme.Heading),
+            };
 
             _grid = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = Padding.Empty, BackColor = Theme.Elevated };
             _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
@@ -1074,7 +1082,7 @@ public sealed class PublishPanel : UserControl
                 var list = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty, BackColor = Theme.Elevated };
                 foreach (var a in yt ? accounts.Youtube.Channels : accounts.Instagram)
                 {
-                    var box = new CheckBox { Text = a.Label, AutoSize = true, Checked = false, Margin = new Padding(0, 2, 0, 2) };
+                    var box = new FancyCheck { Text = a.Label, AutoSize = true, Checked = false, Margin = new Padding(0, 2, 0, 2) };
                     box.CheckedChanged += (_, _) => owner.UpdateButtons();
                     list.Controls.Add(box);
                     _boxes[box] = a.Id;

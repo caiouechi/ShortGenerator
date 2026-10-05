@@ -23,7 +23,7 @@ public sealed class FocusAreaDialog : Form
     private readonly string _path;
     private readonly double _time;
     private readonly AreaView _view;
-    private readonly CheckBox _all = new() { Text = "Use this area for all shorts of this video", AutoSize = true };
+    private readonly FancyCheck _all = new() { Text = "Use this area for all shorts of this video", AutoSize = true };
     private readonly string _work = Path.Combine(Path.GetTempPath(), "shortgen_focus_" + Guid.NewGuid().ToString("N")[..8]);
 
     public FocusAreaDialog(FfmpegRunner ffmpeg, string path, double sourceTime, FocusArea? current, int shortCount)

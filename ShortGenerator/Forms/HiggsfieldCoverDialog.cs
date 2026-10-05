@@ -11,7 +11,7 @@ namespace ShortGenerator.Forms;
 /// </summary>
 public sealed class HiggsfieldCoverDialog : Form
 {
-    private readonly CheckBox _useReference = new() { Text = "Use the current cover frame as the reference", AutoSize = true, Checked = true };
+    private readonly FancyCheck _useReference = new() { Text = "Use the current cover frame as the reference", AutoSize = true, Checked = true };
     private readonly TextBox _wish = new() { Multiline = true, ScrollBars = ScrollBars.Vertical, Height = 96, Dock = DockStyle.Top };
     private readonly TextBox _preview = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Height = 190, Dock = DockStyle.Top };
     private readonly FancyButton _generate = new() { Text = "Generate cover", Width = 180, Height = 38, Glyph = "" };

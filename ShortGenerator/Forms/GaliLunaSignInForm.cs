@@ -26,7 +26,7 @@ public sealed class GaliLunaSignInForm : Form
     private readonly Label _code = new() { AutoSize = false, Height = 56, TextAlign = ContentAlignment.MiddleCenter };
     private readonly LinkLabel _codeHelp = new() { AutoSize = false, Height = 40, TextAlign = ContentAlignment.MiddleCenter };
 
-    private readonly CheckBox _advanced = new() { Text = "Advanced: paste a key instead", AutoSize = true, Appearance = Appearance.Normal };
+    private readonly FancyCheck _advanced = new() { Text = "Advanced: paste a key instead", AutoSize = true, Appearance = Appearance.Normal };
     private readonly Panel _advancedPanel = new() { AutoSize = true, Visible = false };
     private readonly TextBox _key = new() { UseSystemPasswordChar = true, Width = 300, PlaceholderText = "glk_..." };
     private readonly FancyButton _test = new() { Text = "Test and save", Width = 140 };

@@ -134,7 +134,7 @@ public sealed class MainForm : Form
 
     // chatgpt tab
     private readonly NumericUpDown _gptCount = new() { Minimum = 1, Maximum = 20, Value = 6, Width = 55 };
-    private readonly CheckBox _gptAuto = new() { Text = "AI decides", AutoSize = true, Margin = new Padding(8, 8, 4, 0) };
+    private readonly FancyCheck _gptAuto = new() { Text = "AI decides", AutoSize = true, Margin = new Padding(8, 8, 4, 0) };
     private readonly NumericUpDown _gptMin = new() { Minimum = 5, Maximum = 180, Value = 15, Width = 55 };
     private readonly NumericUpDown _gptMax = new() { Minimum = 10, Maximum = 180, Value = 60, Width = 55 };
     private readonly FancyButton _gptBuild = new() { Text = "Generate prompt", Width = 160 };
@@ -163,7 +163,7 @@ public sealed class MainForm : Form
     private readonly FancyButton _transcribe = new() { Text = "Transcribe", Width = 130 };
     private readonly ComboBox _whisperModel = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260 };
     private readonly ComboBox _language = new() { Width = 130, DropDownStyle = ComboBoxStyle.DropDownList };
-    private readonly CheckBox _detectReactions = new() { Text = "Detect laughs / reactions", AutoSize = true };
+    private readonly FancyCheck _detectReactions = new() { Text = "Detect laughs / reactions", AutoSize = true };
     private readonly FancyButton _loadTranscript = new() { Text = "Load transcript file...", Width = 150, Enabled = false };
     private readonly FancyButton _saveSrt = new() { Text = "Save .srt", Width = 90, Enabled = false };
     private readonly FancyButton _saveTxt = new() { Text = "Save .txt", Width = 90, Enabled = false };
@@ -174,7 +174,7 @@ public sealed class MainForm : Form
     // suggestions tab
     private readonly FancyButton _analyze = new() { Text = "Analyze with Claude", Width = 185, Enabled = false };
     private readonly NumericUpDown _count = new() { Minimum = 1, Maximum = 20, Width = 55 };
-    private readonly CheckBox _autoCount = new() { Text = "AI decides", AutoSize = true, Margin = new Padding(8, 8, 4, 0) };
+    private readonly FancyCheck _autoCount = new() { Text = "AI decides", AutoSize = true, Margin = new Padding(8, 8, 4, 0) };
     private readonly NumericUpDown _minSec = new() { Minimum = 5, Maximum = 180, Width = 55 };
     private readonly NumericUpDown _maxSec = new() { Minimum = 10, Maximum = 180, Width = 55 };
     private readonly FancyButton _addClip = new() { Text = "Add custom clip", Width = 120, Enabled = false };
@@ -186,15 +186,15 @@ public sealed class MainForm : Form
     private readonly Label _summary = new() { Dock = DockStyle.Top, AutoSize = false, Height = 44, Padding = new Padding(6), ForeColor = Color.DimGray };
 
     // generate tab
-    private readonly CheckBox _addCaptions = new() { Text = "Burn captions into the video", Checked = true, AutoSize = true };
+    private readonly FancyCheck _addCaptions = new() { Text = "Burn captions into the video", Checked = true, AutoSize = true };
     private readonly ComboBox _style = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
     private readonly Label _styleDesc = new() { AutoSize = true, MaximumSize = new Size(300, 0), ForeColor = Color.DimGray };
     private readonly NumericUpDown _wordsPerCaption = new() { Minimum = 1, Maximum = 8, Value = 6, Width = 60 };
     private readonly NumericUpDown _fontSize = new() { Minimum = 0, Maximum = 200, Value = 0, Width = 60 };
     private readonly ComboBox _crop = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
-    private readonly CheckBox _burnHook = new() { Text = "Show the hook as a title at the start", AutoSize = true };
-    private readonly CheckBox _includeReactions = new() { Text = "Show [laughs] tags in captions", AutoSize = true };
-    private readonly CheckBox _autoCameraOpt = new() { Text = "Auto camera (follow faces)", Checked = true, AutoSize = true };
+    private readonly FancyCheck _burnHook = new() { Text = "Show the hook as a title at the start", AutoSize = true };
+    private readonly FancyCheck _includeReactions = new() { Text = "Show [laughs] tags in captions", AutoSize = true };
+    private readonly FancyCheck _autoCameraOpt = new() { Text = "Auto camera (follow faces)", Checked = true, AutoSize = true };
     private readonly ComboBox _look = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
     private readonly Label _lookDesc = new() { AutoSize = true, MaximumSize = new Size(300, 0), ForeColor = Color.DimGray };
     private readonly TextBox _outputFolder = new() { Width = 230 };
@@ -1848,7 +1848,7 @@ public sealed class MainForm : Form
             ("instagram", "Instagram", _settings.PostTextInstagram),
         })
         {
-            var box = new CheckBox { Text = label, AutoSize = true, Checked = checkedNow, Margin = new Padding(0, 8, 10, 0) };
+            var box = new FancyCheck { Text = label, AutoSize = true, Checked = checkedNow, Margin = new Padding(0, 8, 10, 0) };
             var k = key;
             box.CheckedChanged += (_, _) =>
             {

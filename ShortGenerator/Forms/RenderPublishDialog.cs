@@ -59,7 +59,7 @@ public sealed class RenderPublishDialog : Form
         {
             var card = new Card { Width = textWidth, Margin = new Padding(0, 0, 0, 12), Padding = new Padding(16, 14, 16, 12) };
             var body = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Theme.Elevated };
-            var render = new CheckBox { Text = "Render with " + title, Checked = true, AutoSize = true, Font = Theme.Body(10f, FontStyle.Bold), ForeColor = Theme.Heading, Margin = new Padding(0, 0, 0, 4) };
+            var render = new FancyCheck { Text = "Render with " + title, Checked = true, AutoSize = true, Font = Theme.Body(10f, FontStyle.Bold), ForeColor = Theme.Heading, Margin = new Padding(0, 0, 0, 4) };
             body.Controls.Add(render);
             if (lang == "en" && missingEnglish > 0)
                 body.Controls.Add(new Label { Text = $"{missingEnglish} line(s) have no English yet and will show the original text.", AutoSize = true, MaximumSize = new Size(textWidth - 40, 0), ForeColor = Theme.Warning, Margin = new Padding(20, 0, 0, 4) });
@@ -76,7 +76,7 @@ public sealed class RenderPublishDialog : Form
                 {
                     var network = d.Network switch { "instagram" => "Instagram", "tiktok" => "TikTok", _ => "YouTube" };
                     var label = d.Network == "tiktok" && !string.IsNullOrWhiteSpace(tiktokHow) ? $"{network}  ·  {d.Label}  ({tiktokHow})" : $"{network}  ·  {d.Label}";
-                    var box = new CheckBox { Text = label, AutoSize = true, Checked = ticked.Contains(d.Key), Margin = new Padding(20, 2, 0, 2), UseMnemonic = false };
+                    var box = new FancyCheck { Text = label, AutoSize = true, Checked = ticked.Contains(d.Key), Margin = new Padding(20, 2, 0, 2), UseMnemonic = false };
                     box.CheckedChanged += (_, _) => Sync();
                     body.Controls.Add(box);
                     v.Targets.Add((box, d));
@@ -87,7 +87,7 @@ public sealed class RenderPublishDialog : Form
                 {
                     // when: as soon as it is rendered, or at a set time (this version only)
                     var when = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(20, 6, 0, 0), BackColor = Theme.Elevated };
-                    var on = new CheckBox { Text = "Schedule for", AutoSize = true, Margin = new Padding(0, 6, 6, 0) };
+                    var on = new FancyCheck { Text = "Schedule for", AutoSize = true, Margin = new Padding(0, 6, 6, 0) };
                     var at = new SchedulePicker { Enabled = false, Value = NextHalfHour(), Margin = new Padding(0, 2, 0, 0) };
                     var hint = new Label { Text = "or when rendered", AutoSize = true, ForeColor = Theme.TextMuted, Margin = new Padding(8, 7, 0, 0) };
                     on.CheckedChanged += (_, _) => { at.Enabled = on.Checked && on.Enabled; hint.Visible = !on.Checked; if (on.Checked && at.Value <= DateTime.Now) at.Value = NextHalfHour(); Sync(); };

@@ -25,6 +25,10 @@ public class Card : Panel
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public int Radius { get; set; } = 14;
 
+    /// <summary>Colour of the title; the heading colour unless a card speaks for a brand.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color TitleColor { get; set; } = Theme.Heading;
+
     private void UpdatePadding()
     {
         int top = 14 + (string.IsNullOrEmpty(_title) ? 0 : 26) + (string.IsNullOrEmpty(_subtitle) ? 0 : 18);
@@ -45,7 +49,7 @@ public class Card : Panel
         if (!string.IsNullOrEmpty(_title))
         {
             using var f = Theme.HeadingFont(10.5f);
-            TextRenderer.DrawText(g, _title, f, new Point(14, y), Theme.Heading, TextFormatFlags.NoPrefix);
+            TextRenderer.DrawText(g, _title, f, new Point(14, y), TitleColor, TextFormatFlags.NoPrefix);
             y += 24;
         }
         if (!string.IsNullOrEmpty(_subtitle))
