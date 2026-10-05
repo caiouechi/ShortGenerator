@@ -67,7 +67,7 @@ public class FancyButton : Button
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
         // parent background (transparent look)
-        if (Parent is not null) using (var pb = new SolidBrush(Parent.BackColor)) g.FillRectangle(pb, ClientRectangle);
+        if (Parent is not null) g.Clear(Parent.BackColor);
 
         var rect = new Rectangle(0, 0, Width - 1, Height - 1);
         using var path = Rounded(rect, Radius);

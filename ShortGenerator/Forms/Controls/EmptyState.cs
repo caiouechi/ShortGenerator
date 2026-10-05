@@ -32,7 +32,7 @@ public sealed class EmptyState : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-        using (var bg = new SolidBrush(BackColor)) g.FillRectangle(bg, ClientRectangle);
+        g.Clear(BackColor);
 
         int imgSize = Math.Clamp(Math.Min(Width, Height) / 3, 90, 220);
         int totalH = imgSize + 70;

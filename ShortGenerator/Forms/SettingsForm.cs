@@ -413,7 +413,7 @@ public sealed class SettingsForm : Form
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var bg = new SolidBrush(Parent?.BackColor ?? Theme.Elevated)) g.FillRectangle(bg, ClientRectangle);
+            g.Clear(Parent?.BackColor ?? Theme.Elevated);
             var (fill, dot, fore) = _tone switch
             {
                 Tone.Good => (ColorTranslator.FromHtml("#EAF7F0"), Theme.Success, Theme.Success),
@@ -443,7 +443,7 @@ public sealed class SettingsForm : Form
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var bg = new SolidBrush(Parent?.BackColor ?? Theme.Elevated)) g.FillRectangle(bg, ClientRectangle);
+            g.Clear(Parent?.BackColor ?? Theme.Elevated);
             using var path = FancyButton.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 10);
             using (var b = new SolidBrush(Theme.AccentTint)) g.FillPath(b, path);
             using (var p = new Pen(Theme.AccentBorder)) g.DrawPath(p, path);
@@ -467,7 +467,7 @@ public sealed class SettingsForm : Form
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var bg = new SolidBrush(Parent?.BackColor ?? Theme.Elevated)) g.FillRectangle(bg, ClientRectangle);
+            g.Clear(Parent?.BackColor ?? Theme.Elevated);
             using (var b = new SolidBrush(_initial.Length > 0 ? Theme.AccentTintStrong : Theme.SurfaceStrong)) g.FillEllipse(b, 0, 0, Width - 1, Height - 1);
             if (_initial.Length > 0)
             {
@@ -497,7 +497,7 @@ public sealed class SettingsForm : Form
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var bg = new SolidBrush(Parent?.BackColor ?? Theme.Elevated)) g.FillRectangle(bg, ClientRectangle);
+            g.Clear(Parent?.BackColor ?? Theme.Elevated);
             bool ok = _path is not null;
             using (var d = new SolidBrush(ok ? Theme.Success : Theme.Danger)) g.FillEllipse(d, 2, (Height - 8) / 2f, 8, 8);
             using var nf = Theme.Body(9.5f, FontStyle.Bold);

@@ -181,7 +181,7 @@ public static class Theme
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var bg = new SolidBrush(Parent?.BackColor ?? Bg)) e.Graphics.FillRectangle(bg, ClientRectangle);
+            e.Graphics.Clear(Parent?.BackColor ?? Bg);
             using var path = FancyButton.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 10);
             using var fill = new SolidBrush(Color.White);
             e.Graphics.FillPath(fill, path);
@@ -444,12 +444,12 @@ public sealed class BrandHeader : Control
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
         // light header with a faint aurora tint on the left, echoing the sidebar artwork
-        using (var bg = new SolidBrush(Theme.Elevated)) g.FillRectangle(bg, ClientRectangle);
+        g.Clear(Theme.Elevated);
         using (var tint = new LinearGradientBrush(new Rectangle(0, 0, Math.Max(1, Width), Height), Color.FromArgb(34, Theme.Accent), Color.FromArgb(0, Theme.Accent), 0f))
         {
             var blend = new ColorBlend(3) { Colors = new[] { Color.FromArgb(34, Theme.Accent), Color.FromArgb(10, Theme.Accent), Color.FromArgb(0, Theme.Accent) }, Positions = new[] { 0f, 0.5f, 1f } };
             tint.InterpolationColors = blend;
-            g.FillRectangle(tint, ClientRectangle);
+            g.FillRectangle(tint, new Rectangle(-1, -1, Width + 2, Height + 2)); // past the edge: an antialiased fill leaves the first row half covered
         }
         using (var line = new Pen(Theme.Border)) g.DrawLine(line, 0, Height - 1, Width, Height - 1);
 
@@ -482,7 +482,7 @@ public sealed class BrandProgressBar : Control
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var bg = new SolidBrush(Parent?.BackColor ?? Theme.Bg)) g.FillRectangle(bg, ClientRectangle);
+        g.Clear(Parent?.BackColor ?? Theme.Bg);
         var track = new Rectangle(0, (Height - 6) / 2, Width - 1, 6);
         using var trackBrush = new SolidBrush(Theme.SurfaceStrong);
         using var trackPath = FancyButton.Rounded(track, 3);

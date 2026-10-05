@@ -35,7 +35,7 @@ public class Card : Panel
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var bg = new SolidBrush(Parent?.BackColor ?? Theme.Bg)) g.FillRectangle(bg, ClientRectangle);
+        g.Clear(Parent?.BackColor ?? Theme.Bg);
         var rect = new Rectangle(0, 0, Width - 1, Height - 1);
         using var path = FancyButton.Rounded(rect, Radius);
         using (var fill = new SolidBrush(BackColor)) g.FillPath(fill, path);

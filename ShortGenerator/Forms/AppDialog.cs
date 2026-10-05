@@ -335,7 +335,7 @@ public sealed class AppDialog : Form
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var bg = new SolidBrush(Theme.Elevated)) g.FillRectangle(bg, ClientRectangle);
+            g.Clear(Theme.Elevated);
             using var path = FancyButton.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 10);
             using (var fill = new SolidBrush(BackColor)) g.FillPath(fill, path);
             using var pen = new Pen(Theme.Border);

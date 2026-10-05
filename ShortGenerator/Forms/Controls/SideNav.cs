@@ -101,7 +101,7 @@ public sealed class SideNav : Control
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
         // artwork: bright white with a pastel aurora at the foot; cover-fit, anchored to the bottom
-        using (var bg = new SolidBrush(Theme.Elevated)) g.FillRectangle(bg, ClientRectangle);
+        g.Clear(Theme.Elevated);
         if (_bg is not null)
         {
             double scale = Math.Max(Width / (double)_bg.Width, Height / (double)_bg.Height);
