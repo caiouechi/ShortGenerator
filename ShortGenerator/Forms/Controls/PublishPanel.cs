@@ -56,7 +56,7 @@ public sealed class PublishPanel : UserControl
     private readonly FancyButton _cancelPublish = new() { Text = "Cancel all", Width = 150, Height = 36, Visible = false, Glyph = "\uE711" };
     // scheduling: "Schedule for" + date and time; the publish buttons then schedule instead of sending now
     private readonly CheckBox _scheduleOn = new() { Text = "Schedule for", AutoSize = true, Margin = new Padding(0, 10, 6, 0) };
-    private readonly DateTimePicker _scheduleAt = new() { Format = DateTimePickerFormat.Custom, CustomFormat = "ddd d MMM yyyy   HH:mm", Width = 210, Enabled = false, Margin = new Padding(0, 6, 14, 0) };
+    private readonly SchedulePicker _scheduleAt = new() { Enabled = false, Margin = new Padding(0, 6, 14, 0) };
     /// <summary>Checks every 15 s for scheduled posts that are due.</summary>
     private readonly System.Windows.Forms.Timer _scheduleTimer = new() { Interval = 15_000 };
     private bool _restored;

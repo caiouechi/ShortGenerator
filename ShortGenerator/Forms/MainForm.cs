@@ -1078,6 +1078,15 @@ public sealed class MainForm : Form
         _player.CaptionMoved += (x, y, t) => BeginInvoke(() => OnCaptionMoved(x, y, t));
         _player.CameraMoved += (x, y, z, t) => BeginInvoke(() => OnCameraMoved(x, y, z, t));
         _player.MainShifted += y => BeginInvoke(() => OnMainShifted(y));
+        // every action on the video goes to the log file too, so a failure can be traced back to its steps
+        _player.PlayingChanged += playing => UiTrace.Log($"player: {(playing ? "playing" : "paused")}");
+        _player.CaptionMoved += (x, y, t) => UiTrace.Log($"player: caption dragged to {x:F0},{y:F0} at {t:F1}s");
+        _player.CameraMoved += (x, y, z, t) => UiTrace.Log($"player: camera dragged to {x:F0},{y:F0} zoom {z:F2} at {t:F1}s");
+        _player.MainShifted += y => UiTrace.Log($"player: picture shifted {y:F0}%");
+        _player.EditRequested += t => UiTrace.Log($"player: caption edit at {t:F1}s");
+        _player.LayerSelected += id => UiTrace.Log($"player: layer selected {id}");
+        _player.LayerChanged += (id, x, y, size, rot) => UiTrace.Log($"player: layer {id} moved to {x:F0},{y:F0} size {size:F0} rot {rot:F0}");
+        _player.VideoLayerChanged += (id, cx, cy, zoom, x, y, size) => UiTrace.Log($"player: clip {id} reframed crop {cx:F0},{cy:F0} zoom {zoom:F2} at {x:F0},{y:F0} size {size:F0}");
         _player.EditRequested += t => BeginInvoke(async () => { if (SegmentAt(t) is { } seg) await _player.BeginEditAsync(EnglishMode ? seg.English ?? seg.Text : seg.Text); });
         _player.TextEdited += (t, text) => BeginInvoke(() => OnCaptionTextEdited(t, text));
         _player.LineRequested += t => BeginInvoke(() => EditLineInGrid(t));

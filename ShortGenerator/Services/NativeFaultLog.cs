@@ -14,7 +14,6 @@ public static class NativeFaultLog
 {
     private delegate int VectoredHandler(IntPtr exceptionPointers);
     private static VectoredHandler? _handler;  // kept alive for the process lifetime
-    private static int _logged;
 
     [DllImport("kernel32.dll")] private static extern IntPtr AddVectoredExceptionHandler(uint first, VectoredHandler handler);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern bool GetModuleHandleExW(uint flags, IntPtr address, out IntPtr module);
@@ -36,16 +35,20 @@ public static class NativeFaultLog
             AppDomain.CurrentDomain.FirstChanceException += (_, e) =>
             {
                 var ex = e.Exception;
-                if (ex is OperationCanceledException || ex is System.IO.IOException) return; // expected and handled
-                if (Interlocked.Increment(ref _managed) > 60) return;
-                AppLog.Write($"FIRST-CHANCE {ex.GetType().FullName}: {ex.Message}{Environment.NewLine}{Environment.StackTrace}");
+                // the kinds a debugger stops on are always written; the rest a few times per type, so routine handled
+                // ones (cancellations, network drops) cannot push the interesting one out
+                bool always = ex is System.Runtime.InteropServices.ExternalException || ex is AccessViolationException;
+                if (!always && CountOf(ex.GetType().FullName!) > 5) return;
+                string code = ex is System.Runtime.InteropServices.ExternalException ee ? $" (code 0x{ee.ErrorCode:X8})" : "";
+                AppLog.Write($"FIRST-CHANCE {ex.GetType().FullName}{code}: {ex.Message}{Environment.NewLine}{Environment.StackTrace}");
             };
         if (!on) return;
         _handler = Handler;
         AddVectoredExceptionHandler(0, _handler);
     }
 
-    private static int _managed, _cpp;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _counts = new();
+    private static int CountOf(string key) => _counts.AddOrUpdate(key, 1, (_, n) => n + 1);
 
     /// <summary>
     /// The modules on the native stack at the time of the exception, innermost first, repeats collapsed: who raised,
@@ -92,25 +95,26 @@ public static class NativeFaultLog
             uint code = unchecked((uint)Marshal.ReadInt32(record));
             switch (code)
             {
-                case 0xE0434352: // a managed throw
-                case 0xE06D7363: // a C++ exception (handled inside its component), the first few noted: when one crosses a managed frame the runtime turns it into an SEHException
-                    if (Interlocked.Increment(ref _cpp) > 5) return 0;
-                    AppLog.Write($"NATIVE C++ exception (thread {Environment.CurrentManagedThreadId}). Stack: {ModuleStack(pointers)}{Environment.NewLine}{Environment.StackTrace}");
-                    return 0;
+                case 0xE0434352: // a managed throw (the first-chance log has it)
                 case 0x406D1388: // thread naming
                 case 0x40010006: case 0x4001000A: // OutputDebugString
                 case 0x80000003: case 0x80000004: // breakpoint, single step (the debugger)
-                case 0x000006BA: case 0x000006A6: case 0x000006D9: // RPC chatter
                     return 0;
             }
+            // every other code is written a few times: C++ exceptions and RPC errors are handled inside their
+            // component most of the time, but one that crosses a managed frame becomes an SEHException, so none is skipped
+            if (CountOf($"native {code:X8}") > 6) return 0;
             // EXCEPTION_RECORD: code, flags, nested record, address
             var address = Marshal.ReadIntPtr(record, 8 + IntPtr.Size);
-            // a fault in jitted code (a NullReferenceException, say) has no module: the runtime turns it into a managed exception
-            if (!GetModuleHandleExW(FromAddress | UnchangedRefCount, address, out var module)) return 0;
-            if (Interlocked.Increment(ref _logged) > 40) return 0; // enough to name the culprit
-            var name = new StringBuilder(260);
-            GetModuleFileNameW(module, name, 260);
-            AppLog.Write($"NATIVE exception 0x{code:X8} at 0x{address.ToInt64():X} in {Path.GetFileName(name.ToString())} (thread {Environment.CurrentManagedThreadId}). Stack: {ModuleStack(pointers)}{Environment.NewLine}{Environment.StackTrace}");
+            string where = "no module (a stub or jitted code)";
+            if (GetModuleHandleExW(FromAddress | UnchangedRefCount, address, out var module))
+            {
+                var name = new StringBuilder(260);
+                GetModuleFileNameW(module, name, 260);
+                where = Path.GetFileName(name.ToString());
+            }
+            string kind = code == 0xE06D7363 ? "C++ exception" : $"exception 0x{code:X8}";
+            AppLog.Write($"NATIVE {kind} at 0x{address.ToInt64():X} in {where} (thread {Environment.CurrentManagedThreadId}). Stack: {ModuleStack(pointers)}{Environment.NewLine}{Environment.StackTrace}");
         }
         catch { }
         finally { t_inHandler = false; }

@@ -29,7 +29,7 @@ public sealed class RenderPublishDialog : Form
         public required CheckBox Render { get; init; }
         public List<(CheckBox Box, AutoDestination Dest)> Targets { get; } = new();
         public CheckBox? ScheduleOn { get; set; }
-        public DateTimePicker? ScheduleAt { get; set; }
+        public SchedulePicker? ScheduleAt { get; set; }
     }
 
     private readonly List<Version> _versions = new();
@@ -88,7 +88,7 @@ public sealed class RenderPublishDialog : Form
                     // when: as soon as it is rendered, or at a set time (this version only)
                     var when = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(20, 6, 0, 0), BackColor = Theme.Elevated };
                     var on = new CheckBox { Text = "Schedule for", AutoSize = true, Margin = new Padding(0, 6, 6, 0) };
-                    var at = new DateTimePicker { Format = DateTimePickerFormat.Custom, CustomFormat = "ddd d MMM yyyy   HH:mm", Width = 210, Enabled = false, Value = NextHalfHour(), Margin = new Padding(0, 2, 0, 0) };
+                    var at = new SchedulePicker { Enabled = false, Value = NextHalfHour(), Margin = new Padding(0, 2, 0, 0) };
                     var hint = new Label { Text = "or when rendered", AutoSize = true, ForeColor = Theme.TextMuted, Margin = new Padding(8, 7, 0, 0) };
                     on.CheckedChanged += (_, _) => { at.Enabled = on.Checked && on.Enabled; hint.Visible = !on.Checked; if (on.Checked && at.Value <= DateTime.Now) at.Value = NextHalfHour(); Sync(); };
                     when.Controls.Add(on); when.Controls.Add(at); when.Controls.Add(hint);
