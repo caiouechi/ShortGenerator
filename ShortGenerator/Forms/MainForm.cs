@@ -1061,6 +1061,7 @@ public sealed class MainForm : Form
         _player.PlayingChanged += playing => { _playPause.Text = playing ? "Pause" : "Play"; _playPause.IconName = playing ? "pause" : "play"; };
         _player.TimeChanged += OnPlayerTime;
         _player.Status += s => Log("Player: " + s);
+        _player.Restarted += () => BeginInvoke(async () => { if (_editing is not null) await LoadClipInEditorAsync(); });
         _player.CaptionMoved += (x, y, t) => BeginInvoke(() => OnCaptionMoved(x, y, t));
         _player.CameraMoved += (x, y, z, t) => BeginInvoke(() => OnCameraMoved(x, y, z, t));
         _player.MainShifted += y => BeginInvoke(() => OnMainShifted(y));

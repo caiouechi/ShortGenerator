@@ -34,18 +34,26 @@ public static class NativeFaultLog
         if (on || strict)
             AppDomain.CurrentDomain.FirstChanceException += (_, e) =>
             {
-                var ex = e.Exception;
-                // the kinds a debugger stops on are always written; the rest a few times per type, so routine handled
-                // ones (cancellations, network drops) cannot push the interesting one out
-                bool always = ex is System.Runtime.InteropServices.ExternalException || ex is AccessViolationException;
-                if (!always && CountOf(ex.GetType().FullName!) > 5) return;
-                string code = ex is System.Runtime.InteropServices.ExternalException ee ? $" (code 0x{ee.ErrorCode:X8})" : "";
-                AppLog.Write($"FIRST-CHANCE {ex.GetType().FullName}{code}: {ex.Message}{Environment.NewLine}{Environment.StackTrace}");
+                try { LogFirstChance(e.Exception); } catch { }
             };
         if (!on) return;
         _uiThread = GetCurrentThreadId();
         _handler = Handler;
         AddVectoredExceptionHandler(0, _handler);
+    }
+
+    private static void LogFirstChance(Exception ex)
+    {
+        {
+            {
+                // the kinds a debugger stops on are always written; the rest a few times per type, so routine handled
+                // ones (cancellations, network drops) cannot push the interesting one out
+                bool always = ex is System.Runtime.InteropServices.ExternalException || ex is AccessViolationException;
+                if (!always && CountOf(ex.GetType().FullName!) > 5) return;
+                string code = ex is System.Runtime.InteropServices.ExternalException ee ? $" (code 0x{ee.ErrorCode:X8})" : "";
+                AppLog.Write($"FIRST-CHANCE {ex.GetType().FullName}{code}: {ex.Message}{Environment.NewLine}{ex.StackTrace ?? Environment.StackTrace}");
+            }
+        }
     }
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _counts = new();

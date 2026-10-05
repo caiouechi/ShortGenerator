@@ -13,7 +13,7 @@ namespace ShortGenerator.Forms;
 /// </summary>
 public sealed class ClipPlayer : UserControl
 {
-    private readonly WebView2 _web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.Black };
+    private WebView2 _web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.Black };
     private readonly Label _fallback = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.White, BackColor = Color.Black, Padding = new Padding(20) };
     private bool _ready;
     private TaskCompletionSource<bool>? _navigated;
@@ -87,7 +87,12 @@ public sealed class ClipPlayer : UserControl
             var dataFolder = DataFolder;
             var env = await SharedEnvironmentAsync();
             await _web.EnsureCoreWebView2Async(env);
-            _web.CoreWebView2.ProcessFailed += (_, e) => Services.AppLog.Write($"Player WebView2 process failed: {e.ProcessFailedKind} ({e.Reason}).");
+            _web.CoreWebView2.ProcessFailed += (_, e) =>
+            {
+                Services.AppLog.Write($"Player WebView2 process failed: {e.ProcessFailedKind} ({e.Reason}).");
+                if (e.ProcessFailedKind is CoreWebView2ProcessFailedKind.BrowserProcessExited or CoreWebView2ProcessFailedKind.RenderProcessExited or CoreWebView2ProcessFailedKind.RenderProcessUnresponsive)
+                    BeginInvoke(() => BeginRestart(e.ProcessFailedKind.ToString()));
+            };
             var s = _web.CoreWebView2.Settings;
             s.AreDefaultContextMenusEnabled = false;
             s.AreDevToolsEnabled = false;
@@ -146,7 +151,52 @@ public sealed class ClipPlayer : UserControl
         catch { }
     }
 
-    private Task<string> Exec(string js) => _ready ? _web.CoreWebView2.ExecuteScriptAsync(js) : Task.FromResult("");
+    /// <summary>
+    /// Runs script in the page. The browser can go away under the control (its process exits, or the control's
+    /// window is recreated): CoreWebView2 is then null although the player was ready. That used to be a
+    /// NullReferenceException in the middle of the editor; now the call is dropped, the player restarts itself and
+    /// raises <see cref="Restarted"/> so the editor can load the short again.
+    /// </summary>
+    private Task<string> Exec(string js)
+    {
+        if (!_ready) return Task.FromResult("");
+        var core = _web.CoreWebView2;
+        if (core is null) { BeginRestart("the browser is gone"); return Task.FromResult(""); }
+        try { return core.ExecuteScriptAsync(js); }
+        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException or System.Runtime.InteropServices.COMException)
+        {
+            BeginRestart(ex.Message);
+            return Task.FromResult("");
+        }
+    }
+
+    /// <summary>Raised after the player had to restart its browser; the current short should be loaded again.</summary>
+    public event Action? Restarted;
+    private bool _restarting;
+
+    private void BeginRestart(string why)
+    {
+        if (_restarting) return;
+        _restarting = true;
+        _ready = false;
+        Services.AppLog.Write($"Player: restarting the browser ({why}).");
+        BeginInvoke(async () =>
+        {
+            try
+            {
+                // a fresh control: the old one cannot be initialised again once its browser is gone
+                var old = _web;
+                Controls.Remove(old);
+                try { old.Dispose(); } catch { }
+                _web = new WebView2 { Dock = DockStyle.Fill };
+                Controls.Add(_web);
+                _web.BringToFront();
+                if (await InitAsync()) { Status?.Invoke("restarted"); Restarted?.Invoke(); }
+            }
+            catch (Exception ex) { Services.AppLog.Error("player restart", ex); }
+            finally { _restarting = false; }
+        });
+    }
 
     public async Task LoadAsync(string videoPath, double start, double end)
     {

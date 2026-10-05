@@ -312,7 +312,12 @@ public static class Theme
                 break;
             case Panel or TableLayoutPanel or FlowLayoutPanel:
                 if (c.BackColor == SystemColors.Control || c.BackColor == Color.Transparent || c.BackColor == Color.White || c.BackColor == ColorTranslator.FromHtml("#FAFBFF"))
-                    c.BackColor = c.Parent is Card ? c.Parent.BackColor : Bg;
+                {
+                    // anything inside a card takes the card's surface, however deep it is nested
+                    Control? up = c.Parent;
+                    while (up is not null && up is not Card) up = up.Parent;
+                    c.BackColor = up is Card card ? card.BackColor : Bg;
+                }
                 break;
         }
         foreach (Control child in c.Controls) ApplyRecursive(child);
