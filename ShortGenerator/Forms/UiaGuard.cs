@@ -51,6 +51,7 @@ internal static class UiaGuard
                     {
                         var hwnd = Marshal.ReadIntPtr(lParam, 2 * IntPtr.Size + 8);
                         if (Control.FromHandle(hwnd) is { } control) Protect(control);
+                        else ProtectWindow(hwnd);
                     }
                 }
             }
@@ -58,6 +59,26 @@ internal static class UiaGuard
             return CallNextHookEx(_hookHandle, code, wParam, lParam);
         };
         _hookHandle = SetWindowsHookExW(WH_CALLWNDPROC, _hook, IntPtr.Zero, GetCurrentThreadId());
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassNameW(IntPtr hwnd, System.Text.StringBuilder name, int max);
+    private static readonly Dictionary<IntPtr, Guard> _windowGuards = new();
+
+    /// <summary>
+    /// Windows of this thread that are not controls: a combo box's drop-down list and edit part, tool tips. WinForms
+    /// answers UI Automation for a combo's children itself (ComboBoxChildNativeWindow), through the same call-out, so
+    /// they are guarded the same way. The browser's own windows are left alone (see the class remarks).
+    /// </summary>
+    private static void ProtectWindow(IntPtr hwnd)
+    {
+        if (_windowGuards.ContainsKey(hwnd)) return;
+        var sb = new System.Text.StringBuilder(64);
+        string cls = GetClassNameW(hwnd, sb, 64) > 0 ? sb.ToString() : "";
+        if (cls.StartsWith("Chrome_", StringComparison.Ordinal) || cls.StartsWith("Intermediate D3D", StringComparison.Ordinal) || cls.Contains("WebView", StringComparison.Ordinal)) return;
+        var guard = new Guard();
+        guard.AssignHandle(hwnd); // released by the window itself on WM_NCDESTROY
+        _windowGuards[hwnd] = guard;
+        guard.Released += () => _windowGuards.Remove(hwnd);
     }
 
     /// <summary>Guards a control, the controls inside it, and any added later.</summary>
@@ -79,10 +100,12 @@ internal static class UiaGuard
     /// <summary>Sits in front of the control's own window procedure and declines the UI Automation root request.</summary>
     private sealed class Guard : NativeWindow
     {
+        public event Action? Released;
         protected override void WndProc(ref Message m)
         {
             if (m.Msg == WM_GETOBJECT && unchecked((int)(long)m.LParam) == UiaRootObjectId) { m.Result = IntPtr.Zero; return; }
             base.WndProc(ref m);
         }
+        protected override void OnHandleChange() { if (Handle == IntPtr.Zero) Released?.Invoke(); base.OnHandleChange(); }
     }
 }

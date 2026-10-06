@@ -102,7 +102,7 @@ public static class NativeFaultLog
         // Only the UI thread is watched: that is where a native raise becomes "External component has thrown an
         // exception". Worker threads of UI Automation and RPC raise and catch C++ exceptions of their own all the
         // time, and taking a managed stack trace there, in the middle of their unwinding, is not safe.
-        if (GetCurrentThreadId() != _uiThread) return 0;
+        bool ui = GetCurrentThreadId() == _uiThread;
         if (t_inHandler) return 0; // an exception raised while logging one (walking a stack can) is not logged again
         t_inHandler = true;
         try
@@ -115,6 +115,8 @@ public static class NativeFaultLog
                 case 0x406D1388: // thread naming
                 case 0x40010006: case 0x4001000A: // OutputDebugString
                 case 0x80000003: case 0x80000004: // breakpoint, single step (the debugger)
+                    return 0;
+                case 0xE06D7363 when !ui: // C++ exceptions are routine on the UI Automation and RPC worker threads
                     return 0;
             }
             // every other code is written a few times: C++ exceptions and RPC errors are handled inside their
@@ -130,7 +132,10 @@ public static class NativeFaultLog
                 where = Path.GetFileName(name.ToString());
             }
             string kind = code == 0xE06D7363 ? "C++ exception" : $"exception 0x{code:X8}";
-            AppLog.Write($"NATIVE {kind} at 0x{address.ToInt64():X} in {where} (thread {Environment.CurrentManagedThreadId}). Stack: {ModuleStack(pointers)}{Environment.NewLine}{Environment.StackTrace}");
+            // on a worker thread only the module scan (plain memory reads inside that thread's stack): a managed stack
+            // trace in the middle of another component's unwinding is not safe there
+            AppLog.Write($"NATIVE {kind} at 0x{address.ToInt64():X} in {where} (thread {Environment.CurrentManagedThreadId}{(ui ? ", UI" : "")}). Stack: {ModuleStack(pointers)}" +
+                         (ui ? Environment.NewLine + Environment.StackTrace : ""));
         }
         catch { }
         finally { t_inHandler = false; }
